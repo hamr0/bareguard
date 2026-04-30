@@ -126,6 +126,52 @@ test("haltContext returns deterministic stats from audit", async (t) => {
   assert.equal(ctx.spendRate.last5.length, 2);
 });
 
+test("humanChannelTimeoutMs — slow channel resolves to deny+halt", async (t) => {
+  const dir = await makeTmpDir(); t.after(async () => cleanup(dir));
+  const { auditPath, budgetPath } = uniquePaths(dir);
+  let channelCalls = 0;
+  const slowChannel = (event) => {
+    channelCalls++;
+    return new Promise((resolve) => setTimeout(
+      () => resolve({ decision: "allow", reason: "too late" }),
+      500
+    ));
+  };
+  const gate = new Gate({
+    audit:  { path: auditPath },
+    budget: { maxCostUsd: 0.10, sharedFile: budgetPath },
+    humanChannel: slowChannel,
+    humanChannelTimeoutMs: 50,
+  });
+  await gate.init();
+  await gate.record({ type: "x" }, { costUsd: 0.15, tokens: 0 });
+  const dec = await gate.check({ type: "x" });
+  assert.equal(dec.outcome, "deny");
+  assert.equal(dec.severity, "halt");
+  assert.equal(dec.rule, "budget.maxCostUsd");
+  assert.match(dec.reason, /humanChannel timeout after 50ms/);
+  assert.equal(channelCalls, 1, "channel was invoked once");
+  const lines = await gate.audit.readAll();
+  const timeoutLines = lines.filter(l => l.phase === "approval" && /timeout/.test(l.reason ?? ""));
+  assert.equal(timeoutLines.length, 1, "approval audit line records the timeout");
+});
+
+test("humanChannelTimeoutMs — fast channel still wins the race", async (t) => {
+  const dir = await makeTmpDir(); t.after(async () => cleanup(dir));
+  const { auditPath, budgetPath } = uniquePaths(dir);
+  const channel = makeHumanChannel([{ decision: "topup", newCap: 1.00, reason: "ok" }]);
+  const gate = new Gate({
+    audit:  { path: auditPath },
+    budget: { maxCostUsd: 0.10, sharedFile: budgetPath },
+    humanChannel: channel,
+    humanChannelTimeoutMs: 5000,
+  });
+  await gate.init();
+  await gate.record({ type: "x" }, { costUsd: 0.15, tokens: 0 });
+  const dec = await gate.check({ type: "x" });
+  assert.equal(dec.outcome, "allow", "fast topup beats the timeout");
+});
+
 test("budget reconstruction from audit (cold start, missing budget file)", async (t) => {
   const dir = await makeTmpDir(); t.after(async () => cleanup(dir));
   const { auditPath, budgetPath, runId } = uniquePaths(dir);

@@ -111,6 +111,8 @@ const gate = new Gate({
 
 **If `humanChannel` is not registered** and the eval reaches askHuman/halt: gate.check returns `{ outcome: "deny", severity: "halt", rule: "...originalRule...", reason: "...originalReason... (no humanChannel registered)" }`. Never silently allow.
 
+**Optional `humanChannelTimeoutMs`** (default: unset = wait forever). If set, bareguard races your channel against a timer; if the timer wins, gate.check returns `{ outcome: "deny", severity: "halt", rule, reason: "humanChannel timeout after Xms" }` and emits a `phase:"approval"` audit line with the timeout reason. The timeout always denies — there is no "allow on timeout". If you want allow-on-timeout for an autonomous fleet, implement it inside your own `humanChannel` (return `{ decision: "allow" }` after your own setTimeout) so the policy is explicit in user code, not a bareguard default. The pending channel promise is not cancelled; if it later resolves, the result is dropped (the agent will re-prompt on the next gate.check).
+
 ## Wiring shared budget across processes
 
 Parent and children share one budget file via `proper-lockfile`.

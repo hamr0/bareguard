@@ -62,6 +62,7 @@ export class Gate {
     this.limits = new Limits({ ...config.limits, startingDepth: this.spawnDepth });
 
     this.humanChannel = config.humanChannel ?? null;
+    this.humanChannelTimeoutMs = config.humanChannelTimeoutMs ?? null;
     this.terminated = false;
     this._initialized = false;
   }
@@ -234,7 +235,30 @@ export class Gate {
       };
 
       let response;
-      try { response = await this.humanChannel(event); }
+      try {
+        const channelPromise = this.humanChannel(event);
+        if (this.humanChannelTimeoutMs != null && this.humanChannelTimeoutMs > 0) {
+          const TIMEOUT = Symbol("humanChannelTimeout");
+          let timer;
+          const timeoutPromise = new Promise((resolve) => {
+            timer = setTimeout(() => resolve(TIMEOUT), this.humanChannelTimeoutMs);
+            if (typeof timer.unref === "function") timer.unref();
+          });
+          const raced = await Promise.race([channelPromise, timeoutPromise]);
+          clearTimeout(timer);
+          if (raced === TIMEOUT) {
+            const reason = `humanChannel timeout after ${this.humanChannelTimeoutMs}ms`;
+            await this.audit.emit({
+              phase: "approval", action,
+              decision: "deny", reason,
+            });
+            return { outcome: "deny", severity: "halt", rule: decision.rule, reason };
+          }
+          response = raced;
+        } else {
+          response = await channelPromise;
+        }
+      }
       catch (err) {
         await this.audit.emit({
           phase: "approval", action,

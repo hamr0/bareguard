@@ -4,6 +4,19 @@ All notable changes to bareguard are documented here. Format: [Keep a Changelog]
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-05-01
+
+Adds `humanChannelTimeoutMs` — optional deadline so a hung escalation channel
+can no longer pin an agent forever.
+
+### Added
+
+- **`humanChannelTimeoutMs` config** — optional deadline on the `humanChannel` callback. When set, bareguard races the channel against a timer; on timeout, gate.check returns `{ outcome: "deny", severity: "halt", reason: "humanChannel timeout after Xms" }` and emits a `phase:"approval"` audit line. Always denies — no allow-on-timeout default (callers wanting that behavior must implement it inside their own channel). Default: unset = wait forever (current behavior). Fixes infinite-hang when a Slack bot / TUI / web channel becomes unreachable mid-prompt. Tests: `test/halt-flow.test.js` (slow-channel-times-out, fast-channel-wins-race). Suite: 46 → 48.
+
+### Compatibility
+
+- Fully backwards-compatible. Configs that don't set `humanChannelTimeoutMs` keep the prior wait-forever semantics. No API breaks. PRD updated (§10.1). bareguard.context.md "Wiring with humanChannel" section updated.
+
 ## [0.2.1] — 2026-04-30
 
 Docs-only patch.

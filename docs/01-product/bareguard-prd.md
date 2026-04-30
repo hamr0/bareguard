@@ -372,6 +372,8 @@ If `humanChannel` is **not registered** and an ask/halt fires:
 - Behavior is correct for headless / CI runs (deny = safe default when no
   human present).
 
+**Optional `humanChannelTimeoutMs`** (default: unset = wait forever). When set on the Gate config, bareguard races the `humanChannel` promise against a timer. If the timer wins, gate.check resolves to `{ outcome: "deny", severity: "halt", rule: <originalRule>, reason: "humanChannel timeout after Xms" }` and emits a `phase: "approval"` audit line carrying the timeout reason. The timeout always denies — there is no allow-on-timeout default. Callers wanting allow-on-timeout (e.g. autonomous fleets where one stuck branch shouldn't pin a worker) must implement that policy inside their own `humanChannel`, so the choice is explicit in user code, not a bareguard default. The pending channel promise is not cancelled; if it later resolves, the result is dropped (the agent will re-prompt on the next gate.check).
+
 ### 10.2 `gate.allows(action)` — the catalog pre-filter
 
 Pure query, no audit write, no budget delta, no humanChannel call. Used by
