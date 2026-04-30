@@ -508,7 +508,7 @@ const dec = await gate.check({ type: "defer", args: { action, when: "1h" } });
 
 **Per-family scope is automatic.** The audit file is keyed by `root_run_id`, and spawned children inherit it via `BAREGUARD_AUDIT_PATH`. Counting that one file = the family's rate. Cross-family runs use different audit files, so they don't see each other's counts.
 
-> **TODO (cross-link to bareagent v0.9):** the `defer` and `spawn` tools that exercise these caps land in bareagent v0.9, alongside `examples/wake.sh` (the wake-script reference) and `examples/orchestrator/` (parent + child agents sharing one rate cap via inherited audit path).
+**See bareagent v0.9.0 for the consumer side.** The `defer` and `spawn` tools that exercise these caps shipped in [bare-agent@0.9.0](https://www.npmjs.com/package/bare-agent), with [`examples/wake.sh`](https://github.com/hamr0/bareagent/blob/main/examples/wake.sh) as the wake-script reference and [`examples/orchestrator/`](https://github.com/hamr0/bareagent/tree/main/examples/orchestrator) showing parent + child agents sharing one rate cap via inherited audit path.
 
 ## See also
 
