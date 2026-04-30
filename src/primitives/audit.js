@@ -48,12 +48,14 @@ export class Audit {
     let serialized = JSON.stringify(line) + "\n";
     if (Buffer.byteLength(serialized, "utf8") > MAX_LINE_BYTES) {
       // Truncate action.args / result to keep the line atomic on POSIX FS.
-      const truncated = { ...line };
+      // Also tag the line root with _truncated:true so downstream consumers
+      // (replayers, tooling) can filter without regex on string contents.
+      const truncated = { ...line, _truncated: true };
       if (truncated.action && truncated.action.args) {
         truncated.action = { ...truncated.action, args: `[TRUNCATED:${Buffer.byteLength(JSON.stringify(truncated.action.args), "utf8")} bytes]` };
       }
       if (truncated.result) {
-        truncated.result = { ...truncated.result, _truncated: true };
+        truncated.result = { ...truncated.result };
         for (const k of Object.keys(truncated.result)) {
           if (typeof truncated.result[k] === "string" && truncated.result[k].length > 200) {
             truncated.result[k] = truncated.result[k].slice(0, 200) + `[TRUNCATED]`;

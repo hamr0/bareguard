@@ -40,8 +40,6 @@ function actionSummary(action) {
 }
 
 export class Gate {
-  static fromConfig(config) { return new Gate(config); }
-
   constructor(config = {}) {
     this.cfg = config;
     this.runId = config.runId ?? randomUUID();
@@ -140,8 +138,10 @@ export class Gate {
 
   // Pure query: would this action be allowed? Used for catalog pre-filter.
   // No audit, no budget delta, no humanChannel call. (PRD v0.5 §11.)
-  async allows(action) {
+  // Accepts either a full action object or a tool-name string (shorthand for { type: name }).
+  async allows(actionOrName) {
     if (!this._initialized) await this.init();
+    const action = typeof actionOrName === "string" ? { type: actionOrName } : actionOrName;
     const halt = this._haltCheck();
     if (halt) return halt.outcome !== "deny" ? halt.outcome === "askHuman" : false;
     const decision = this._stepEval(action);
@@ -189,6 +189,15 @@ export class Gate {
       }
 
       if (!this.humanChannel) {
+        if (!this._warnedNoChannel) {
+          this._warnedNoChannel = true;
+          process.stderr.write(
+            `[bareguard] WARN: humanChannel is not registered; an ` +
+            `ask/halt event for rule "${decision.rule}" will deny by default. ` +
+            `Wire { humanChannel: async (event) => ({ decision: ... }) } in your Gate config. ` +
+            `See https://github.com/hamr0/bareguard#wiring-with-humanchannel\n`
+          );
+        }
         const denial = {
           outcome: "deny", severity: "halt",
           rule: decision.rule,

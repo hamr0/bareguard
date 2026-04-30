@@ -198,6 +198,55 @@ await gate.haltContext()              // deterministic stats over audit
 
 ---
 
+## Common gotchas (read these before you wire it up)
+
+These are the design choices that surprise people most often. Calling them out
+front-of-house so you don't trip on them later.
+
+**1. `tools.allowlist` does NOT silence safe-default `content.askPatterns`.**
+If you set `tools.allowlist: ["bash", "fetch"]` thinking that's a "trust these
+tools" shortcut, you'll still get prompted on actions matching the shipped
+askPatterns (`delete`, `revoke`, `truncate`, `force-push`, destructive HTTP
+methods). This is intentional (PRD v0.5 §4) — allowlist is **scope-only** ("which
+tools can be invoked at all"), not a trust shortcut. To silence specific asks:
+narrow `content.askPatterns` or use `tools.denyArgPatterns` for tool-specific
+denies.
+
+**2. Glob `*` matches anything including `/`.** So `mcp:foo/admin_*` matches
+both `mcp:foo/admin_baz` AND `mcp:foo/admin_baz/nested/path`. For denylists
+this is safe (denies more, never less); for **allowlists this can over-grant**:
+
+```js
+// SURPRISE: this allows mcp:linear.app/foo AND mcp:linear.app/sub/foo/bar
+tools: { allowlist: ["mcp:linear.app/*"] }
+
+// SAFER: list specific tools or use a tighter prefix
+tools: { allowlist: ["mcp:linear.app/list_issues", "mcp:linear.app/get_issue"] }
+```
+
+v0.2 may add shell-style `**` so `*` means "anything except `/`". Until then,
+err narrow on allowlists.
+
+**3. `humanChannel` is effectively required for any safety-default-shipped
+config.** Out of the box, `content.askPatterns` ships with destructive verbs.
+First time one fires, if `humanChannel` is unset, bareguard prints a one-time
+WARN to stderr and the action is denied with `severity: "halt"`. This is
+correct behavior for headless / CI runs (deny on no human present), but if
+you're running interactively and the agent suddenly stops working, **check
+your terminal for the WARN line**.
+
+**4. Caps are soft, halts are hard.** Cross-process budget can be exceeded by
+one action's spend before the next refresh (~$0.01–0.10 overshoot). The halt
+fires reliably on the next check after a record. If you need cents-precision
+hard caps, run single-process with `budget.sharedFile: null`.
+
+**5. `gate.check` and `gate.record` MUST be called serially per `Gate`
+instance.** Concurrent calls produce undefined `seq` ordering. Multiple Gate
+instances (parent + child processes) are independent and run concurrently
+fine — each has its own `seq`.
+
+---
+
 ## Known limitations (v0.1)
 
 - **Glob:** only `*` (matches anything including `/`). No `?`, `[abc]`, escapes.

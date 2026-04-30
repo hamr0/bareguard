@@ -4,6 +4,26 @@ All notable changes to bareguard are documented here. Format: [Keep a Changelog]
 
 ## [Unreleased]
 
+## [0.1.1] — 2026-04-30
+
+Patch release addressing pre-publish review feedback. No breaking
+runtime changes; one breaking API removal noted below.
+
+### Added
+
+- **`gate.allows(string)` shorthand** — pass a tool-name string instead of constructing `{ type: name }`. Useful for catalog pre-filters where you only have the name. Object form still works (full action shape allows arg-based allows).
+- **`_truncated: true` boolean at audit line root** — when an audit line exceeds the 3.5KB POSIX `O_APPEND` safety threshold and is truncated, the line root now carries an explicit `_truncated: true` boolean. Downstream consumers (replayers, log tooling) can filter without regex on string contents.
+- **One-time stderr WARN when `humanChannel` is unset** — first time an ask/halt event would call into a missing channel, bareguard prints a WARN to stderr explaining the misconfiguration and pointing at the README. Behavior unchanged: still denies with `severity: "halt"` and structured reason. The warn surfaces the cause early during development without breaking the safe headless / CI default ("no human present = deny").
+- **README "Common gotchas" section** — promotes 5 surprises out of the amendments doc into the front-of-house README: allowlist-doesn't-silence-asks, glob `*` over-matching `/`, humanChannel effectively required for safe defaults, soft caps, serial gate calls. These are the "didn't read the spec, hit the foot-gun" issues.
+
+### Removed
+
+- **`Gate.fromConfig(config)`** — was an alias for `new Gate(config)`. `new Gate(config)` is the only canonical form. Anyone who tried `fromConfig` in the ~1 hour between v0.1.0 publish and this patch can switch to the constructor; same shape.
+
+### Docs
+
+- `bareguard.context.md` version line bumped to v0.1.1 (was v0.1.0-pre — leftover from pre-publish state).
+
 ## [0.1.0] — 2026-04-29
 
 First release. Action-side runtime policy library for autonomous agents — bounds what the agent does, not what it says.

@@ -124,3 +124,56 @@ test("gate.allows is pure (no audit, no budget delta)", async (t) => {
   const sizeAfter = (await fsp.readFile(auditPath, "utf8")).length;
   assert.equal(sizeBefore, sizeAfter, "allows() must not write to audit");
 });
+
+test("gate.allows accepts a string (shorthand for { type: name })", async (t) => {
+  const dir = await makeTmpDir(); t.after(async () => cleanup(dir));
+  const { auditPath } = uniquePaths(dir);
+  const gate = new Gate({
+    audit: { path: auditPath },
+    tools: { allowlist: ["bash", "mcp:linear.app/*"] },
+  });
+  await gate.init();
+  // string form: full action with type-only constructed internally
+  assert.equal(await gate.allows("bash"), true);
+  assert.equal(await gate.allows("unknown_tool"), false);
+  assert.equal(await gate.allows("mcp:linear.app/list_issues"), true);
+  // object form still works
+  assert.equal(await gate.allows({ type: "bash", cmd: "git status" }), true);
+});
+
+test("audit truncation tags line root with _truncated: true", async (t) => {
+  const dir = await makeTmpDir(); t.after(async () => cleanup(dir));
+  const { auditPath } = uniquePaths(dir);
+  const gate = new Gate({ audit: { path: auditPath } });
+  await gate.init();
+  // Action with > 3.5KB args triggers truncation.
+  const huge = "x".repeat(5000);
+  await gate.record({ type: "bash", args: { dump: huge } }, { stdout: "y".repeat(400) });
+  const lines = await gate.audit.readAll();
+  const recordLine = lines.find(l => l.phase === "record");
+  assert.equal(recordLine._truncated, true, "_truncated boolean must be at line root");
+});
+
+test("missing humanChannel emits a one-time WARN and denies + halts", async (t) => {
+  const dir = await makeTmpDir(); t.after(async () => cleanup(dir));
+  const { auditPath } = uniquePaths(dir);
+  const gate = new Gate({ audit: { path: auditPath } /* no humanChannel */ });
+  await gate.init();
+  // Capture stderr to assert the warning fires once.
+  const origWrite = process.stderr.write.bind(process.stderr);
+  let captured = "";
+  process.stderr.write = (chunk, ...rest) => { captured += chunk.toString(); return true; };
+  try {
+    const d1 = await gate.check({ type: "fetch", url: "https://x/delete-acct" });
+    const d2 = await gate.check({ type: "fetch", url: "https://x/revoke-something" });
+    assert.equal(d1.outcome, "deny");
+    assert.equal(d1.severity, "halt");
+    assert.match(d1.reason, /no humanChannel registered/);
+    assert.equal(d2.outcome, "deny");
+    // WARN should fire exactly once across both
+    const warnCount = (captured.match(/\[bareguard\] WARN/g) || []).length;
+    assert.equal(warnCount, 1, `expected 1 WARN, saw ${warnCount}`);
+  } finally {
+    process.stderr.write = origWrite;
+  }
+});

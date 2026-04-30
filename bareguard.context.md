@@ -1,7 +1,7 @@
 # bareguard — Integration Guide
 
 > For AI assistants and developers wiring bareguard into a project.
-> v0.1.0-pre | Node.js >= 20 | 1 production dep (`proper-lockfile`) | Apache-2.0
+> v0.1.1 | Node.js >= 20 | 1 production dep (`proper-lockfile`) | Apache-2.0
 >
 > Full design spec: [`docs/01-product/bareguard-prd.md`](docs/01-product/bareguard-prd.md) + [`docs/01-product/bareguard-prd-v0.5-amendments.md`](docs/01-product/bareguard-prd-v0.5-amendments.md). Read amendments alongside; amendments win on conflict.
 
