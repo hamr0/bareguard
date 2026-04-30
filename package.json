@@ -1,10 +1,28 @@
 {
-  "name": "bareguard-poc",
-  "version": "0.0.0",
-  "private": true,
+  "name": "bareguard",
+  "version": "0.1.0-pre",
+  "description": "Action-side runtime policy library for autonomous agents — bounds what the agent does, not what it says.",
   "type": "module",
+  "main": "./src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE",
+    "NOTICE"
+  ],
   "engines": { "node": ">=20" },
+  "scripts": {
+    "test": "node --test"
+  },
   "dependencies": {
     "proper-lockfile": "^4.1.2"
+  },
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hamr0/bareguard.git"
   }
 }
