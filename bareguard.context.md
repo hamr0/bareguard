@@ -3,7 +3,7 @@
 > For AI assistants and developers wiring bareguard into a project.
 > v0.1.1 | Node.js >= 20 | 1 production dep (`proper-lockfile`) | Apache-2.0
 >
-> Full design spec: [`docs/01-product/bareguard-prd.md`](docs/01-product/bareguard-prd.md) + [`docs/01-product/bareguard-prd-v0.5-amendments.md`](docs/01-product/bareguard-prd-v0.5-amendments.md). Read amendments alongside; amendments win on conflict.
+> Full design spec: [`docs/01-product/bareguard-prd.md`](docs/01-product/bareguard-prd.md) — unified PRD (v0.6, folds prior v0.5 amendments + v0.1.1 review fixes inline).
 
 ## What this is
 
@@ -488,9 +488,9 @@ beeperbox provides `send_message`, `list_chats`, `get_messages`, `mark_as_read` 
 
 ## See also
 
-- [`docs/01-product/bareguard-prd.md`](docs/01-product/bareguard-prd.md) — v0.4 implementation-ready spec.
-- [`docs/01-product/bareguard-prd-v0.5-amendments.md`](docs/01-product/bareguard-prd-v0.5-amendments.md) — v0.5 amendments (read alongside v0.4).
+- [`docs/01-product/bareguard-prd.md`](docs/01-product/bareguard-prd.md) — unified PRD (v0.6).
 - [`docs/non-roadmap.md`](docs/non-roadmap.md) — the NO-GO list.
 - [`docs/decisions-log.md`](docs/decisions-log.md) — decisions resolved across versions.
+- [`CHANGELOG.md`](CHANGELOG.md) — release-by-release diff.
 - [bareagent](https://github.com/hamr0/bareagent) — the loop runner that imports bareguard.
 - [beeperbox](https://github.com/hamr0/beeperbox) — 50+ messenger reach via MCP.

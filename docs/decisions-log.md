@@ -93,3 +93,20 @@ Resolved during design; should not be re-litigated unless explicitly asked.
 - **v0.1 scope: everything except rate limits.** POC validated more than
   original baseline; defer/spawn-rate stay v0.2 since they require bareagent's
   not-yet-existing tools.
+
+## v0.1.1 review fixes (post-publish, same day)
+
+- **`gate.allows(string)` shorthand.** Object form still works; string is
+  for catalog pre-filters that only have the name. Auto-wraps to `{ type: name }`.
+- **`_truncated: true` boolean at audit line root** when truncation happens.
+  Saves downstream consumers from regex-on-string-contents.
+- **One-time stderr WARN when `humanChannel` is unset** and an ask/halt event
+  fires. Behavior unchanged (still denies with `severity: "halt"`); the WARN
+  surfaces the misconfiguration during development. Headless / CI runs that
+  intentionally have no human channel see the WARN once and continue with
+  safe-default deny.
+- **`Gate.fromConfig` removed.** `new Gate(config)` is the only canonical
+  constructor.
+- **PRD consolidation.** v0.5 amendments folded into the main `bareguard-prd.md`
+  as v0.6 unified. Amendments doc deleted (git history retains it). One PRD
+  going forward.

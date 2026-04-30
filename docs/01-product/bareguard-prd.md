@@ -1,29 +1,28 @@
 # bareguard — Product Requirements Document (PRD)
 
-**Status:** Draft v0.4 (implementation-ready, post-MCP design conversation)
+**Status:** v0.6 (unified — folds v0.5 amendments + v0.1.1 review fixes inline)
 **Owner:** hamr0
-**Last updated:** 2026-04-25
+**Last updated:** 2026-04-30
 **Language:** Node.js (JavaScript), ESM, target Node 20 LTS+
 **Sibling spec:** `bareagent-prd.md`
-**Supersedes:** v0.1 (Python draft), v0.2 (orchestration additions), v0.3 (mid-MCP)
-**Amended by:** `bareguard-prd-v0.5-amendments.md` (read alongside; amendments win on conflict)
+**Implementation status:** v0.1.1 published to npm, tests green on Linux/macOS/Windows × Node 20/22
+**Supersedes:** v0.1 (Python draft), v0.2 (orchestration), v0.3 (mid-MCP), v0.4 (post-MCP), v0.5 amendments doc
 
-> **For future Claude (implementation note):** This document is written as an
-> implementation-ready spec. §3 says what bareguard IS. §4 says what bareguard
-> is NOT — read both before implementing anything. §8 is the 12 primitives
-> table. §9 is the architecture and the 6-step evaluation order; that order
-> is load-bearing — implement it exactly. §11 lists the safe defaults that
-> ship out of the box. §16 explains the MCP gov approach (Path A) and is the
-> answer to most MCP-related design questions. §17 is the NO-GO list — point
-> at it instead of reopening discussions. §22 is the decisions log.
+> **For future Claude (implementation note):** This document is the single
+> source of truth for bareguard's design. §3/§4 say what bareguard IS / IS
+> NOT. §8 is the 12 primitives table with halt-vs-action severity. §9 is
+> the architecture and the 6-step evaluation order — that order is
+> load-bearing, implement it exactly. §10 is the public API including
+> `humanChannel`. §12 is the audit format. §17 is the NO-GO list — point
+> at it instead of reopening discussions. §22 is the decisions log; do not
+> re-litigate items there unless the user explicitly asks.
 
 ---
 
 ## 1. One-line summary
 
-`bareguard` is a zero-dep (one allowed dep), local-first runtime policy
-library for autonomous agents. It bounds what the agent can *do*, not what it
-can *say*.
+`bareguard` is a one-dep, local-first runtime policy library for autonomous
+agents. It bounds what the agent can *do*, not what it can *say*.
 
 ## 2. Two-paragraph summary
 
@@ -32,24 +31,25 @@ imports. Every tool call traverses `gate.check(action)`; every result hits
 `gate.record(action, result)`. There is one gate, one audit log, one budget
 ledger, and twelve primitives — bash, budget, fs, net, limits, approval,
 tools, secrets, audit, defer-rate, spawn-rate, content. Each primitive is
-~50–150 LOC, composable through the single gate. The library is small enough
+~30–180 LOC, composable through the single gate. The library is small enough
 that you can read the whole thing in an afternoon and understand exactly what
 your agent is allowed to do.
 
 bareguard ships with safe defaults — destructive verbs (delete, drop, revoke,
-truncate) trigger ask-human prompts; explicit dangers (DROP TABLE, rm -rf /)
-are denied outright — so a user with no policy config still gets meaningful
-protection. Multi-agent runs share a budget file (locked via
-`proper-lockfile`); audit lines include `parent_run_id` and `spawn_depth`
-so a family of agents reconstructs into one timeline. MCP governance is
-handled by the same primitives that govern bash and fetch — bareguard glob-
-matches the `mcp:server/tool` name string and pattern-matches serialized
-arguments. It has no MCP-specific code.
+truncate) trigger ask-human prompts via a single `humanChannel` callback;
+explicit dangers (DROP TABLE, rm -rf /) are denied outright. Multi-agent runs
+share one budget file (locked via `proper-lockfile`) and one audit JSONL
+file (atomic via POSIX `O_APPEND`); audit lines include `parent_run_id` and
+`spawn_depth` so a family of agents reconstructs into one timeline with grep.
+Run-level limit exhaustion (budget, maxTurns) escalates to the human via the
+registered `humanChannel`; never bubbles silently to the LLM.
 
 ## 3. What bareguard IS
 
 - A **policy library** — a single `Gate` class with three call sites:
-  `gate.redact()`, `gate.check()`, `gate.record()`.
+  `gate.redact()`, `gate.check()`, `gate.record()`. Plus convenience methods
+  `gate.run()`, `gate.allows()`, `gate.haltContext()`, `gate.terminate()`,
+  `gate.raiseCap()`.
 - An **action-side guard** — it enforces what the agent does to the world
   (bash commands, fs writes, network calls, MCP invocations, child spawns,
   budget consumption).
@@ -57,7 +57,9 @@ arguments. It has no MCP-specific code.
   runner that uses it. No duplicate policy in the runner, the tools, or
   anywhere else.
 - A **structured audit producer** — every gated event is one JSONL line.
-  The audit log IS the budget ledger. There is no second source of truth.
+  One file across the agent family. The audit log IS the canonical cost
+  record (the shared budget file is a derived live counter for cross-process
+  speed).
 - A **library**. There is no `bareguard serve`, no daemon mode, no network
   endpoint. It runs in-process with the agent runner.
 
@@ -65,8 +67,8 @@ arguments. It has no MCP-specific code.
 
 - **NOT a content guardrail.** It does not check toxicity, PII, factuality,
   schema, persona, tone, topic blocklists, or hallucinations. That's
-  guardrails-ai's job, or a system prompt's job. The action vs content line
-  is the single most important boundary in this library — see §6.
+  `guardrails-ai`'s job, or a system prompt's job. The action vs content line
+  is the single most important boundary — see §6.
 - **NOT a sandbox.** It prevents an action from being called; it does not
   contain the action's effects. Containment is Docker, gVisor, Firecracker,
   or OS perms — a different layer.
@@ -82,7 +84,7 @@ arguments. It has no MCP-specific code.
   a file or a callback; what users do downstream is their problem.
 - **NOT a framework.** No plugin system, no hooks, no DSL, no YAML schema,
   no class hierarchies. The 12 primitives are functions; the gate is a
-  class with 3 methods. That's the whole API.
+  class with ~10 methods. That's the whole API.
 - **NOT MCP-aware.** It glob-matches strings. The `mcp:server/tool` naming
   convention is a *user-facing convention*, not parsing logic in bareguard.
 - **NOT a long-running process.** It exits when the agent runner exits.
@@ -93,12 +95,11 @@ Two adjacent things already exist and neither solves this:
 
 - **`guardrails-ai`** is content validation for LLM apps — toxic-language,
   regex match, schema validation, PII detection. It checks what the model
-  *says*. Heavy framework, Hub of validators, optional Flask server. Useful,
-  but a different problem.
-- **`bareagent` v0.x** ships bash allowlist, token budget, gov layer (per-tool
-  allow/deny/ask) as built-ins. That's the seed. But coupling them to one
-  runner means other runners can't reuse them, and policy drifts from the
-  suite.
+  *says*. Useful, but a different problem.
+- **bareagent v0.x** previously shipped bash allowlist, token budget, gov
+  layer (per-tool allow/deny/ask) as built-ins. That coupled them to one
+  runner. bareguard extracts that policy layer so any runner can use it,
+  and policy doesn't drift across the suite.
 
 The gap is a small, runner-agnostic library focused entirely on the *action
 side* of the agent loop, with first-class support for multi-agent (siblings
@@ -113,13 +114,13 @@ primitive:
 > Does it constrain an action against the world (or against a sibling
 > process), or constrain words the model produces?
 
-If the latter, refuse — that's a system prompt's job, or guardrails-ai's.
+If the latter, refuse — that's a system prompt's job, or `guardrails-ai`'s.
 This rule keeps bareguard small forever.
 
 | Layer                  | Concern                                  | Owner                |
 | ---------------------- | ---------------------------------------- | -------------------- |
 | System prompt          | What the model should be like            | The user's prompt    |
-| guardrails-ai          | What the model is *allowed to say*       | guardrails-ai        |
+| `guardrails-ai`        | What the model is *allowed to say*       | guardrails-ai        |
 | **bareguard**          | **What the agent is *allowed to do***    | **this library**     |
 | Sandbox (Docker, etc.) | What the action can *affect*             | OS-level tooling     |
 | OS perms / SELinux     | What the process can *touch*             | OS                   |
@@ -140,34 +141,35 @@ library or somebody else's problem.
 | Deployment   | npm/pip + config + sometimes server| `import`                                   |
 
 **They compose, they don't compete.** A user wrapping a chatbot uses
-guardrails-ai. A user building a coding agent uses bareguard. A user doing
+`guardrails-ai`. A user building a coding agent uses bareguard. A user doing
 both imports both.
 
-## 8. The twelve primitives (v1 scope)
+## 8. The twelve primitives
 
-Each is one file, ~50–150 LOC, composes through the single gate.
+Each is one file, ~30–180 LOC, composes through the single gate. **Severity
+column** classifies what happens when the primitive fires (see §11 for the
+halt-vs-action distinction).
 
-| #  | Primitive            | What it checks                                                                                                          | Source                          |
-| -- | -------------------- | -----------------------------------------------------------------------------------------------------------------------| ------------------------------- |
-| 1  | **bash**             | Command allowlist / denylist / regex patterns                                                                           | Extracted from bareagent        |
-| 2  | **budget**           | Tokens, cost USD, request count, with hard kill. Shared across sibling processes via backing file + `proper-lockfile`.  | Extracted from bareagent        |
-| 3  | **fs**               | Write/read scope; deny paths (`~/.ssh`, `/etc`, `..`)                                                                   | New                             |
-| 4  | **net**              | Egress domain allowlist; deny private IP ranges                                                                         | New                             |
-| 5  | **limits**           | `maxTurns`, `timeoutSeconds`, `maxChildren` (siblings per parent), `maxDepth` (spawn-tree depth)                        | Partly extracted, mostly new    |
-| 6  | **approval**         | Pause-and-ask hook for destructive patterns (callback-based; caller wires their TUI/Slack/web)                          | Extracted from bareagent (gov)  |
-| 7  | **tools**            | Tool name allowlist / denylist (glob-matched) + per-tool `denyArgPatterns` (regex over args)                            | Extracted from bareagent (gov)  |
-| 8  | **secrets**          | Redact known env-var values + cred patterns from anything entering LLM context                                          | New                             |
-| 9  | **audit**            | Append-only JSONL of every gated decision. Includes `parent_run_id` and `spawn_depth` for multi-agent stitching.        | New                             |
-| 10 | **defer-rate**       | Caps `defer()` calls per minute. Re-validates the deferred action's gate decision on emit AND on fire (defense in depth)| New                             |
-| 11 | **spawn-rate**       | Caps `spawn()` calls per minute and per parent's lifetime. Composed with `limits.maxChildren` and `limits.maxDepth`     | New                             |
-| 12 | **content**          | Pattern-matches over `JSON.stringify(action)`. `denyPatterns` block; `askPatterns` escalate to human. Generic mechanism that catches dangerous *shapes* across all tools. | New (this conversation)         |
+| #  | Primitive            | Severity | What it checks                                                                                                          |
+| -- | -------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------- |
+| 1  | **bash**             | action   | Command allowlist / denyPatterns when `action.type === "bash"`.                                                         |
+| 2  | **budget**           | **halt** | Tokens, cost USD, request count, with hard kill. Shared across sibling processes via backing file + `proper-lockfile`.  |
+| 3  | **fs**               | action   | Write/read scope; deny paths (`~/.ssh`, `/etc/passwd`, `..`).                                                            |
+| 4  | **net**              | action   | Egress domain allowlist; deny private IP ranges.                                                                        |
+| 5  | **limits**           | mixed    | `maxTurns` (**halt**), `maxChildren` (action), `maxDepth` (action), `timeoutSeconds` (**halt**, v0.2).                  |
+| 6  | **approval**         | n/a      | Routes ask events to the runner's `humanChannel` callback. No callback storage in v0.6.                                  |
+| 7  | **tools**            | action   | Tool name allowlist / denylist (glob-matched) + per-tool `denyArgPatterns` (regex over args). Allowlist is **scope-only** — does NOT silence asks. |
+| 8  | **secrets**          | n/a      | Pre-eval action redaction. Env-var matches → `[REDACTED:VAR_NAME]`. Pattern matches → `[REDACTED:pattern=<short prefix>...]`. Caller redacts results. |
+| 9  | **audit**            | n/a      | Append-only JSONL of every gated decision. **One file per agent family** via POSIX `O_APPEND` atomicity (Windows uses lock fallback). Includes `parent_run_id` and `spawn_depth` for multi-agent stitching. |
+| 10 | **defer-rate**       | action   | _(v0.2)_ Caps `defer()` calls per minute. Re-validates the deferred action's gate decision on emit AND on fire (defense in depth). |
+| 11 | **spawn-rate**       | action   | _(v0.2)_ Caps `spawn()` calls per minute and per parent's lifetime. Composed with `limits.maxChildren` and `limits.maxDepth`. |
+| 12 | **content**          | mixed    | Pattern-matches over `JSON.stringify(action)`. `denyPatterns` block (action). `askPatterns` escalate to human (action). Generic mechanism that catches dangerous *shapes* across all tools. **Safe defaults shipped (§11).** |
 
-**The 12th primitive (`content`) is what makes MCP gov work without
-MCP-specific code.** Content patterns run over the serialized action JSON, so
-the tool name AND every argument value are in the haystack. A `bash` call
-with `cmd: "rm -rf /"` and an `mcp:db.tool/query` call with `sql: "DROP TABLE
-users"` are both caught by the same regex, regardless of which tool was
-invoked.
+**Why `content` makes MCP gov work without MCP-specific code:** content patterns
+run over the serialized action JSON, so the tool name AND every argument value
+are in the haystack. A `bash` call with `cmd: "rm -rf /"` and an
+`mcp:db.tool/query` call with `sql: "DROP TABLE users"` are both caught by the
+same regex, regardless of which tool was invoked.
 
 ## 9. Architecture: one gate, complete mediation
 
@@ -176,7 +178,8 @@ agent decides action
    ↓
 secrets.redact(action)              ← before anything sees it
    ↓
-gate.check(action) → { allow | deny(reason) | askHuman(prompt) }
+gate.check(action) → calls humanChannel internally on ask/halt;
+                     returns terminal { outcome: "allow"|"deny", severity, rule, reason }
    ↓ (if allow)
 execute(action)                     ← caller's runner does this
    ↓
@@ -191,94 +194,119 @@ result back to agent
 - Tools never self-check. The bash tool runs the command, period. If it
   was called, gate already said yes.
 - Agent never bypasses. Even scratchpad writes go through `fs` → gate.
-- Gate is pure-ish: takes action + state, returns decision. No side effects.
-  Recorder is separate.
-- One config object. One audit log. One budget ledger (which IS the audit
-  log on the cost dimension).
+- Gate is pure-ish: takes action + state, returns decision. The recorder
+  side has audit + budget effects.
+- One config object. One audit log per family. One budget ledger (the
+  audit log is canonical; the budget file is a derived live counter).
 - For multi-agent: parent and all children share the budget file via
-  `proper-lockfile`. One $5 cap for the whole family.
+  `proper-lockfile` AND share the audit file via `O_APPEND` (no lock).
+- **`gate.check` and `gate.record` MUST be called serially per `Gate`
+  instance.** Concurrent calls produce undefined `seq` ordering. Multiple
+  Gate instances (parent + child processes) MAY run concurrently.
 
-This is the security principle of **complete mediation**. The reason the
-multis duplication bug happened was two reference monitors. Don't ship that
-again.
+This is the security principle of **complete mediation**.
 
-### 9.1 The 6-step evaluation order
+### 9.1 The 6-step evaluation order (load-bearing)
 
 `gate.check(action)` runs through these checks in this exact order. **First
-match wins** for terminal outcomes (deny / allow); ask-human is also
-terminal. Allowlist match short-circuits past the ask layer (an explicit
-allowlist entry IS the consent).
+match wins** for terminal outcomes. The order is `deny > ask > scope >
+default`.
 
 ```
-1. tools.denylist match           → deny (terminal)
-2. content.denyPatterns match     → deny (terminal)
-3. tools.allowlist match          → allow (terminal — short-circuits ask)
-4. content.askPatterns match      → askHuman (terminal — caller's callback decides)
-5. tools.denyArgPatterns match    → deny (terminal — runs after name allow)
-6. default                        → allow
+PRE-EVAL (cross-cutting, all halt severity if triggered):
+  P0. secrets.redact(action)        ← mutation, not a decision
+  P1. budget.check()                ← halt if exceeded
+  P2. limits.maxTurns               ← halt if exceeded
+  P3. terminated check              ← halt if previously gate.terminate()'d
+
+THE 6 STEPS (first match wins):
+  1. tools.denylist                 → deny (action)
+  2. content.denyPatterns           → deny (action)
+  3. per-action-type deny rules     → deny (action)
+        bash.denyPatterns / bash.allow (when action.type === "bash")
+        fs.deny / fs.readScope / fs.writeScope (when read/write/edit)
+        net.allowDomains / net.denyPrivateIps (when fetch)
+        limits.maxChildren / limits.maxDepth (when spawn)
+        tools.denyArgPatterns (any tool with matching args)
+  4. content.askPatterns            → askHuman (action; resolved via humanChannel)
+  5. tools.allowlist enforcement    → set+match: allow; set+miss: deny (rule: tools.allowlist.exclusive)
+  6. default                        → allow (rule: "default")
 ```
 
-**Why this order:**
+**Order rationale:** universal denies (1-3) catch everything dangerous
+regardless of who allowed what. Universal asks (4) are the safety floor —
+they fire even on allowlisted tools. Capability scope (5) restricts which
+tools the agent can invoke at all. Default allow (6) is the bottom.
 
-- Explicit deny (1) is the strongest signal — no other check can override.
-- Content deny (2) catches universal dangers (DROP TABLE, rm -rf) that no
-  user wants regardless of trust.
-- Allowlist (3) is "I trust this tool — don't bother asking." Without this
-  short-circuit, allowlisting a destructive tool would still prompt forever.
-- Ask (4) is the safety floor: destructive verbs prompt unless explicitly
-  allowed.
-- ArgPatterns (5) is fine-grained — even a trusted tool (allowlisted) gets
-  arg-checked. "Allow `update_issue` but not with `priority: critical`"
-  needs this slot AFTER the allow short-circuit, by design.
-- Default allow (6) keeps the library usable — users with no config still
-  get safe defaults via shipped `content.askPatterns`.
+### 9.2 `tools.allowlist` is scope-only — NOT a trust shortcut
 
-### 9.2 Why allowlist short-circuits ask (worth explaining in code comments)
+v0.4 of this PRD made allowlist short-circuit ask ("explicit listing =
+explicit consent"). v0.6 reverses that. Allowlist now means **only "which
+tools can be invoked at all":**
 
-If a user goes to the trouble of writing
-`tools.allowlist: ["mcp:linear.app/delete_comment"]`, they have made an
-explicit decision. Prompting them every time would defeat their config and
-train them to click-through reflexively (which destroys the value of the
-prompt for things they DIDN'T allowlist).
+- **Unset or empty:** no effect; flow continues to step 6 (default allow).
+- **Set with one or more entries:**
+  - tool name matches → `allow` (rule: `tools.allowlist`).
+  - tool name does not match → `deny` (rule: `tools.allowlist.exclusive`).
 
-`tools.denyArgPatterns` runs after the allow specifically so users can say
-"I trust this tool generally, but block these specific args." Two different
-concerns, two different slots.
+Both branches happen at step 5, AFTER `content.askPatterns` at step 4.
+**Allowlisted tools still get asked** when they match a safe-default
+askPattern (e.g., `delete`, `revoke`, `force-push`).
+
+**Why the change** (foot-gun surfaced in POC phase 2): the v0.4 rationale
+("explicit allowlist = explicit consent") assumed users allowlist specific
+destructive entries like `mcp:linear.app/delete_comment`. In practice, users
+allowlist general tools (`bash`, `fetch`, `read`) for everyday capability,
+and the short-circuit silently disables the safe-default ask floor. That
+conflicts with the §11 promise that safe defaults are the floor, not the
+ceiling.
+
+**For the v0.4 use case (silence ask on a specific known-destructive tool):**
+- Trim or narrow `content.askPatterns` (caller-side override).
+- OR use `tools.denyArgPatterns` for tool-specific rules.
+- OR have the runner's `humanChannel` auto-approve known patterns.
+
+The library no longer offers a "trust shortcut" via allowlist — that was the
+foot-gun.
 
 ## 10. Public API
 
 ```js
-import { Gate } from "bareguard";
+import {
+  Gate,                            // the orchestrator class
+  redact,                          // standalone redaction helper
+  defaultAuditPath,                // path resolver matching env-var convention
+  BudgetUnavailableError,          // thrown on lock failure / corrupt budget file
+  SAFE_DEFAULT_DENY_PATTERNS,      // exposed in case you want to extend
+  SAFE_DEFAULT_ASK_PATTERNS,       // exposed in case you want to extend
+  globToRegex, matchAny,           // glob helpers (v0.1: `*` only)
+} from "bareguard";
 
-const gate = Gate.fromConfig({
-  bash:     {
+const gate = new Gate({
+  bash:    {
     allow: ["git", "ls", "cat", "rg"],
     denyPatterns: [/rm\s+-rf/, /sudo/, /curl.*\|.*sh/],
   },
-  budget:   {
-    maxTokens: 100_000,
+  budget:  {
     maxCostUsd: 5.00,
+    maxTokens: 100_000,
     sharedFile: process.env.BAREGUARD_BUDGET_FILE || null,  // null = process-local
   },
-  fs:       {
+  fs:      {
     writeScope: ["./", "/tmp/agent"],
     readScope:  ["./", "/tmp/agent", "/etc/hostname"],
     deny:       ["~/.ssh", "/etc/passwd", "/.git/config"],
   },
-  net:      {
+  net:     {
     allowDomains: ["api.anthropic.com", "github.com"],
     denyPrivateIps: true,
   },
-  limits:   {
+  limits:  {
     maxTurns: 50,
-    timeoutSeconds: 300,
-    maxChildren: 4,        // per parent
-    maxDepth: 3,           // total spawn-tree depth
+    maxChildren: 4,
+    maxDepth: 3,
   },
-  approval: {
-    callback: myApprovalFn,    // async (action, prompt) => "allow" | "deny"
-  },
-  tools:    {
+  tools:   {
     allowlist: ["bash", "read", "write", "fetch", "spawn", "defer",
                 "mcp_discover", "mcp_invoke", "mcp:linear.app/*"],
     denylist:  ["mcp:*/admin_*", "mcp:*/delete_*"],
@@ -286,49 +314,80 @@ const gate = Gate.fromConfig({
       "mcp:linear.app/update_issue": [/priority.*critical/i],
     },
   },
-  secrets:  {
+  secrets: {
     envVars:  ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GITHUB_TOKEN"],
     patterns: [/sk-[A-Za-z0-9]{40,}/, /ghp_[A-Za-z0-9]{36}/],
   },
-  defer:    { ratePerMinute: 30 },
-  spawn:    { ratePerMinute: 10 },
-  content:  {                 // can be omitted; safe defaults ship — see §11
-    denyPatterns: [...],
-    askPatterns:  [...],
+  content: {
+    // omit to keep safe defaults from §11; or override:
+    // denyPatterns: [...],
+    // askPatterns:  [...],
   },
-  audit:    {
-    path:          "./bareguard.jsonl",   // or null for callback-only
-    callback:      null,                  // optional fn(line) called per emit
-    parentRunId:   process.env.BAREGUARD_PARENT_RUN_ID || null,
-    runId:         undefined,             // auto-gen ULID if absent
-    spawnDepth:    Number(process.env.BAREGUARD_SPAWN_DEPTH || 0),
+  audit:   {
+    path: undefined,                 // default: $XDG_STATE_HOME/bareguard/<run-id>.jsonl
+    // children inherit via env var BAREGUARD_AUDIT_PATH set by parent
+  },
+  // ONE callback for all human escalations (ask + halt + topup + terminate)
+  humanChannel: async (event) => {
+    // event.kind: "ask" | "halt"
+    // event.action / event.severity / event.rule / event.reason / event.context
+    return { decision: "allow" | "deny" | "topup" | "terminate", newCap?, reason? };
   },
 });
 
 // Three call sites, total:
 const cleanAction = gate.redact(action);
-const decision    = await gate.check(cleanAction);   // or: gate.allows(name) for pure-query
+const decision    = await gate.check(cleanAction);   // returns terminal allow/deny
 await gate.record(cleanAction, result);
 
-// Or one composed call for runners that want it:
+// Or one composed call:
 const result = await gate.run(action, executor);
+
+// Pure-query catalog pre-filter (no audit, no budget delta):
+const ok = await gate.allows(action);                 // or gate.allows("tool_name") shorthand
+
+// Halt context — deterministic stats over audit log:
+const ctx = await gate.haltContext();
+
+// Explicit (non-human-driven) terminate / cap raise:
+await gate.terminate("operator finished cleanly");
+await gate.raiseCap("costUsd", 10.00);
 ```
 
 **That is the entire surface.** No subclassing, no plugin system, no hooks
-framework, no DSL.
+framework, no DSL. `new Gate(config)` is the only canonical constructor.
 
-### 10.1 `gate.allows(action) → boolean` — the discovery pre-filter
+### 10.1 The `humanChannel` contract (what bareguard does with each return)
 
-Pure query, no audit write, no budget delta. Used by callers (e.g.,
-bareagent's `mcp_discover`) to filter a catalog before showing it to the LLM.
+| `decision` | Behavior |
+|---|---|
+| `"allow"` | Emit `phase: "approval"` audit line; gate.check returns terminal `allow`. |
+| `"deny"`  | Emit `phase: "approval"`; gate.check returns terminal `deny` with severity preserved from the original ask/halt. |
+| `"topup"` | Only meaningful for halt severity. Validates `newCap`. Calls `gate.raiseCap` internally (audit `phase: "topup"`). Re-evaluates the gate.check; max 5 topup iterations to prevent loops. For ask-severity events, treated as allow. |
+| `"terminate"` | Emit `phase: "approval"` + `phase: "terminate"`; gate becomes sticky-terminated. Every subsequent check returns `deny` + halt + `rule: "gate.terminated"`. |
+
+If `humanChannel` is **not registered** and an ask/halt fires:
+- One-time stderr `WARN` line on first occurrence.
+- Returns `deny` + halt + `rule: "...originalRule..."` + reason `"...originalReason... (no humanChannel registered)"`.
+- Behavior is correct for headless / CI runs (deny = safe default when no
+  human present).
+
+### 10.2 `gate.allows(action)` — the catalog pre-filter
+
+Pure query, no audit write, no budget delta, no humanChannel call. Used by
+callers (e.g., bareagent's `mcp_discover`) to filter a catalog before showing
+it to the LLM.
+
+- Accepts a full action object **OR** a tool-name string (auto-wrapped to
+  `{ type: name }`).
+- Returns `true` for `allow` AND `askHuman` outcomes; `false` for `deny`.
+  Reason: hiding ask-gated tools from the LLM means the agent never tries
+  them, never gets the prompt. The whole point of askHuman is "human decides
+  at invoke time" — that requires LLM visibility.
 
 ```js
-const filtered = catalog.filter(t => gate.allows({ type: "mcp_invoke", name: t.name }));
+const filtered = catalog.filter(t => gate.allows(t.name));
 ```
-
-This is an *ergonomic*, not a gov mechanism. The actual gov decision is made
-by `gate.check()` at invoke time. Pre-filtering is purely about not wasting
-LLM context on tools the agent can't invoke anyway.
 
 ## 11. Safe defaults shipped out of the box
 
@@ -354,77 +413,82 @@ pure-allow override with `content.askPatterns: []` and `content.denyPatterns:
 }
 ```
 
-This is ~10 lines of regex and it covers ~90% of what gets agents in
-trouble. The shipped defaults are the *floor*, not the ceiling.
+This is ~10 lines of regex and it covers ~90% of what gets agents in trouble.
 
-**Why ship safe defaults instead of allow-by-default:**
+**Safe defaults are the FLOOR, not the ceiling.** They fire even on
+allowlisted tools — that's the v0.6 reversal of the v0.4 short-circuit. If
+they over-match for your use case, narrow them. The trade is intentional:
+over-asking is recoverable; under-asking is incidents.
 
-1. The ask-human callback is opt-in (caller wires it). With no callback,
-   ask falls back to deny — strict default.
-2. "Default allow + opt-in safety" is the pattern that produces incidents.
-   Users don't read README sections about hardening.
-3. Bare suite philosophy isn't "no policy by default" — it's "minimum viable
-   policy by default, easy to override." Match Claude Code's posture: writes
-   prompt, reads pass, user can disable.
+### 11.1 Halt-vs-action severity classification
+
+Every decision carries `severity: "action" | "halt"`.
+
+- **`severity: "action"`** — per-action policy decision. The runner returns
+  the result (or structured error) to the LLM and continues the loop.
+- **`severity: "halt"`** — run-level limit exhausted. **The runner MUST NOT
+  bubble it to the LLM.** bareguard handles halt internally by calling
+  `humanChannel`; the runner only sees the post-human terminal allow/deny.
+
+**Halt-severity rules:** `budget.maxCostUsd`, `budget.maxTokens`,
+`limits.maxTurns`, `limits.timeoutSeconds` (v0.2), `gate.terminated`. Every
+other rule is action severity.
 
 ## 12. Audit trail spec
 
-The audit log is bareguard's spine. It is also the budget ledger. There is
-no second source of truth.
+The audit log is bareguard's spine. **One file per agent family** — parent +
+children + grandchildren all `appendFile` the same path. POSIX `O_APPEND`
+guarantees atomicity for writes < `PIPE_BUF` (4KB on Linux/macOS); same
+mechanism nginx access logs use. Windows uses a `proper-lockfile` fallback
+(auto-detected via `process.platform`).
 
 **Format:** JSONL, one line per gated event, append-only.
 
-**Required fields:**
+**Default path** (in order, first that resolves):
+1. `$XDG_STATE_HOME/bareguard/<root-run-id>.jsonl`
+2. `$HOME/.local/state/bareguard/<root-run-id>.jsonl`
+3. `./bareguard-<root-run-id>.jsonl` (cwd fallback)
+
+Children inherit via env var `BAREGUARD_AUDIT_PATH` set by the parent.
+
+**Required fields on every line:**
 
 ```json
 {
-  "ts": "2026-04-25T14:32:11.482Z",
+  "ts": "2026-04-30T14:32:11.482Z",
   "seq": 1247,
-  "run_id": "run_01J...",
-  "parent_run_id": "run_01J...",
+  "run_id": "uuid",
+  "parent_run_id": "uuid|null",
   "spawn_depth": 1,
-  "phase": "gate",
-  "action": { "type": "bash", "cmd": "git status" },
-  "decision": "allow",
-  "rule": "tools.allowlist",
-  "reason": null,
-  "result": null
+  "phase": "gate"
 }
 ```
 
-For `phase: "record"` lines, `result` is populated and `decision` is null:
+**Phases:**
 
-```json
-{
-  "ts": "2026-04-25T14:32:11.531Z",
-  "seq": 1248,
-  "run_id": "run_01J...",
-  "parent_run_id": "run_01J...",
-  "spawn_depth": 1,
-  "phase": "record",
-  "action": { "type": "bash", "cmd": "git status" },
-  "decision": null,
-  "rule": null,
-  "reason": null,
-  "result": { "exitCode": 0, "tokens": 142, "costUsd": 0.003 }
-}
-```
-
-`parent_run_id` is `null` for the root agent; set by the parent's `spawn`
-tool when forking a child (via env var). `spawn_depth` is `0` at root,
-incremented per level. Together they make the full family tree
-reconstructable from grep.
+| `phase` | When emitted | Phase-specific fields |
+|---|---|---|
+| `gate` | every `gate.check()` decision | `action`, `decision`, `severity`, `rule`, `reason` |
+| `record` | every `gate.record()` after a successful execute | `action`, `result` (incl. `costUsd`, `tokens`) |
+| `approval` | `humanChannel` returned a decision | `decision`, `reason`, `newCap` |
+| `halt` | dedicated grep target on halt | `dimension`, `spent`, `cap`, `rule`, `awaiting` |
+| `topup` | runner / humanChannel raised a cap | `dimension`, `oldCap`, `newCap` |
+| `terminate` | gate terminated (graceful) | `reason` |
 
 **Properties:**
 
 - Redaction happens **before** gate sees the action. Audit lines never
-  contain secrets — there is nothing to scrub.
+  contain action-side secrets.
+- **Caller is responsible for redacting tool results** before passing to
+  `gate.record`. bareguard ships the `redact()` helper — apply to results too.
 - Budget remaining = `initial - sum(record.result.costUsd)` over the log.
-  Reconstruct on startup. No separate ledger file.
-- Monotonic `seq` per gate instance. Helps detect gaps.
-- One log per agent run by default. Caller decides path. Children write to
-  separate files (linked by `parent_run_id`); cheaper than contending on
-  one file.
+  Reconstructable from the audit log on cold start (used when the budget
+  file is missing/corrupt).
+- Monotonic `seq` per gate instance. Helps detect gaps within a process.
+- **Truncation:** lines > 3.5KB (safety margin under PIPE_BUF) get truncated
+  with explicit `_truncated: true` boolean at line root for downstream
+  consumers, plus inline `[TRUNCATED:n bytes]` markers in the field that
+  was cut.
 
 **Output sink:** file path OR callback function. Nothing else. (Datadog,
 Loki, S3 are caller-side adapters.)
@@ -433,67 +497,52 @@ Loki, S3 are caller-side adapters.)
 
 When a parent spawns a child and both should draw from the same budget
 ceiling, configure `budget.sharedFile`. Implementation uses
-`proper-lockfile` (the one allowed dep) to coordinate writes.
+`proper-lockfile` (the one allowed dep).
 
-**Pseudocode:**
-
-```js
-import lockfile from "proper-lockfile";
-
-async function recordCost(deltaUsd, deltaTokens) {
-  if (!config.budget.sharedFile) {
-    return process_local_update(deltaUsd, deltaTokens);
-  }
-  const release = await lockfile.lock(config.budget.sharedFile, {
-    retries: { retries: 5, minTimeout: 50, maxTimeout: 500 },
-  });
-  try {
-    const state = JSON.parse(await fs.readFile(config.budget.sharedFile));
-    state.spent_usd    += deltaUsd;
-    state.spent_tokens += deltaTokens;
-    if (state.spent_usd >= state.cap_usd) throw new BudgetExceeded(state);
-    if (state.spent_tokens >= state.cap_tokens) throw new BudgetExceeded(state);
-    await fs.writeFile(config.budget.sharedFile, JSON.stringify(state));
-  } finally {
-    await release();
-  }
-}
-```
-
-**Format of the shared budget file:**
+**Format of the shared budget file (versioned per amendment §16):**
 
 ```json
 {
+  "version": 1,
   "cap_usd": 5.00,
   "spent_usd": 1.23,
   "cap_tokens": 100000,
   "spent_tokens": 24500,
-  "started_at": "2026-04-25T14:00:00Z",
-  "owners": ["run_01JABC...", "run_01JDEF..."]
+  "started_at": "2026-04-30T14:00:00Z",
+  "updated_at": "2026-04-30T14:32:11Z"
 }
 ```
 
-Children inherit the path via env var `BAREGUARD_BUDGET_FILE`, set by the
-parent's `spawn` tool (see bareagent PRD §10.6). Lock contention is rare
-in practice (sub-second LLM turn cadence). On contention, retry with
-backoff; on persistent failure, surface BudgetUnavailable to the agent loop
-which terminates cleanly.
+bareguard reads `version` on init and refuses unknown versions with a
+`BudgetUnavailableError`. v0.1 only writes v1.
+
+**Refresh policy (lazy, not per-check):**
+
+- On `init()`: read the file, populate local cache.
+- After every `record()`: write under lock; refresh cache from post-write state.
+- On lock acquisition (any reason): refresh while holding the lock.
+- **NOT on `gate.check()`:** trust the local cache.
+
+**Worst case:** another process's record between two of our checks isn't
+visible until our next record or lock. Budget may be exceeded by one
+action's spend. Halt fires reliably on the next check after a record.
+Caps are soft by design.
 
 **Failure modes addressed:**
 
 - Lock leftover from crashed process → `proper-lockfile` handles stale lock
   detection by default.
 - Concurrent writes → serialized.
-- Lost updates → impossible while lock is held.
-- Budget file corruption → JSON parse error surfaces; agent terminates with
-  clear error. Recovery is manual (delete file, restart).
+- Budget file corruption → JSON parse error surfaces; rebuild from audit log
+  if possible, else surface `BudgetUnavailableError` and terminate cleanly.
 - Cross-machine → NOT supported in v1. Single-machine only. See §17.
+
+Children inherit the path via env var `BAREGUARD_BUDGET_FILE`, set by the
+parent's `spawn` tool.
 
 ## 14. Spawn and defer guards
 
-These primitives exist because of bareagent's `spawn` and `defer` tools (see
-bareagent PRD §10.6, §10.7). They're listed in §8 as primitives 10 and 11
-and detailed here.
+These primitives exist because of bareagent's `spawn` and `defer` tools.
 
 ### 14.1 `limits.maxChildren` and `limits.maxDepth`
 
@@ -501,17 +550,16 @@ and detailed here.
   concurrently and over its lifetime.
 - **Per-tree:** total depth from root cannot exceed `maxDepth`.
 
-Tracked in the audit log: every `spawn` action's gate-decision line includes
-the current child count and depth. Reconstructed on startup from the log.
+Tracked in the audit log; reconstructed on startup from the log if needed.
 Without these, one bug spawns 10K agents and burns the budget in 30 seconds.
 
-### 14.2 `defer.ratePerMinute`
+### 14.2 `defer.ratePerMinute` (v0.2)
 
 Caps how many `defer()` calls a single agent run can emit per minute.
 Default: 30. Prevents a confused agent from emitting 1000 jobs into the
 queue.
 
-### 14.3 `spawn.ratePerMinute`
+### 14.3 `spawn.ratePerMinute` (v0.2)
 
 Same idea for `spawn`. Default: 10. Prevents fork-bomb shapes even if
 `maxChildren` is set generously.
@@ -526,32 +574,25 @@ emit decision and the fire decision.
 
 ## 15. The `tools` vs `content` distinction (frequently confused)
 
-These are two different primitives that look at two different things. They
-compose, they don't overlap.
-
 | Rule                       | Looks at                  | Match type | Outcome     | Example                                                |
 | -------------------------- | ------------------------- | ---------- | ----------- | ------------------------------------------------------ |
-| `tools.allowlist`          | tool name                 | glob       | allow       | `"mcp:linear.app/*"`                                   |
+| `tools.allowlist`          | tool name                 | glob       | allow (scope) | `"mcp:linear.app/*"`                                   |
 | `tools.denylist`           | tool name                 | glob       | deny        | `"mcp:*/delete_*"`                                     |
 | `tools.denyArgPatterns`    | action.args (per tool)    | regex      | deny        | `{ "update_issue": [/priority.*critical/] }`           |
 | `content.denyPatterns`     | full serialized action    | regex      | deny        | `/DROP\s+TABLE/i`                                      |
-| `content.askPatterns`      | full serialized action    | regex      | ask human   | `/\b(delete|drop|revoke)\b/i`                          |
+| `content.askPatterns`      | full serialized action    | regex      | ask human   | `/\b(delete\|drop\|revoke)\b/i`                        |
 
 **When to use which:**
 
 - **`tools` rules** when the dangerous thing is identifiable by tool name.
-  Cheap to express, zero false positives. Good for "trust this whole MCP
-  server" or "never invoke this specific tool."
+  Cheap to express, zero false positives.
 - **`content.denyPatterns`** for dangerous payload shapes that show up
   across many tools — SQL injection patterns, force flags, destructive HTTP
-  methods. One regex catches it whether the agent uses `bash`,
-  `mcp:db.tool/query`, or `fetch`.
-- **`content.askPatterns`** for "probably fine but worth confirming." The
-  words `delete`, `drop`, `revoke` in any action. Prompts the human;
-  doesn't block.
+  methods.
+- **`content.askPatterns`** for "probably fine but worth confirming."
+  Prompts the human; doesn't block.
 - **`tools.denyArgPatterns`** when you trust a tool generally but want to
-  block specific argument shapes. More targeted than `content` because it's
-  scoped to one tool.
+  block specific argument shapes.
 
 ## 16. MCP governance (Path A)
 
@@ -562,13 +603,13 @@ and fetch. There is no MCP-specific code in bareguard.
 
 1. `bareagent.mcp_discover()` — bareagent reads MCP server catalogs, caches
    for 30 days. **bareguard is not consulted.** Discovery is metadata
-   access, not an action against the world. (See bareagent PRD §10.8.)
+   access, not an action.
 2. `bareagent.mcp_invoke(toolName, args)` — bareagent invokes the MCP tool.
    **bareguard's `tools` and `content` primitives check it** as it would
    any other action. Tool name (e.g., `mcp:linear.app/list_issues`) is
    glob-matched; args are regex-matched.
 
-### 16.2 Why "Path A" (gov via invocation, not via catalog)
+### 16.2 Why "Path A"
 
 Path A is sufficient: same machinery as bash gov, just with longer tool
 names. bareguard stays catalog-blind, which is a feature:
@@ -576,30 +617,28 @@ names. bareguard stays catalog-blind, which is a feature:
 - The policy library doesn't grow MCP-shaped knowledge.
 - It doesn't break when the catalog refreshes.
 - Users can change MCP servers without touching bareguard config.
-- New MCP versions or protocol changes are absorbed by bareagent's
-  discovery; bareguard sees the same string convention either way.
-
-The alternative (Path B — bareguard knows the catalog) is more powerful
-ergonomically but couples policy to discovery. Rejected for v1.
 
 ### 16.3 `gate.allows()` as an ergonomic, not a gov mechanism
 
-bareagent can call `gate.allows(action)` during `mcp_discover` to filter
-the catalog before showing it to the LLM (don't waste context on tools the
-agent can't invoke). This is purely a context optimization. Gov decisions
-still happen at invoke time via `gate.check()`. (See §10.1.)
+bareagent can call `gate.allows(toolName)` during `mcp_discover` to filter
+the catalog before showing it to the LLM. Pure context optimization. Gov
+decisions still happen at invoke time via `gate.check()`.
 
-### 16.4 Tool name convention
+### 16.4 Tool name convention and glob semantics
 
 `mcp:<server-host>/<tool-name>` — string convention bareguard glob-matches.
-Examples:
 
-- `mcp:linear.app/list_issues`
-- `mcp:github.com/create_pull_request`
-- `mcp:internal.company.com/admin_revoke_token`
+**Glob in v0.1: `*` only, matches any character including `/`.** No `?`,
+no `[abc]`, no escapes. Trade-offs:
 
-bareguard does no parsing. It splits on `/` only when the user writes a
-glob like `mcp:linear.app/*`. Otherwise the whole name is a string.
+- For denylists: safe (denies more, never less). `mcp:*/admin_*` catches
+  `mcp:foo/admin_baz` AND `mcp:foo/admin_baz/sub/path`.
+- **For allowlists: can over-grant.** `mcp:linear.app/*` matches
+  `mcp:linear.app/list_issues` AND `mcp:linear.app/sub/foo`. Err narrow on
+  allowlists; list specific tools when possible.
+
+v0.2 may add shell-style `**` so `*` becomes "anything except `/`". Not
+v0.1.
 
 ## 17. NO-GO list
 
@@ -612,7 +651,7 @@ Each entry was discussed during design and consciously excluded.
 | Persona / tone constraints                           | System prompt.                                                                   |
 | Output schema validation (JSON, Zod)                 | guardrails-ai already does this well. Or Zod, in the caller's code.              |
 | Hallucination / factuality detection                 | Model-side problem. Hard. Not our fight.                                         |
-| "Constitutional AI" rule sets                        | That's a *training* method, not a runtime library. Confusing branding aside, not bareguard. |
+| "Constitutional AI" rule sets                        | That's a *training* method, not a runtime library.                               |
 | PII / toxicity classifiers                           | guardrails-ai Hub has many of these. Don't reimplement.                          |
 | Telemetry of any kind                                | Bare suite philosophy. No phone-home, ever.                                      |
 | Remote audit sinks (Datadog, S3, Loki)               | That's an adapter the user writes. We produce JSONL; they pipe it.               |
@@ -627,30 +666,32 @@ Each entry was discussed during design and consciously excluded.
 | Hosted policy distribution                           | No.                                                                              |
 | ML-based action classifiers                          | No. Rules are explicit, auditable, deterministic. That's a feature.              |
 | Per-user / per-tenant policy management              | Caller's concern. Pass a different `Gate` instance per config.                   |
-| Approval UI                                          | Callback only. Caller wires it to their TUI / Slack / web.                       |
-| Sandboxing (Docker, gVisor, Firecracker)             | Different layer. bareguard prevents the call; sandboxing contains effects.        |
+| Approval UI                                          | `humanChannel` callback only. Caller wires it to TUI / Slack / web / PIN.        |
+| Sandboxing (Docker, gVisor, Firecracker)             | Different layer. bareguard prevents the call; sandboxing contains effects.       |
 | Cross-machine distributed budget                     | Single-machine `proper-lockfile` is v1. Cross-machine = future sibling library.  |
 | Identity / authn / authz                             | Caller's concern. bareguard sees actions, not principals.                        |
+| **PIN / biometric / second-factor for approvals**    | Authentication is the runner's UX. bareguard says "ask the human"; how the human is verified is the runner's choice. |
 | Rate limiting against external APIs                  | The API does this; or use a separate rate-limit library. Not bareguard's role.   |
 | Built-in scheduler                                   | bareagent's `defer` tool emits records; cron / `wake.sh` / future `barejob` runs them. |
 | Long-running daemon mode                             | bareguard is a library, not a service. No `bareguard serve`.                     |
-| MCP-specific parsing / awareness                     | bareguard glob-matches strings. The `mcp:server/tool` convention is the user's, not parsed by us. |
+| MCP-specific parsing / awareness                     | bareguard glob-matches strings.                                                  |
 | MCP server registry or aggregator                    | Different layer. bareguard doesn't connect to MCP servers; bareagent does.       |
+| **LLM-self-estimate of remaining work at halt**      | Speculative; costs tokens at the worst time; LLMs are bad self-estimators. bareguard provides deterministic stats only. |
+| **Concurrent gate.check (within one Gate instance)** | Agent loops are naturally serial. Documented contract is "one in flight."        |
+| **Allowlist as a "trust shortcut" silencing asks**   | Was a foot-gun in practice. Allowlist is scope-only; askPatterns always fire.    |
 
-**Adding any of these dilutes the one thing this library does.** When users
-ask for them, point at this list.
+**Adding any of these dilutes the one thing this library does.** Point users
+at this list when they ask.
 
 ## 18. Language & runtime
 
 **Node.js 20 LTS+, ESM only.**
 
-- **Stdlib:** `fs/promises`, `path`, `crypto`, `process`, `events`,
-  `worker_threads` (if needed for callback isolation).
+- **Stdlib:** `fs/promises`, `path`, `crypto`, `process`, `events`, `os`.
 - **One allowed production dep: `proper-lockfile`** for the shared budget
-  file. Justification: file locking with stale-lock detection is genuinely
-  hard to get right cross-platform. `proper-lockfile` is widely used,
-  narrow scope, no transitive deps of consequence. Inline implementations
-  fail on NFS, on Windows, and on stale locks from crashed processes.
+  file (and Windows audit fallback). Justification: file locking with
+  stale-lock detection is genuinely hard cross-platform. Inline
+  implementations fail on NFS, Windows, and crashed processes.
 - **No** `commander`/`yargs` — bareguard has no CLI of its own.
 - **No** test framework in the package; tests use Node's built-in test
   runner (`node:test`).
@@ -658,133 +699,148 @@ ask for them, point at this list.
 **Production deps target: 1.** Hard target. Any deviation requires explicit
 justification in the PRD.
 
-## 19. Migration plan
+## 19. Migration plan (post-v0.1.1)
 
-Three releases, each independently shippable.
+Three releases.
 
-### bareguard 0.1 — extraction baseline
+### bareguard 0.1 — extraction baseline (SHIPPED 2026-04-30)
 
-- Implement primitives 1, 2 (process-local budget only), 3, 4, 5 (excluding
-  `maxChildren`/`maxDepth`), 6, 7 (excluding `denyArgPatterns`), 8, 9.
-- Re-export old paths from bareagent under `bareagent/guards/*` as proxies
-  to bareguard with `DeprecationWarning`. Removed in bareagent v(next+2).
-- bareagent v(next) depends on bareguard 0.1.
-- README cross-links.
+Released on npm as `bareguard@0.1.0`, patched to `0.1.1` same day with
+pre-publish review fixes. Includes:
 
-### bareguard 0.2 — multi-agent + scheduling + MCP gov
+- All primitives 1–9 + 12 (every primitive except `defer-rate` and `spawn-rate`).
+- Shared budget file with `proper-lockfile` (originally scheduled for 0.2;
+  brought forward).
+- Halt-vs-action severity classification.
+- `humanChannel` callback consolidating all human escalations.
+- Single-file audit via POSIX `O_APPEND` (Windows lock fallback).
+- Multi-agent stitching via env vars (`parent_run_id`, `spawn_depth`).
+- `gate.allows(action | string)` catalog pre-filter.
+- `gate.haltContext()`, `gate.terminate()`, `gate.raiseCap()`.
+- Safe defaults shipped per §11.
 
-- Add `limits.maxChildren`, `limits.maxDepth`.
-- Add `budget.sharedFile` with `proper-lockfile`.
-- Add `parent_run_id`, `spawn_depth`, `run_id` to the audit schema.
-- Add primitives 10 (`defer-rate`), 11 (`spawn-rate`), 12 (`content`).
-- Add `tools.denyArgPatterns`.
-- Add `gate.allows()` for discovery pre-filter.
-- Ship safe defaults in `content` (see §11).
-- bareagent v(next+2) depends on bareguard 0.2 and ships the
-  `spawn`/`defer`/`mcp_discover`/`mcp_invoke` tools.
+bareagent v(next) imports `bareguard ^0.1`. Removes its built-in policy code
+(see bareagent PRD §9.1 for the concrete removal list).
+
+### bareguard 0.2 — rate limits + bareagent-driven additions
+
+- `defer-rate` (#10) and `spawn-rate` (#11) primitives. They land alongside
+  bareagent v(next+1)'s `defer` and `spawn` tools that exercise them.
+- `**` glob support if bareagent integration surfaces real allowlist
+  over-grant pain (deferred per §16.4 / v0.6 §9).
+- Sliding-window rate (if fixed-window proves insufficient).
 
 ### bareguard 1.0 — stabilize
 
 - Lock the API. SemVer commitments.
-- Walk-away: maintenance only after this point. See §16 of bareagent PRD.
+- Walk-away: maintenance only after this point.
 
-## 20. POC plan
+## 20. POC retrospective (what we built, why)
 
-Three phases, time-boxed. If a "stop if exceeded" mark is hit, the design
-has a problem the POC is exposing — that's the POC working correctly.
+bareguard v0.1 was developed via three POC phases (per the original v0.4
+§20). All three passed; total source 931 LOC; 33 tests pass on the CI matrix
+(Linux/macOS/Windows × Node 20/22). The POC files were deleted before v0.1.0
+publish (git history retains them).
 
-| Phase | Goal                                                                                                                | Budget   | Stretch | Stop    |
-| ----- | ------------------------------------------------------------------------------------------------------------------- | -------- | ------- | ------- |
-| 1     | Single gate with bash + budget + audit, in-memory state, 6-step eval order                                          | 60 min   | 90 min  | 2 hours |
-| 2     | Add fs + net + secrets redaction + content (with safe defaults), JSONL audit, reconstruct budget from log           | 90 min   | 2 hours | 3 hours |
-| 3     | Wire bareguard into bareagent's loop; add `maxChildren`/`maxDepth`/shared budget; spawn child; verify gov over MCP   | 2 hours  | 3 hours | 4 hours |
-| **Total** |                                                                                                                 | **4.5h** | **6.5h**| **9h**  |
-
-**POC anti-goals:** no proper API surface, no error handling polish, no
-cross-platform, no docs, no tests, single file. If you find yourself making
-it nice, you've drifted. Delete the polish, return to crude.
-
-**POC success = "I'm ready to delete all this code and start fresh."**
+- Phase 1 — single gate with bash + budget + audit, 6-step eval order: 8/8.
+- Phase 2 — fs + net + secrets + content + safe defaults + JSONL audit +
+  severity field + halt flow + shared budget + audit reconstruction: 13/13.
+- Phase 3 — multi-process (parent + 2 children + grandchild), shared budget
+  under real lock contention, halt cascade across processes,
+  `limits.maxChildren`, `limits.maxDepth` in a 3-deep tree, audit stitching:
+  12/12.
 
 ## 21. Success criteria for v1.0.0
 
-- [ ] Twelve primitives implemented; each ≤ 150 LOC.
-- [ ] Total source ≤ 1000 LOC excluding tests and docs.
-- [ ] One production dep (`proper-lockfile`); no others.
-- [ ] Single gate is the only decision path. No tool self-checks.
-- [ ] Single JSONL audit log. Budget reconstructed from log on startup.
-- [ ] 6-step evaluation order implemented exactly per §9.1; verified by
-      table-driven test covering all 6 outcomes.
-- [ ] Safe defaults shipped per §11; verified by integration test (no
-      user config, agent attempts `rm -rf /` → denied; agent attempts
-      `delete user X` → asks human).
-- [ ] Shared budget across sibling processes verified by integration test
-      (parent + 2 children sharing $5 cap, audit shows correct total).
-- [ ] `parent_run_id` and `spawn_depth` correctly threaded through 3-deep
-      spawn tree (verified by test).
-- [ ] Secrets redaction runs before gate sees action; verified by test.
-- [ ] `defer.ratePerMinute` and `spawn.ratePerMinute` actually fire
-      (verified by test).
-- [ ] `gate.allows()` is pure-query (no audit write, no budget change);
-      verified by test.
-- [ ] MCP tool names glob-matched correctly with `mcp:server/tool`
-      convention (verified by test covering wildcards).
-- [ ] README integration example works copy-pasted into a fresh repo.
-- [ ] bareagent migrated; old paths re-exported with deprecation warnings.
-- [ ] NO-GO list (this doc, §17) included verbatim in `docs/non-roadmap.md`.
-- [ ] Decisions log (§22) included verbatim in `docs/decisions-log.md`.
-- [ ] Published to npm as `bareguard`.
-- [ ] Cross-linked from bareagent's README.
+- [x] Twelve primitives implemented (10 in v0.1, 2 in v0.2).
+- [x] Total source ≤ 1000 LOC excluding tests and docs (931 LOC in v0.1.1).
+- [x] One production dep (`proper-lockfile`); no others.
+- [x] Single gate is the only decision path. No tool self-checks.
+- [x] Single JSONL audit file per agent family. Budget reconstructable from log on startup.
+- [x] 6-step evaluation order implemented exactly per §9.1; verified by table-driven test.
+- [x] Safe defaults shipped per §11; verified by test (no user config, agent attempts `rm -rf /` → denied; `delete X` → asks human via humanChannel).
+- [x] Shared budget across sibling processes verified by integration test (parent + 2 children sharing $5 cap, audit shows correct total).
+- [x] `parent_run_id` and `spawn_depth` correctly threaded through 3-deep spawn tree.
+- [x] Secrets redaction runs before gate sees action; verified by test.
+- [ ] `defer.ratePerMinute` and `spawn.ratePerMinute` actually fire (verified by test) — **v0.2**.
+- [x] `gate.allows()` is pure-query (no audit write, no budget change); verified by test.
+- [x] MCP tool names glob-matched correctly with `mcp:server/tool` convention.
+- [x] README integration example works copy-pasted into a fresh repo.
+- [ ] bareagent migrated; old paths re-exported with deprecation warnings — **v(next)**.
+- [x] NO-GO list (§17) included verbatim.
+- [x] Decisions log (§22) included verbatim.
+- [x] Published to npm as `bareguard`.
+- [x] Cross-linked from bareagent's README.
 
 ## 22. Decisions log (for future Claude)
 
 These were resolved across the design conversations and should not be
 re-litigated unless the user explicitly asks.
 
+### Original v0.4 decisions
+
 - **bareguard owns all policy.** Bash, budget, fs, net, secrets, approval,
-  tools (with arg patterns), content, audit, defer-rate, spawn-rate,
-  limits — all live here. bareagent has no `if allowed:` checks. (§8.)
+  tools, content, audit, defer-rate, spawn-rate, limits — all live here.
+  bareagent has no `if allowed:` checks.
 - **Single gate, complete mediation.** Every action goes through one
-  `gate.check`. Tools never self-check. Two reference monitors is the bug
-  shipped in `multis`; do not ship it again. (§9.)
-- **6-step evaluation order is load-bearing.** Implement exactly. Allowlist
-  short-circuits the ask layer; `denyArgPatterns` runs after allow so users
-  can express "trust this tool, but not with these args." (§9.1, §9.2.)
-- **Audit log is the budget ledger.** Don't keep two sources of truth.
-  Reconstruct budget from audit on startup. (§12.)
-- **Shared budget across siblings is a file with `proper-lockfile`.**
-  Single-machine only in v1. Cross-machine is a future sibling library. (§13.)
-- **`maxChildren` and `maxDepth` are essential, not nice-to-have.** Without
-  them, one bug spawns 10K agents and burns the budget in 30 seconds. (§14.)
-- **Defer-rate and spawn-rate guards are essential.** Same reason — confused
-  agents emit thousands of jobs without these. (§14.)
-- **Defer actions are validated twice:** once on emit, once on fire.
-  Defense in depth. (§14.4.)
-- **No content guardrails.** Toxicity, PII, schema, persona, topic — all
-  guardrails-ai's job or system-prompt's job. The action vs content line is
-  the single most important boundary in this library. (§6, §17.)
+  `gate.check`. Tools never self-check.
+- **6-step evaluation order is load-bearing.** Implement exactly. (Note:
+  the v0.4 short-circuit was reversed — see "v0.5 reversals" below.)
+- **Audit log is canonical; budget file is derived.** One source of truth
+  for history; one fast counter for cross-process. Reconstruct file from
+  audit on startup if missing/corrupt.
+- **No content guardrails.** Toxicity, PII, schema — `guardrails-ai`'s job.
 - **`content` primitive is action-side, not content-side.** It pattern-
-  matches the SERIALIZED ACTION JSON — tool name + args. That's still
-  "what the agent does," just more flexibly expressed than per-tool rules.
-  Distinguishing this from content guardrails is critical. (§8, §15.)
+  matches the SERIALIZED ACTION JSON.
 - **MCP gov is invocation-level, not catalog-level (Path A).** bareguard
-  never sees the MCP catalog. It glob-matches tool name strings on
-  invocation. The catalog lives in bareagent's 30-day cache. (§16.)
+  never sees the MCP catalog.
 - **Tool name convention `mcp:server/tool`.** String convention for
-  glob-matching. bareguard does no MCP-specific parsing. (§16.4.)
-- **`gate.allows()` is ergonomic, not gov.** Pre-filter only; gov happens
-  at invoke time via `gate.check()`. (§10.1, §16.3.)
+  glob-matching.
+- **`gate.allows()` is ergonomic, not gov.** Pre-filter only.
 - **Safe defaults ship.** Default-allow + opt-in safety produces incidents.
-  bareguard ships ~10 lines of regex catching the obvious dangers. Users
-  override with empty arrays if they want pure-allow. (§11.)
-- **One allowed production dep: `proper-lockfile`.** File locking with stale
-  detection is genuinely hard. Inline implementations fail on NFS, Windows,
-  and crashed processes. Worth the dep. Nothing else gets a free pass. (§18.)
-- **No telemetry, ever.** JSONL to a file or a callback. What users do
-  downstream is their problem. (§17.)
-- **Walk-away after v1.0.** New features = new sibling repos. (§19.)
-- **JavaScript is the language.** Bare suite consistency overrides
-  Python-ecosystem-density. (§18.)
+- **One allowed production dep: `proper-lockfile`.**
+- **No telemetry, ever.**
+- **Walk-away after v1.0.** New features = new sibling repos.
+- **JavaScript is the language.** Bare suite consistency.
+
+### v0.5 reversals and additions
+
+- **Halt is a separate severity from deny.** Run-level limit exhaustion
+  (budget, maxTurns) MUST go to a human, MUST NOT bubble to the LLM.
+  Per-action denies do bubble.
+- **Shared budget file is v0.1, not v0.2.** Pre-allocation alternatives are
+  too rigid; the bespoke extension protocol is more complex than the dep.
+- **Allowlist is scope-only, not a trust shortcut.** v0.4's short-circuit
+  rationale was a foot-gun: allowlisting general tools silently disabled the
+  safe-default ask floor. Allowlist now only enforces capability scope;
+  askPatterns always fire.
+- **Per-action-type primitives sit at step 3 (universal-deny phase).**
+  Deny > ask > scope.
+- **No LLM speculation on halt.** bareguard provides deterministic stats only.
+- **Glob `*` matches `/` in v0.1.** Layered defense covers over-match risk.
+  v0.2 may introduce `**` if real pain emerges.
+- **Result redaction is the caller's responsibility.**
+- **`gate.allows(action)` returns true for askHuman.** Catalog pre-filter
+  must show ask-gated tools.
+- **`humanChannel` consolidates ALL human escalations.** One runner-supplied
+  function; bareguard calls it; applies decisions atomically; returns
+  terminal allow/deny.
+- **Single audit file with `O_APPEND` atomicity.** No per-process files;
+  Linux/macOS primary; Windows uses lock fallback.
+- **Budget file format is versioned.**
+- **Budget cross-process refresh is lazy.** Refresh post-record and on-lock.
+- **gate.check / record are serial per gate instance.**
+- **v0.1 scope: everything except rate limits.**
+
+### v0.1.1 review fixes
+
+- **`gate.allows(string)` shorthand.** Object form still works; string is
+  for catalog pre-filters that only have the name.
+- **`_truncated: true` boolean at audit line root** when truncation happens.
+- **One-time stderr WARN when `humanChannel` is unset** and an ask/halt
+  fires. Behavior unchanged (still denies with severity:halt).
+- **`Gate.fromConfig` removed.** `new Gate(config)` is the only canonical
+  constructor.
 
 ---
 
@@ -800,8 +856,7 @@ re-litigated unless the user explicitly asks.
 └─────────────────────────────────────────────────────────────┘
 ```
 
-Five layers. bareguard owns exactly one. Everything else is somebody else's
-library or somebody else's problem.
+Five layers. bareguard owns exactly one.
 
 ## Appendix B: relationship inside the bare suite
 
@@ -811,71 +866,67 @@ library or somebody else's problem.
             ↓ depends on
         bareguard  ← policy + audit (this doc)
             ↑
-            │ also used by
-        multis     ← consumer multi-agent product
+            │ may also be used directly by
+        any other agent runner
 ```
 
 bareguard is a leaf dependency. It does not depend on bareagent or any
-other suite member. This is deliberate: the suite's strength is
-composability of single-purpose libraries.
+other suite member.
 
 ## Appendix C: the test for any new primitive
 
-Before adding anything to bareguard, answer:
+Before adding anything to bareguard:
 
 1. Does it constrain an **action against the world** (or against a sibling
-   process), not words the model produces? *(If no → not bareguard.)*
+   process), not words the model produces?
 2. Can it be expressed as a **rule over action shape**, not over action
-   *content semantics*? *(If no → probably guardrails-ai or sandbox.)*
-3. Does it work **without network, without infrastructure, without a
-   server**? *(If no → not bare.)*
-4. Can it be implemented in **≤ 150 LOC, with at most the one allowed dep
-   (`proper-lockfile`)**? *(If no → it's a sibling library, not a primitive.)*
-5. Is it **opt-in via config** with a sensible safe default? *(If no → it's
-   policy without a safety floor. Reconsider.)*
+   *content semantics*?
+3. Does it work **without network, without infrastructure, without a server**?
+4. Can it be implemented in **≤ 150 LOC** with at most the one allowed dep?
+5. Is it **opt-in via config** with a sensible safe default?
 
-Five yeses or it doesn't ship. Tape this above the desk.
+Five yeses or it doesn't ship.
 
-## Appendix D: file layout for the repo
+## Appendix D: file layout (as shipped in v0.1.1)
 
 ```
 bareguard/
 ├── package.json                  # one prod dep: proper-lockfile
 ├── README.md
+├── CHANGELOG.md
+├── bareguard.context.md          # LLM integration guide
+├── LICENSE                        # Apache-2.0
+├── NOTICE
 ├── docs/
-│   ├── non-roadmap.md            # the §17 NO-GO list verbatim
-│   └── decisions-log.md          # the §22 decisions log verbatim
+│   ├── 01-product/
+│   │   └── bareguard-prd.md       # this document
+│   ├── non-roadmap.md             # §17 NO-GO list verbatim
+│   └── decisions-log.md           # §22 decisions log verbatim
 ├── src/
-│   ├── index.js                  # exports Gate
-│   ├── gate.js                   # the gate class, 6-step eval order
-│   ├── primitives/
-│   │   ├── bash.js               # #1
-│   │   ├── budget.js             # #2 (incl. shared-file lock)
-│   │   ├── fs.js                 # #3
-│   │   ├── net.js                # #4
-│   │   ├── limits.js             # #5
-│   │   ├── approval.js           # #6
-│   │   ├── tools.js              # #7
-│   │   ├── secrets.js            # #8
-│   │   ├── audit.js              # #9
-│   │   ├── defer-rate.js         # #10
-│   │   ├── spawn-rate.js         # #11
-│   │   └── content.js            # #12 (incl. safe defaults)
-│   └── glob.js                   # the 30-line glob-to-regex helper
-└── test/
-    ├── eval-order.test.js        # table-driven 6-step coverage
-    ├── safe-defaults.test.js     # rm -rf /, DROP TABLE, "delete X"
-    ├── shared-budget.test.js     # parent + 2 children, lock contention
-    ├── audit-stitching.test.js   # parent_run_id, spawn_depth, 3-deep tree
-    ├── secrets-redaction.test.js
-    ├── content.test.js
-    ├── tools-globs.test.js       # mcp:server/* matches, denyArgPatterns
-    ├── defer-rate.test.js
-    ├── spawn-rate.test.js
-    └── integration.test.js       # full bareagent loop end-to-end
+│   ├── index.js                   # public API
+│   ├── gate.js                    # Gate class, full eval flow + humanChannel
+│   ├── glob.js                    # *-only globToRegex
+│   └── primitives/
+│       ├── audit.js               # single-file JSONL with O_APPEND
+│       ├── budget.js              # shared file + proper-lockfile + halt
+│       ├── secrets.js             # env-var + pattern redaction
+│       ├── bash.js                # cmd allow + denyPatterns
+│       ├── fs.js                  # writeScope / readScope / deny
+│       ├── net.js                 # allowDomains / denyPrivateIps
+│       ├── limits.js              # maxTurns (halt) + maxChildren/maxDepth (action)
+│       ├── tools.js               # denylist / allowlist (scope) / denyArgPatterns
+│       └── content.js             # safe defaults + denyPatterns / askPatterns
+├── test/
+│   ├── eval-order.test.js
+│   ├── safe-defaults.test.js
+│   ├── shared-budget.test.js      # subprocesses
+│   ├── audit-stitching.test.js    # subprocesses
+│   ├── secrets-redaction.test.js
+│   ├── halt-flow.test.js
+│   ├── integration.test.js
+│   ├── _helpers.js
+│   └── _worker.mjs
+└── .github/
+    └── workflows/
+        └── test.yml               # matrix: ubuntu/macos/windows × Node 20/22
 ```
-
-This is a suggested layout, not mandatory. Implementation can move files
-around as needed; the `eval-order.test.js` and `safe-defaults.test.js`
-tests should exist as listed because they're the most direct verification
-that the load-bearing decisions are implemented correctly.

@@ -287,10 +287,10 @@ possible, one allowed dep where necessary, no telemetry, no SaaS.
 
 ## Spec & history
 
-- [v0.4 PRD](docs/01-product/bareguard-prd.md) — implementation-ready spec.
-- [v0.5 amendments](docs/01-product/bareguard-prd-v0.5-amendments.md) — read alongside v0.4; amendments win on conflict.
+- [PRD](docs/01-product/bareguard-prd.md) — unified spec (v0.6, folds v0.5 amendments + v0.1.1 review fixes inline).
 - [non-roadmap](docs/non-roadmap.md) — the NO-GO list. Point here when asked.
 - [decisions log](docs/decisions-log.md) — design calls resolved across versions.
+- [CHANGELOG](CHANGELOG.md) — release-by-release diff.
 
 ## License
 
