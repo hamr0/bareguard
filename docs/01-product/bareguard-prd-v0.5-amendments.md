@@ -30,6 +30,14 @@
 | 10| Result redaction format and caller-responsibility documented      | §8 row 8        |
 | 11| `gate.allows()` signature and askHuman behavior pinned            | §10.1           |
 | 12| Halt vs deny classification per primitive                         | §8              |
+| 13| `humanChannel` callback consolidates ALL ask/halt/topup/terminate | §6 supersedes; §10 |
+| 14| Single audit file with O_APPEND atomicity (no per-process files)  | §12 supersedes  |
+| 15| Glob: `*`-only, no `?`/`[abc]`/escapes (v0.1)                      | §9 clarified    |
+| 16| Budget file format gains `version: 1`                              | §13             |
+| 17| Budget cross-process refresh: lazy (post-record + on-lock)         | §13             |
+| 18| Concurrency contract: gate.check/record serial per gate instance   | new behavior    |
+| 19| Default audit path: `$XDG_STATE_HOME/bareguard/<run-id>.jsonl`     | §12             |
+| 20| v0.1 scope: everything except rate limits (defer-rate, spawn-rate) | §19             |
 
 ---
 
@@ -317,6 +325,155 @@ Why not show the suffix: leaking the suffix of a key gives an attacker a target 
 
 `limits.timeoutSeconds` is included as halt for completeness — wall-clock exhaustion is also "this run is over, ask the human." Implementation may defer to v0.2.
 
+## 13. `humanChannel` callback consolidates ask/halt/topup/terminate (supersedes §6, §8 above)
+
+§6 above said "bareguard returns askHuman; runner handles all I/O" — three gate methods (`recordApproval`, `raiseCap`, `terminate`). In practice that's three separate runner round-trips per human decision and easy to misuse. v0.5.2 collapses this to **one runner-supplied callback** that bareguard invokes whenever a human is needed.
+
+```js
+const gate = new Gate({
+  // ...other config...
+  humanChannel: async (event) => {
+    // event.kind:    "ask" | "halt"
+    // event.action:  redacted action that triggered (null for halt)
+    // event.severity: "action" | "halt"
+    // event.rule:    e.g., "content.askPatterns" | "budget.maxCostUsd"
+    // event.reason:  human-readable string
+    // event.context: deterministic stats (only on halt — same shape as haltContext())
+    //
+    // Runner displays UX (TUI prompt, Slack reaction, PIN, web button — bareguard knows none of it)
+    // Runner returns the decision:
+    return {
+      decision: "allow" | "deny" | "topup" | "terminate",
+      newCap?:  number,    // when decision === "topup"
+      reason?:  string,    // optional, recorded in audit
+    };
+  },
+});
+```
+
+**Behavioral contract:**
+
+- bareguard **calls** the registered `humanChannel` from inside `gate.check()` whenever the eval would return `askHuman` OR `severity: "halt"`. The runner doesn't see a separate askHuman step.
+- bareguard **applies** the human's decision atomically: emits the `phase: "approval"` audit line, plus `phase: "topup"` (and updates the budget file under lock) if topup, plus `phase: "terminate"` if terminate.
+- `gate.check()` returns the **post-human** terminal decision (`allow` / `deny`). The runner's loop only ever branches on those two outcomes.
+- If `humanChannel` is **not registered** and the eval returns askHuman/halt: `gate.check` returns `{ outcome: "deny", severity: "halt", rule: "...original rule...", reason: "no humanChannel registered" }`. **Never silently allow.** The agent loop terminates cleanly via the runner's deny-handling.
+
+**This isn't bareguard "doing I/O"** — bareguard calls a function the runner gave it. Same separation as `gate.run(action, executor)`: bareguard knows nothing about TUIs, Slack, PINs, or auth. It just invokes the callback and applies the structured result.
+
+**Methods removed by this consolidation:**
+
+- ~~`gate.recordApproval(action, humanDecision)`~~ — no longer needed; bareguard records internally.
+- ~~`gate.raiseCap(dimension, newCap)`~~ — no longer public; called internally on `topup`. Still exposed for non-human-driven cap changes (e.g., scripted reset).
+- ~~`gate.terminate(reason)`~~ — no longer public from human flow; still exposed for runner-initiated terminate (e.g., agent finished cleanly).
+
+`gate.haltContext()` stays public — the runner may want to format halt info for a UI before invoking the channel, OR `humanChannel` may inspect `event.context` directly (we ship it on every halt event).
+
+## 14. Single audit file with O_APPEND atomicity (supersedes §12 and §7 above)
+
+v0.4 §12 said "Children write to separate files (linked by `parent_run_id`); cheaper than contending on one file." That assumed lock contention on a shared file. **POSIX `O_APPEND` writes < `PIPE_BUF` (4KB on Linux/macOS) are atomic** — multiple processes append to the same file without locking and the kernel guarantees no interleaving. This is how nginx access logs, syslog, and similar production systems work.
+
+v0.5.2 changes the model:
+
+- **One audit file per agent family**, identified by the root run id. Default path: `$XDG_STATE_HOME/bareguard/<root-run-id>.jsonl` (cwd fallback).
+- All processes (parent + children + grandchildren) `appendFile` the same file. Each line tagged with `run_id`, `parent_run_id`, `spawn_depth` so the writer is identifiable.
+- **No lock on audit appends.** (proper-lockfile remains, but only for the budget file — read-modify-write needs serialization.)
+- Audit line size cap: **3.5KB** (safety margin under PIPE_BUF). Larger `action.args` are truncated with `[TRUNCATED:n bytes]` markers.
+
+**Stitching becomes trivial:** the audit IS one file. `grep run_id=X` shows that process. `parent_run_id` lookup gives the family tree directly. No multi-file find/grep needed.
+
+**Spawn record carries `child_run_id`:**
+
+```jsonl
+{"phase":"record","action":{"type":"spawn",...},"result":{"child_run_id":"...","exitCode":0,...},...}
+```
+
+Combined with each child's audit lines being in the same file, the family tree reconstructs from one file with grep alone.
+
+**Caveats documented in README:**
+- `O_APPEND` atomicity NOT guaranteed on NFS or Windows. Linux + macOS local FS is the supported target for v0.1.
+- On filesystems where atomicity isn't guaranteed, fall back to the budget-file-style lock on audit emit (slow but safe). v0.1 ships Linux/macOS as primary; Windows users get the lock fallback automatically.
+
+## 15. Glob `*`-only confirmed for v0.1 (clarifies §9 above)
+
+v0.1 ships exactly one wildcard, `*`, matching any character including `/`. **No `?`, no `[abc]`, no escapes.** Reasoning (simple > clever):
+
+- Tool names in real usage rarely need character classes or single-char wildcards.
+- Smaller surface area to maintain and document.
+- Layered defense (denylist + content + per-action-type) covers gaps from over- or under-matching.
+
+If real use exposes pain in v0.1, v0.2 may introduce shell-style `**`. Not before.
+
+## 16. Budget file format gains `version` field (extends §13)
+
+To allow future expansion (memory, GPU, time-elapsed dimensions) without migration headaches, the shared budget file gets a `version` field at root:
+
+```json
+{
+  "version": 1,
+  "cap_usd":      5.00,
+  "spent_usd":    1.23,
+  "cap_tokens":   100000,
+  "spent_tokens": 24500,
+  "started_at":   "2026-04-29T14:00:00Z",
+  "owners":       ["run_01J...", "run_01J..."]
+}
+```
+
+bareguard reads `version` on init and either accepts (v1) or refuses with a clear error (future versions). v0.1 only writes v1.
+
+## 17. Budget cross-process refresh: lazy, not per-check (clarifies §13)
+
+The POC refreshed the budget file on every `gate.check()`. That's wasteful — within one process, the budget can only change via that process's own `record()`, OR via another process's write since the last refresh.
+
+v0.5.2 specifies refresh policy:
+
+- **On `init()`:** read the file, populate local cache.
+- **After every `record()`:** write under lock (this happens anyway), refresh local cache from the post-write file state.
+- **On lock acquisition** for any reason: refresh while holding the lock (we've paid the I/O already).
+- **NOT on `gate.check()`:** trust the local cache.
+
+**Worst case:** another process's record between two of our checks isn't visible until our next record or lock. Cap may be exceeded by one action's worth of spend (~$0.01-0.10). Acceptable — caps are soft, halt fires on the very next check after the next refresh.
+
+## 18. Concurrency contract: gate.check/record serial per gate instance (new behavior)
+
+bareguard's `seq` counter, local budget cache, and audit emit ordering all assume **one in-flight `gate.check` or `gate.record` call per gate instance at a time.** This matches how an agent loop works in practice (one action at a time, awaited).
+
+**Documented contract:**
+
+> `gate.check()` and `gate.record()` MUST be called serially per `Gate` instance. Concurrent calls produce undefined `seq` values and may interleave audit lines incorrectly. Multiple `Gate` instances (e.g., parent + child processes) MAY run concurrently — they are independent.
+
+If a runner needs concurrent action evaluation in v0.2+, we'd add `gate.checkBatch(actions)` that internally serializes. Not for v0.1.
+
+## 19. Default audit path (clarifies §12)
+
+If the caller does not specify `audit.path`, default to (in order):
+
+1. `$XDG_STATE_HOME/bareguard/<root-run-id>.jsonl`
+2. `$HOME/.local/state/bareguard/<root-run-id>.jsonl` (XDG fallback)
+3. `./bareguard-<root-run-id>.jsonl` (last-resort cwd)
+
+Children inherit the path via env var `BAREGUARD_AUDIT_PATH` set by the parent on spawn. Same for budget file via `BAREGUARD_BUDGET_FILE`.
+
+## 20. v0.1 scope: everything except rate limits (supersedes §5.2 above)
+
+The POC validated more of the design than the original v0.1 baseline (§5.2) included. Pulling more into v0.1 since it's shown to work; v0.2 becomes the rate-limits release.
+
+**v0.1 includes:**
+- All 12 primitives EXCEPT `defer-rate` (#10) and `spawn-rate` (#11).
+- `tools.denyArgPatterns` (already in `tools` primitive).
+- `gate.allows()` (catalog pre-filter).
+- Multi-agent audit stitching (`parent_run_id`, `spawn_depth`) — required by single-audit-file model anyway.
+- Shared budget file with `proper-lockfile`.
+- Halt severity, `humanChannel`, single audit file with O_APPEND.
+- All safe defaults from v0.4 §11.
+
+**v0.2 adds:**
+- `defer-rate` and `spawn-rate` primitives (and the corresponding bareagent `defer`/`spawn` tools that exercise them).
+- `**` glob wildcard if v0.1 use exposes need.
+- Sliding-window rate (if fixed-window proves insufficient).
+
+**v1.0 stabilizes** — API freeze, SemVer commitments. Then walk-away.
+
 ---
 
 ## Implementation order for Phase 2 of the POC (per v0.4 §20)
@@ -366,3 +523,9 @@ These are resolved and should not be re-litigated unless the user explicitly ask
 - **Glob `*` matches `/` in v0.1.** Layered defense covers over-match risk. v0.2 may introduce `**` if real pain emerges. (v0.5 §9.)
 - **Result redaction is the caller's responsibility.** bareguard ships format helpers (`[REDACTED:ENV_VAR_NAME]`, `[REDACTED:pattern=...]`). (v0.5 §10.)
 - **`gate.allows(action)` returns true for askHuman.** Catalog pre-filter must show ask-gated tools so LLM can attempt them. (v0.5 §11.)
+- **All human escalations go through one `humanChannel` callback.** bareguard calls a runner-supplied function whenever ask/halt is triggered; applies the human's decision atomically (audit, topup, terminate). The runner branches on `allow`/`deny` only — askHuman is never a separate runner step. (v0.5 §13.)
+- **Single audit file with `O_APPEND` atomicity.** No per-process files, no audit lock; relies on POSIX guarantees < PIPE_BUF. Family tree reconstructable from one file with grep. Linux/macOS primary; Windows uses lock fallback. (v0.5 §14.)
+- **Budget file format is versioned.** `version: 1` at root; future-proofs schema growth. (v0.5 §16.)
+- **Budget cross-process refresh is lazy.** Refresh post-record and on-lock, not per-check. Soft caps acceptable. (v0.5 §17.)
+- **gate.check/record are serial per gate instance.** Documented contract; matches real agent-loop usage. (v0.5 §18.)
+- **v0.1 scope: everything except rate limits.** POC validated more than original baseline; defer/spawn-rate stay v0.2 since they require bareagent's not-yet-existing tools. (v0.5 §20.)
