@@ -14,6 +14,8 @@ import {
   toolsDenylistCheck, toolsDenyArgsCheck, toolsAllowlistCheck,
 } from "./primitives/tools.js";
 import { contentDenyCheck, contentAskCheck } from "./primitives/content.js";
+import { deferRateCheck } from "./primitives/defer-rate.js";
+import { spawnRateCheck } from "./primitives/spawn-rate.js";
 
 const MAX_TOPUP_ITERATIONS = 5;
 
@@ -48,10 +50,11 @@ export class Gate {
     this.rootRunId = config.rootRunId ?? this.parentRunId ?? this.runId;
 
     const auditPath = config.audit?.path ?? process.env.BAREGUARD_AUDIT_PATH ?? defaultAuditPath(this.rootRunId);
+    this._clock = config._clock ?? (() => Date.now());
     this.audit = new Audit({
       filePath: auditPath, runId: this.runId,
       parentRunId: this.parentRunId, spawnDepth: this.spawnDepth,
-      rootRunId: this.rootRunId,
+      rootRunId: this.rootRunId, clock: this._clock,
     });
 
     const sharedFile = config.budget?.sharedFile ?? process.env.BAREGUARD_BUDGET_FILE ?? null;
@@ -100,7 +103,7 @@ export class Gate {
   }
 
   // STEP 1-6 (PRD v0.5 §3). First terminal wins.
-  _stepEval(action) {
+  async _stepEval(action) {
     const t = this.cfg.tools;
     const c = this.cfg.content;
 
@@ -113,11 +116,17 @@ export class Gate {
     if (d2) return d2;
 
     // 3. per-action-type deny primitives → deny
-    const d3 = bashCheck(action, this.cfg.bash)
-            ?? fsCheck(action,   this.cfg.fs)
-            ?? netCheck(action,  this.cfg.net)
-            ?? this.limits.spawnCheck(action)
-            ?? toolsDenyArgsCheck(action, t);
+    let d3 = bashCheck(action, this.cfg.bash)
+          ?? fsCheck(action,   this.cfg.fs)
+          ?? netCheck(action,  this.cfg.net)
+          ?? this.limits.spawnCheck(action)
+          ?? toolsDenyArgsCheck(action, t);
+    if (!d3 && action.type === "defer") {
+      d3 = await deferRateCheck(action, this.cfg.defer, this._rateCtx());
+    }
+    if (!d3 && action.type === "spawn") {
+      d3 = await spawnRateCheck(action, this.cfg.spawn, this._rateCtx());
+    }
     if (d3) return d3;
 
     // 4. content.askPatterns → askHuman
@@ -132,6 +141,10 @@ export class Gate {
     return { outcome: "allow", severity: "action", rule: "default", reason: null };
   }
 
+  _rateCtx() {
+    return { auditPath: this.audit.filePath, now: this._clock() };
+  }
+
   redact(action) {
     return redact(action, this.cfg.secrets);
   }
@@ -144,7 +157,7 @@ export class Gate {
     const action = typeof actionOrName === "string" ? { type: actionOrName } : actionOrName;
     const halt = this._haltCheck();
     if (halt) return halt.outcome !== "deny" ? halt.outcome === "askHuman" : false;
-    const decision = this._stepEval(action);
+    const decision = await this._stepEval(action);
     return decision.outcome !== "deny";
   }
 
@@ -157,7 +170,7 @@ export class Gate {
     while (true) {
       // PRE-EVAL: halt
       let decision = this._haltCheck();
-      if (!decision) decision = this._stepEval(action);
+      if (!decision) decision = await this._stepEval(action);
 
       // Terminal allow/deny → audit and return.
       if (decision.outcome === "allow" || decision.outcome === "deny") {

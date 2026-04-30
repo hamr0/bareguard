@@ -64,6 +64,9 @@ When users ask for these, point them here.
 |                                                      | bareguard provides deterministic stats only. Runner may layer this if it wants.  |
 | Concurrent gate.check (within one Gate instance)     | Agent loops are naturally serial. Documented contract is "one in flight."        |
 | Allowlist as a "trust shortcut" silencing asks       | Was a foot-gun in practice. Allowlist is scope-only; askPatterns always fire.    |
+| Stateful rate counter file (for defer / spawn rate)  | Audit log already has every `phase: "gate"` record with timestamp + `run_id`;   |
+|                                                      | counting it is deterministic and correct across processes for free. One source   |
+|                                                      | of truth — the audit log — for both spend and rate.                              |
 
 ## How to know if something belongs in bareguard
 

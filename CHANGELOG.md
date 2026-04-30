@@ -4,6 +4,30 @@ All notable changes to bareguard are documented here. Format: [Keep a Changelog]
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-04-30
+
+`defer-rate` + `spawn-rate` primitives. Per-family, audit-log-counted.
+Pairs with bareagent v0.9's `defer` and `spawn` tools.
+
+### Added
+
+- **`defer-rate` primitive** (`src/primitives/defer-rate.js`) — caps how many `defer` actions can pass through the gate per minute. Default cap: **15/min** (revised from the v0.4 baseline of 30 — easier to relax than tighten). Triggers at step 3 of the eval order (per-action-type denies). Returns `{ outcome: "deny", severity: "action", rule: "defer.ratePerMinute" }` when exceeded.
+- **`spawn-rate` primitive** (`src/primitives/spawn-rate.js`) — caps how many `spawn` actions can pass through the gate per minute. Default cap: 10/min. Same eval-order placement. Composes with `limits.maxChildren` (concurrency cap) and `limits.maxDepth` (depth cap) — this is rate, not concurrency.
+- **`countAuditWindow` helper** (`src/audit-window.js`) — single source of truth for "count audit records matching predicate in trailing N ms." Used by both rate primitives and available for any future rate-shaped guard.
+- **Clock injection on `Gate` and `Audit`** — `new Gate({ _clock: () => ms })` lets tests fast-forward the trailing-window clock without sleeping 60s. Default `Date.now`.
+- **Tests** — `test/defer-rate.test.js`, `test/spawn-rate.test.js`, `test/integration-rate-multifamily.test.js`. Bumps the suite from 33 → 46 passing.
+
+### Design
+
+- **Audit log is the rate counter — no separate counter file.** The audit log already records every `phase: "gate"` line with timestamp + `run_id`; counting matching records in a trailing window is deterministic and correct across processes for free. Eliminates a second consistency surface.
+- **Per-family scope via the existing per-`root_run_id` audit path.** Children inherit `BAREGUARD_AUDIT_PATH` and append to the same file as the parent, so the family's rate is the file's rate. No per-family bookkeeping; no per-process counters.
+- **Two-phase defer remains two distinct `gate.check` calls.** Emit-time check sees `action.type === "defer"` (counts toward defer rate); fire-time check sees the inner action's own type (counts toward whatever rules apply to it). The audit log records both.
+
+### No breaking changes
+
+- v0.1.1 API unchanged. `humanChannel` contract unchanged. Audit format unchanged — the new rate-cap denies are just `phase: "gate"` records that happen to have `action.type` of `defer` or `spawn`.
+- `_stepEval` is now `async` internally (it awaits the rate primitives). Public `gate.check` and `gate.allows` were already `async`; no caller-visible change.
+
 ## [0.1.1] — 2026-04-30
 
 Patch release addressing pre-publish review feedback. No breaking

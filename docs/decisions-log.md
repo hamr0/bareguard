@@ -94,6 +94,23 @@ Resolved during design; should not be re-litigated unless explicitly asked.
   original baseline; defer/spawn-rate stay v0.2 since they require bareagent's
   not-yet-existing tools.
 
+## v0.2 additions (defer-rate + spawn-rate)
+
+- **Rate caps count audit records in a trailing window, not a separate
+  file.** One source of truth (the audit log) for both spend and rate.
+  Cross-process correctness is automatic via the existing single-file
+  audit; family scope is automatic via the per-`root_run_id` audit path.
+- **Rate caps are per-family (root run_id), not per-process.** Otherwise
+  children spawned by a fork-bomb-shaped agent each reset to `0/cap`. The
+  audit file inherited via `BAREGUARD_AUDIT_PATH` IS the per-family
+  counter.
+- **Default `defer.ratePerMinute` is 15** (down from 30). Easier to relax
+  than tighten. `spawn.ratePerMinute` stays at 10.
+- **Two-phase defer is two distinct gate.checks, not one re-validation.**
+  The `defer` action at emit (counts toward defer rate) and the inner
+  action at fire (counts toward whatever rules apply to its own type) each
+  produce their own audit record. Defense in depth without coupling.
+
 ## v0.1.1 review fixes (post-publish, same day)
 
 - **`gate.allows(string)` shorthand.** Object form still works; string is

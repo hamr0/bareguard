@@ -20,13 +20,14 @@ function defaultAuditPath(rootRunId) {
 }
 
 export class Audit {
-  constructor({ filePath, runId, parentRunId, spawnDepth, rootRunId }) {
+  constructor({ filePath, runId, parentRunId, spawnDepth, rootRunId, clock }) {
     this.runId = runId;
     this.parentRunId = parentRunId ?? null;
     this.spawnDepth = spawnDepth ?? 0;
     this.rootRunId = rootRunId ?? runId;
     this.filePath = filePath ?? defaultAuditPath(this.rootRunId);
     this.seq = 0;
+    this._clock = clock ?? (() => Date.now());
   }
 
   async init() {
@@ -38,7 +39,7 @@ export class Audit {
 
   async emit(fields) {
     const line = {
-      ts: new Date().toISOString(),
+      ts: new Date(this._clock()).toISOString(),
       seq: ++this.seq,
       run_id: this.runId,
       parent_run_id: this.parentRunId,

@@ -24,7 +24,7 @@
 
 ## What this is
 
-bareguard is a runtime policy library every agent action passes through. One `Gate` class, three call sites (`redact`, `check`, `record`), twelve primitives — bash, fs, net, budget, content, secrets, audit, limits, tools, defer-rate*, spawn-rate*, approval (*v0.2). Each primitive is one small file you can read in a sitting.
+bareguard is a runtime policy library every agent action passes through. One `Gate` class, three call sites (`redact`, `check`, `record`), twelve primitives — bash, fs, net, budget, content, secrets, audit, limits, tools, defer-rate, spawn-rate, approval. Each primitive is one small file you can read in a sitting.
 
 Same patterns as [bareagent](https://www.npmjs.com/package/bare-agent), [barebrowse](https://www.npmjs.com/package/barebrowse), and [baremobile](https://www.npmjs.com/package/baremobile) — embed it, don't run it. No daemon, no SaaS, no telemetry.
 
@@ -85,7 +85,7 @@ One JSONL audit file per agent family. POSIX `O_APPEND` guarantees atomicity for
 
 ## What's inside
 
-Every primitive is one file (~30–180 LOC). Two ship in v0.2.
+Every primitive is one file (~30–180 LOC).
 
 | Primitive | What it does |
 |---|---|
@@ -99,8 +99,8 @@ Every primitive is one file (~30–180 LOC). Two ship in v0.2.
 | **secrets** | Redacts known env-var values + cred patterns. Tags with name (`[REDACTED:ANTHROPIC_API_KEY]`); never leaks. |
 | **audit** | One JSONL file per family. Phases: `gate`, `record`, `approval`, `halt`, `topup`, `terminate`. |
 | **approval** | Routes ask events to the runner-supplied `humanChannel` callback. |
-| ~~**defer-rate**~~ | _(v0.2)_ Caps `defer()` calls per minute. Re-validates on emit AND on fire. |
-| ~~**spawn-rate**~~ | _(v0.2)_ Caps `spawn()` calls per minute. Composes with `maxChildren` and `maxDepth`. |
+| **defer-rate** | Caps `defer` actions per minute (default 15). Counted from the audit log; per-family. |
+| **spawn-rate** | Caps `spawn` actions per minute (default 10). Composes with `maxChildren` / `maxDepth`. |
 
 **Safe defaults** ship in `content`. `rm -rf /`, `DROP TABLE`, `TRUNCATE` denied outright. Destructive verbs (`delete`, `revoke`, `force-push`, destructive HTTP methods) escalate to the human. Override with empty arrays for pure-allow.
 
@@ -120,7 +120,7 @@ The design choices that surprise people most often. Read these before wiring it 
 
 ## Tested against
 
-33 tests pass on the CI matrix: **Linux + macOS + Windows × Node 20 + 22**. Real subprocesses verify shared-budget contention under `proper-lockfile`, halt-cascade across processes, single-audit-file atomicity (3 concurrent writers, no torn lines), `parent_run_id` / `spawn_depth` stitching across a 3-deep tree, and `maxChildren` / `maxDepth` enforcement.
+46 tests pass on the CI matrix: **Linux + macOS + Windows × Node 20 + 22**. Real subprocesses verify shared-budget contention under `proper-lockfile`, halt-cascade across processes, single-audit-file atomicity (3 concurrent writers, no torn lines), `parent_run_id` / `spawn_depth` stitching across a 3-deep tree, and `maxChildren` / `maxDepth` enforcement.
 
 ## The bare ecosystem
 

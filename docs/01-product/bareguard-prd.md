@@ -555,22 +555,50 @@ Without these, one bug spawns 10K agents and burns the budget in 30 seconds.
 
 ### 14.2 `defer.ratePerMinute` (v0.2)
 
-Caps how many `defer()` calls a single agent run can emit per minute.
-Default: 30. Prevents a confused agent from emitting 1000 jobs into the
-queue.
+Caps how many `defer` actions a single agent run can pass through the
+gate per minute. Default: **15** (down from the v0.4 baseline of 30 — easier
+to relax than tighten). Prevents a confused agent from emitting 1000 jobs
+into the queue.
+
+Counted from the audit log, not a separate counter file. Per-family
+(across the spawn-tree rooted at the topmost `run_id`), not per-process —
+otherwise children spawned by a fork-bomb-shaped agent each reset to
+`0/cap`. Per-family scope is automatic: the audit file is keyed by
+`root_run_id` and inherited by spawned processes via
+`BAREGUARD_AUDIT_PATH`.
 
 ### 14.3 `spawn.ratePerMinute` (v0.2)
 
 Same idea for `spawn`. Default: 10. Prevents fork-bomb shapes even if
-`maxChildren` is set generously.
+`maxChildren` is set generously. Composes with `limits.maxChildren`
+(concurrency cap) and `limits.maxDepth` (depth cap) — this is rate, not
+concurrency.
+
+Counted from the audit log, per-family — same mechanism as
+`defer.ratePerMinute` (§14.2).
 
 ### 14.4 Defense in depth: re-validate deferred actions on fire
 
+A defer is **two separate `gate.check` calls against two distinct actions** —
+the `defer` action at emit (which the rate cap counts), and the inner
+action at fire (which goes through the gate independently). Each call
+produces its own audit record.
+
 When the wake script reads a deferred action and invokes bareagent to fire
-it, the *fired* action passes through the gate again. A `defer` whose
-action would be denied at fire time (e.g., budget exceeded, target file no
-longer in fs scope) is denied at fire time. The audit log records both the
-emit decision and the fire decision.
+it, the fired action passes through the gate as its own type (`bash`,
+`fetch`, etc.) — not as `defer`. A defer whose inner action would be
+denied at fire time (budget exhausted, target file no longer in fs scope,
+new content rule added) is denied at fire time. The audit log records
+both the emit decision and the fire decision.
+
+### 14.5 Audit log as the rate counter
+
+Both rate caps count records in the audit log within a trailing 60s
+window. **No separate counter file.** Eliminates a second source of truth
+and keeps cross-process correctness automatic via the existing single-file
+audit (POSIX `O_APPEND`, family-scoped path, inherited across spawned
+processes). One source of truth — the audit log — for both spend (`record`
+phase) and rate (`gate` phase, type-filtered).
 
 ## 15. The `tools` vs `content` distinction (frequently confused)
 
@@ -679,6 +707,7 @@ Each entry was discussed during design and consciously excluded.
 | **LLM-self-estimate of remaining work at halt**      | Speculative; costs tokens at the worst time; LLMs are bad self-estimators. bareguard provides deterministic stats only. |
 | **Concurrent gate.check (within one Gate instance)** | Agent loops are naturally serial. Documented contract is "one in flight."        |
 | **Allowlist as a "trust shortcut" silencing asks**   | Was a foot-gun in practice. Allowlist is scope-only; askPatterns always fire.    |
+| **Stateful rate counter file**                       | Audit log already has every `phase: "gate"` record with timestamp + `run_id`; counting it is deterministic and correct across processes for free. |
 
 **Adding any of these dilutes the one thing this library does.** Point users
 at this list when they ask.
@@ -762,7 +791,7 @@ publish (git history retains them).
 - [x] Shared budget across sibling processes verified by integration test (parent + 2 children sharing $5 cap, audit shows correct total).
 - [x] `parent_run_id` and `spawn_depth` correctly threaded through 3-deep spawn tree.
 - [x] Secrets redaction runs before gate sees action; verified by test.
-- [ ] `defer.ratePerMinute` and `spawn.ratePerMinute` actually fire (verified by test) — **v0.2**.
+- [x] `defer.ratePerMinute` and `spawn.ratePerMinute` actually fire (verified by test) — **shipped in v0.2**.
 - [x] `gate.allows()` is pure-query (no audit write, no budget change); verified by test.
 - [x] MCP tool names glob-matched correctly with `mcp:server/tool` convention.
 - [x] README integration example works copy-pasted into a fresh repo.
@@ -841,6 +870,20 @@ re-litigated unless the user explicitly asks.
   fires. Behavior unchanged (still denies with severity:halt).
 - **`Gate.fromConfig` removed.** `new Gate(config)` is the only canonical
   constructor.
+
+### v0.2 additions (defer-rate + spawn-rate)
+
+- **Rate caps count audit records in a trailing window, not a separate
+  file.** One source of truth (the audit log) for both spend and rate.
+  Eliminates a second consistency surface across processes; cross-family
+  isolation is automatic because the audit file is keyed by `root_run_id`.
+- **Rate caps are per-family (root run_id), not per-process.** Otherwise
+  children spawned by a fork-bomb-shaped agent each reset to `0/cap` and
+  the family blasts past the intended cap. Children inherit the parent's
+  audit path via `BAREGUARD_AUDIT_PATH`; counting that one file = the
+  family's rate.
+- **Default `defer.ratePerMinute` is 15** (originally 30). Easier to
+  relax than tighten. `spawn.ratePerMinute` default stays at 10.
 
 ---
 

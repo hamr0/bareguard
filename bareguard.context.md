@@ -1,7 +1,7 @@
 # bareguard — Integration Guide
 
 > For AI assistants and developers wiring bareguard into a project.
-> v0.1.1 | Node.js >= 20 | 1 production dep (`proper-lockfile`) | Apache-2.0
+> v0.2.0 | Node.js >= 20 | 1 production dep (`proper-lockfile`) | Apache-2.0
 >
 > Full design spec: [`docs/01-product/bareguard-prd.md`](docs/01-product/bareguard-prd.md) — unified PRD (v0.6, folds prior v0.5 amendments + v0.1.1 review fixes inline).
 
@@ -10,7 +10,7 @@
 bareguard is the action-side runtime policy library every agent uses (or
 should). One class (`Gate`), three call sites (`redact`, `check`, `record`),
 twelve primitives (bash, fs, net, budget, content, secrets, audit, limits,
-tools, defer-rate*, spawn-rate*, approval — *v0.2). Single audit log per
+tools, defer-rate, spawn-rate, approval). Single audit log per
 agent family. One `humanChannel` callback for all human escalations.
 
 ```
@@ -485,6 +485,30 @@ const result = await loop.run([{ role: "user", content: "Tell mom I'm running la
 ```
 
 beeperbox provides `send_message`, `list_chats`, `get_messages`, `mark_as_read` etc. across WhatsApp / iMessage / Signal / Telegram / Slack / Discord / RCS / SMS / and many more — one Docker container, one MCP server, all under one bareguard policy.
+
+### Recipe 9: spawn / defer rate caps
+
+Cap how many `defer` and `spawn` actions can pass through the gate per minute. Counted from the audit log (no separate counter file), per-family (across the spawn tree rooted at the topmost `run_id`).
+
+```javascript
+const gate = new Gate({
+  defer: { ratePerMinute: 30 },         // default: 15
+  spawn: { ratePerMinute: 5 },          // default: 10
+  limits: { maxChildren: 8, maxDepth: 3 }, // concurrency caps still apply
+  // ...
+});
+
+// Eval order is unchanged — defer-rate / spawn-rate sit at step 3 alongside
+// bash, fs, net, limits.maxChildren, tools.denyArgPatterns. First match wins.
+const dec = await gate.check({ type: "defer", args: { action, when: "1h" } });
+// dec.outcome === "deny", dec.rule === "defer.ratePerMinute" if exceeded
+```
+
+**Defense in depth on `defer`.** A defer is two distinct `gate.check` calls: the `defer` action at emit (counts toward `defer.ratePerMinute`) and the inner action at fire (counts toward whatever rules apply to its own type). The audit log records both decisions.
+
+**Per-family scope is automatic.** The audit file is keyed by `root_run_id`, and spawned children inherit it via `BAREGUARD_AUDIT_PATH`. Counting that one file = the family's rate. Cross-family runs use different audit files, so they don't see each other's counts.
+
+> **TODO (cross-link to bareagent v0.9):** the `defer` and `spawn` tools that exercise these caps land in bareagent v0.9, alongside `examples/wake.sh` (the wake-script reference) and `examples/orchestrator/` (parent + child agents sharing one rate cap via inherited audit path).
 
 ## See also
 
