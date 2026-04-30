@@ -4,6 +4,14 @@ All notable changes to bareguard are documented here. Format: [Keep a Changelog]
 
 ## [Unreleased]
 
+## [0.2.1] — 2026-04-30
+
+Docs-only patch.
+
+### Changed
+
+- **`bareguard.context.md` Recipe 9** — replaced the cross-link TODO placeholder with direct links to bareagent v0.9.0 (`bare-agent@0.9.0` on npm), `examples/wake.sh`, and `examples/orchestrator/`. No code changes.
+
 ## [0.2.0] — 2026-04-30
 
 `defer-rate` + `spawn-rate` primitives. Per-family, audit-log-counted.

@@ -1,6 +1,6 @@
 {
   "name": "bareguard",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Action-side runtime policy library for autonomous agents — bounds what the agent does, not what it says. Sibling of bareagent in the bare suite.",
   "type": "module",
   "main": "./src/index.js",
