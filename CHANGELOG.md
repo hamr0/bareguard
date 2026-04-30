@@ -1,0 +1,51 @@
+# Changelog
+
+All notable changes to bareguard are documented here. Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [SemVer](https://semver.org/).
+
+## [Unreleased]
+
+## [0.1.0] — 2026-04-29
+
+First release. Action-side runtime policy library for autonomous agents — bounds what the agent does, not what it says.
+
+### Added
+
+- **Single `Gate` class with three call sites** — `gate.redact(action)`, `await gate.check(action)`, `await gate.record(action, result)`. One chokepoint between the agent and the world; tools never self-check. Plus `gate.run(action, executor)` for runners that want check + execute + record in one call, and `await gate.allows(action)` as a pure boolean catalog pre-filter (no audit, no budget delta).
+- **Twelve primitives, ten in v0.1** — `bash`, `budget`, `fs`, `net`, `limits`, `approval`, `tools`, `secrets`, `audit`, `content`. Each ~30–180 LOC in its own file. `defer-rate` and `spawn-rate` ship in v0.2 alongside bareagent's `defer` and `spawn` tools that exercise them.
+- **Severity-graded decisions** — every `gate.check` returns `{ outcome, severity, rule, reason }`. `severity: "action"` denies bubble to the LLM as structured errors; `severity: "halt"` events (budget exhaustion, maxTurns, terminate) escalate to a human and never bubble. Run-level safety baked in.
+- **`humanChannel` callback** — one runner-supplied function consolidates ALL human escalations (ask + halt + topup + terminate). bareguard calls it; applies the human's decision atomically (audit line, optional cap raise, optional terminate); returns terminal allow/deny to the runner. The runner branches on two outcomes only — never sees `askHuman`.
+- **Single audit file across the agent family** — POSIX `O_APPEND` atomicity (< PIPE_BUF / 4KB) means parent + children + grandchildren all `appendFile` the same `$XDG_STATE_HOME/bareguard/<root-run-id>.jsonl` without locks. Family tree reconstructable from one file with grep on `parent_run_id`. Phases: `gate`, `record`, `approval`, `halt`, `topup`, `terminate`. Windows uses a lock fallback automatically.
+- **Shared budget across processes** — `budget.sharedFile` + `proper-lockfile` (the one allowed production dep). Versioned format (`version: 1`). Parent + children draw from one cap. On a missing/corrupt budget file, bareguard rebuilds spent + cap from the audit log on startup.
+- **Safe defaults shipped** — `content.denyPatterns` blocks `DROP TABLE`, `rm -rf /`, `TRUNCATE TABLE`, force flags. `content.askPatterns` escalates `delete`, `revoke`, `truncate`, `force-push`, destructive HTTP methods. ~10 lines of regex covering ~90% of dangerous things agents do. Override with empty arrays for pure-allow.
+- **Six-step eval order, fully pinned** — pre-eval halt checks (`budget`, `maxTurns`, terminated), then `tools.denylist → content.denyPatterns → per-action-type rules → content.askPatterns → tools.allowlist scope → default allow`. First match wins. Allowlist is **scope-only** — does NOT silence asks (a v0.5 reversal of the v0.4 short-circuit which proved a foot-gun in practice).
+- **Secrets redaction with name tagging** — `[REDACTED:ANTHROPIC_API_KEY]` for env-var matches, `[REDACTED:pattern=sk-...]` for unknown-source pattern matches. Never shows full secrets, never shows the suffix. Caller is responsible for redacting tool results before `gate.record`.
+- **Multi-agent stitching** — `parent_run_id` and `spawn_depth` threaded via env vars (`BAREGUARD_PARENT_RUN_ID`, `BAREGUARD_SPAWN_DEPTH`, `BAREGUARD_AUDIT_PATH`, `BAREGUARD_BUDGET_FILE`). Children inherit automatically.
+- **`gate.haltContext()`** — deterministic stats over the audit log (spend, turns, last-5 spend rate, time elapsed). Exposed for `humanChannel` to render to operators. No LLM speculation on remaining work.
+- **Glob `*` only** — minimal wildcard for tool name matching. No `?`, `[abc]`, or escapes in v0.1. v0.2 may add `**` if real use exposes pain.
+
+### Tests
+
+- 30/30 tests passing on Linux. ~700 LOC of tests covering eval order, safe defaults, secrets redaction, halt flow (humanChannel + topup + terminate + audit dedicated halt line + budget reconstruction from audit), shared-budget under real-subprocess contention, single-audit-file atomicity across 3 concurrent processes, and a full agent-loop integration.
+- macOS: same POSIX guarantees as Linux; should run natively. Untested in CI.
+- Windows: lock fallback for audit (auto-detected via `process.platform`). Untested in CI.
+
+### Constraints
+
+- **One production dep:** `proper-lockfile` (for the shared budget file). Hard target per PRD §18.
+- **Source ≤ 1000 LOC:** 931 LOC in `src/`. Per PRD §21 success criterion.
+- **Complete mediation:** every action goes through one `gate.check`. No bypass paths. No tool self-checks.
+
+### Philosophy (carried from PRD §17)
+
+bareguard is **action-side** — bounds what the agent does. Not content (use `guardrails-ai`). Not sandboxing (use Docker/gVisor). Not authn (caller's concern). Not a scheduler. Not a daemon. No telemetry, no SaaS. The goal is to be small enough to read in an afternoon and understand exactly what your agent is allowed to do.
+
+### Known limitations
+
+- **Soft cap.** Cross-process budget can be exceeded by one action's spend before next refresh. Halt fires reliably on the next check after a record.
+- **Safe-default `askPatterns` over-match.** `/\b(delete|drop|...)/i` fires on innocent strings. Right v1 trade — over-asking is recoverable; under-asking is incidents. Narrow patterns if noisy.
+- **Linux/macOS primary.** Windows works via lock fallback but isn't CI-verified yet.
+- **No rate limits in v0.1.** `defer-rate` / `spawn-rate` ship in v0.2 with bareagent's `defer` / `spawn` tools.
+
+### bareagent migration note
+
+bareagent v(next) will remove its built-in `bash` allowlist, token/cost budget, per-tool gov layer, max-turns counter, and ad-hoc tool-call logging — all replaced by `import { Gate } from "bareguard"` and one policy adapter on `Loop({ policy })`. See `bareguard.context.md` Recipe 8 (or the bareagent-side recipe in its own context doc when published).
