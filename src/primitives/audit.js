@@ -1,12 +1,15 @@
 // Single-file JSONL audit (PRD v0.5 §14). All processes append to one file
 // using O_APPEND atomicity (POSIX guarantees atomic writes < PIPE_BUF).
-// No lock on emit. Each line carries run_id / parent_run_id / spawn_depth.
+// No lock on emit on Linux/macOS. Windows falls back to proper-lockfile.
+// Each line carries run_id / parent_run_id / spawn_depth.
 
 import { promises as fsp } from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import lockfile from "proper-lockfile";
 
 const MAX_LINE_BYTES = 3500; // safety margin under PIPE_BUF (4096 on Linux/macOS)
+const NEEDS_LOCK = process.platform === "win32";
 
 function defaultAuditPath(rootRunId) {
   const xdgState = process.env.XDG_STATE_HOME;
@@ -59,7 +62,19 @@ export class Audit {
       }
       serialized = JSON.stringify(truncated) + "\n";
     }
-    await fsp.appendFile(this.filePath, serialized);
+    if (NEEDS_LOCK) {
+      // Windows: O_APPEND cross-process atomicity not guaranteed.
+      // Acquire a lock on the audit file for the duration of the write.
+      const release = await lockfile.lock(this.filePath, {
+        retries: { retries: 10, minTimeout: 20, maxTimeout: 200 },
+        stale: 10_000,
+      });
+      try { await fsp.appendFile(this.filePath, serialized); }
+      finally { try { await release(); } catch { /* unlock failure non-fatal */ } }
+    } else {
+      // Linux/macOS: kernel guarantees atomic appends below PIPE_BUF.
+      await fsp.appendFile(this.filePath, serialized);
+    }
   }
 
   async readAll() {
