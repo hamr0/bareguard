@@ -344,39 +344,27 @@ class Gate {
     if (t.denylist && matchAny(name, t.denylist)) {
       return { outcome: "deny", severity: "action", rule: "tools.denylist", reason: `${name} on denylist` };
     }
-    // 2. content.denyPatterns
+    // 2. content.denyPatterns (universal deny)
     const cDeny = contentDeny(serialized, c);
     if (cDeny) return cDeny;
-
-    // 3a. tools.allowlist match → allow (short-circuits ask)
-    let allowMatched = false;
-    if (t.allowlist && matchAny(name, t.allowlist)) allowMatched = true;
-    if (allowMatched) {
-      // step 5 still runs for action-type primitives + denyArgPatterns
-      const step5 = this._step5(action);
-      if (step5) return step5;
-      return { outcome: "allow", severity: "action", rule: "tools.allowlist", reason: null };
-    }
-    // 3b. allowlist exclusive: set non-empty AND not matched → deny
+    // 3. per-action-type deny primitives (bash/fs/net/limits-spawn/rate/denyArgs)
+    const perType = this._perActionTypeDeny(action);
+    if (perType) return perType;
+    // 4. content.askPatterns (universal ask — fires even on allowlisted tools)
+    const cAsk = contentAsk(serialized, c);
+    if (cAsk) return cAsk;
+    // 5. tools.allowlist enforcement (scope check; no trust shortcut)
     if (t.allowlist && t.allowlist.length > 0) {
+      if (matchAny(name, t.allowlist)) {
+        return { outcome: "allow", severity: "action", rule: "tools.allowlist", reason: null };
+      }
       return { outcome: "deny", severity: "action", rule: "tools.allowlist.exclusive", reason: `${name} not in allowlist` };
     }
-    // 4. content.askPatterns
-    const cAsk = contentAsk(serialized, c);
-    if (cAsk) {
-      // step 5 still runs (e.g., bash.denyPatterns must override an ask)
-      const step5 = this._step5(action);
-      if (step5) return step5;
-      return cAsk;
-    }
-    // 5. per-action-type primitives
-    const step5 = this._step5(action);
-    if (step5) return step5;
     // 6. default
     return { outcome: "allow", severity: "action", rule: "default", reason: null };
   }
 
-  _step5(action) {
+  _perActionTypeDeny(action) {
     return bashCheck(action, this.cfg.bash ?? {})
         ?? fsCheck(action, this.cfg.fs ?? {})
         ?? netCheck(action, this.cfg.net ?? {})
@@ -485,8 +473,8 @@ const cases = [
   { label: "allowlist allow",      action: { type: "bash", cmd: "git status" },                        expect: { outcome: "allow",    severity: "action", rule: "tools.allowlist" } },
   // 3b. allowlist exclusive
   { label: "allowlist exclusive",  action: { type: "fetch_other", url: "https://x" },                  expect: { outcome: "deny",     severity: "action", rule: "tools.allowlist.exclusive" } },
-  // 4. allowlist short-circuits ask (PRD §9.2) — even when content matches askPatterns
-  { label: "allow short-circuits ask", action: { type: "fetch", url: "https://api.anthropic.com/delete-acct" }, expect: { outcome: "allow", severity: "action", rule: "tools.allowlist" } },
+  // 4. askPatterns fire even on allowlisted tools (v0.5 §4 — no trust shortcut)
+  { label: "ask fires on allowlisted",  action: { type: "fetch", url: "https://api.anthropic.com/delete-acct" }, expect: { outcome: "askHuman", severity: "action", rule: "content.askPatterns" } },
   // step 5 — fs
   { label: "fs.deny",              action: { type: "read", path: "/etc/passwd" },                      expect: { outcome: "deny",     severity: "action", rule: "fs.deny" } },
   { label: "fs.readScope",         action: { type: "read", path: "/var/log/messages" },                expect: { outcome: "deny",     severity: "action", rule: "fs.readScope" } },

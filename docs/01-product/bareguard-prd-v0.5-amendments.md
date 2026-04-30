@@ -20,8 +20,8 @@
 | - | ----------------------------------------------------------------- | --------------- |
 | 1 | Decision shape gains `severity: "action" \| "halt"` field         | §3, §10         |
 | 2 | Run-level limit exhaustion halts-with-human, never bubbles to LLM | new behavior    |
-| 3 | Per-action-type primitives placement in eval order specified      | §9.1            |
-| 4 | `tools.allowlist` made **exclusive** when non-empty               | §9.1            |
+| 3 | Eval order fully pinned across all primitives                     | §9.1            |
+| 4 | `tools.allowlist` is scope-only — no longer short-circuits ask    | §9.1, §9.2      |
 | 5 | Shared budget file (`proper-lockfile`) is **v0.1**, not v0.2      | §13, §19        |
 | 6 | `approval.callback` removed from bareguard config (runner-owned)  | §8 row 6, §10   |
 | 7 | Audit log gains `halt`, `topup`, `terminate`, `approval` phases   | §12             |
@@ -102,47 +102,70 @@ The dedicated `phase: "halt"` line is the operator grep target ("what stopped th
 
 bareguard provides only deterministic, audit-derived stats at halt time. It does not call the LLM to ask "how much more do you need." That hook, if a runner wants it, is the runner's concern with explicit caveats — see `gate.haltContext()` in §8 below.
 
-## 3. Per-action-type primitives placement in eval order (supersedes §9.1)
+## 3. Eval order — full pin (supersedes §9.1 entirely)
 
-The 6-step `tools.*` / `content.*` order from v0.4 §9.1 stands. The placement of all other primitives is now specified:
+v0.4 §9.1 had 6 steps over `tools.*` and `content.*` only, with placement of
+the other primitives unspecified, and allowlist short-circuited ask. v0.5 pins
+the **complete** eval order across all primitives, and **removes the
+allowlist→ask short-circuit** so safe-default asks always fire.
 
 ```
-PRE-EVAL (cross-cutting, before the 6 steps):
-  P0. secrets.redact(action)        ← already specified in v0.4 §9
+PRE-EVAL (cross-cutting):
+  P0. secrets.redact(action)        ← mutates action; not a decision step
   P1. budget.check()                ← halt if exceeded
   P2. limits.maxTurns                ← halt if exceeded
 
-THE 6 STEPS:
-  1. tools.denylist match           → deny (action)
-  2. content.denyPatterns match     → deny (action)
-  3a. tools.allowlist match         → allow (terminal, short-circuits ask)
-  3b. tools.allowlist set AND no match → deny (action)        ← NEW (see §4)
-  4. content.askPatterns match      → askHuman (action)
-  5. PER-ACTION-TYPE deny primitives → deny (action)          ← MOVED HERE
-       — bash.denyPatterns, bash.allow (when action.type === "bash")
-       — fs.deny, fs.writeScope, fs.readScope (when action is fs op)
-       — net.allowDomains, net.denyPrivateIps (when action is net op)
-       — limits.maxChildren, limits.maxDepth (when action.type === "spawn")
+THE 6 STEPS (first terminal wins):
+  1. tools.denylist                 → deny (action)
+  2. content.denyPatterns           → deny (action)
+  3. PER-ACTION-TYPE deny primitives → deny (action)
+       — bash.denyPatterns, bash.allow (action.type === "bash")
+       — fs.deny, fs.writeScope, fs.readScope
+       — net.allowDomains, net.denyPrivateIps
+       — limits.maxChildren, limits.maxDepth (action.type === "spawn")
        — spawn.ratePerMinute, defer.ratePerMinute (per action type)
-       — tools.denyArgPatterns (already specified)
-  6. default                        → allow
+       — tools.denyArgPatterns
+  4. content.askPatterns            → askHuman (action)
+  5. tools.allowlist enforcement    → see §4 below
+  6. default                        → allow (rule: "default")
 ```
 
-**Why step 5 for action-type primitives:** they enforce specifics that even an
-allowlisted tool should not bypass. A user writing `tools.allowlist: ["bash"]`
-still wants `bash.denyPatterns: [/sudo/]` and `fs.deny: ["~/.ssh"]` to apply.
-Same logic as `tools.denyArgPatterns` (v0.4 §9.2).
+**Order rationale:** deny > ask > capability-scope > default.
+- Universal denies (1-2-3) catch everything dangerous, regardless of who allowed what.
+- Universal asks (4) are the safety floor — they fire even on allowlisted tools.
+- Capability scope (5) restricts which tools the agent can invoke at all.
+- Default allow (6) is the bottom.
 
-**First match wins** still holds within step 5 across primitives.
+**First match wins** still holds within step 3 across action-type primitives.
 
-## 4. `tools.allowlist` is exclusive when non-empty (supersedes §9.1, §9.2)
+## 4. `tools.allowlist` is a scope check, not a trust short-circuit (supersedes §9.2)
 
-v0.4 left this ambiguous. v0.5 pins it:
+v0.4 §9.2 made allowlist short-circuit ask ("explicit listing = explicit consent").
+v0.5 removes that. Allowlist now means **only "which tools can be invoked at all":**
 
-- If `tools.allowlist` is **unset or empty**: behaves as before (no effect; flow falls through).
-- If `tools.allowlist` is **set with one or more entries**: tools not on the list are denied at step 3b (action-level deny). Listed tools still short-circuit ask at step 3a.
+- **Unset or empty:** no effect; flow continues to step 6 (default allow).
+- **Set with one or more entries:**
+  - tool name matches → `allow` (rule: `tools.allowlist`).
+  - tool name does not match → `deny` (rule: `tools.allowlist.exclusive`).
 
-This matches user-instinct allowlist semantics ("only these are allowed") while preserving the §9.2 short-circuit reasoning ("explicit listing = explicit consent, no need to ask again").
+Both branches happen at step 5, AFTER content.askPatterns at step 4.
+**Allowlisted tools still get asked** when they match a safe-default askPattern
+(e.g., `delete`, `revoke`, `force-push`).
+
+**Why this change (the design tension surfaced in POC phase 2):** the v0.4 §9.2
+rationale ("explicit allowlist = explicit consent") assumed users allowlist
+specific destructive entries like `mcp:linear.app/delete_comment`. In practice,
+users allowlist general tools (`bash`, `fetch`, `read`) for everyday capability,
+and the short-circuit silently disables the safe-default ask floor. That conflicts
+with the v0.4 §11 promise that safe defaults are the floor, not the ceiling.
+
+**For the §9.2 use case (silence ask on a specific known-destructive tool):**
+- Trim or narrow `content.askPatterns` (caller-side override).
+- OR use `tools.denyArgPatterns` for tool-specific rules.
+- OR have the runner's approval handler auto-approve known patterns.
+
+The library no longer offers a "trust shortcut" via allowlist — that was the
+foot-gun.
 
 ## 5. Shared budget file is v0.1 (supersedes §13, §19)
 
@@ -337,8 +360,8 @@ These are resolved and should not be re-litigated unless the user explicitly ask
 - **Shared budget file is v0.1, not v0.2.** Pre-allocation alternatives are too rigid; the bespoke extension protocol is more complex than the dep. (v0.5 §5.)
 - **Audit is canonical, budget file is derived.** One source of truth for history; one fast counter for cross-process. Reconstruct file from audit on startup if missing/corrupt. (v0.5 §5.1.)
 - **`approval.callback` config does not exist in bareguard.** Runner owns all human I/O. (v0.5 §6.)
-- **Allowlist is exclusive when set.** v0.4 §9.2 short-circuit reasoning still applies for tools that ARE listed. (v0.5 §4.)
-- **Per-action-type primitives sit at step 5.** Even allowlisted tools must respect bash/fs/net deny rules. (v0.5 §3.)
+- **Allowlist is scope-only, not a trust shortcut.** v0.4 §9.2's short-circuit rationale was a foot-gun in practice: allowlisting general tools silently disabled the safe-default ask floor. Allowlist now only enforces capability scope; askPatterns always fire. (v0.5 §4.)
+- **Per-action-type primitives sit at step 3 (universal-deny phase).** Deny > ask > scope. (v0.5 §3.)
 - **No LLM speculation on halt.** bareguard provides deterministic stats only. LLM self-estimate is a runner concern, opt-in, with caveats. (v0.5 §2.4.)
 - **Glob `*` matches `/` in v0.1.** Layered defense covers over-match risk. v0.2 may introduce `**` if real pain emerges. (v0.5 §9.)
 - **Result redaction is the caller's responsibility.** bareguard ships format helpers (`[REDACTED:ENV_VAR_NAME]`, `[REDACTED:pattern=...]`). (v0.5 §10.)
