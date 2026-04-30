@@ -13,9 +13,8 @@
   bareguard
 ```
 
-> One chokepoint between your agent and the world. Bounds what the agent **does**,
-> not what it **says**. Single audit log. Hard caps that halt with a human in
-> the loop. ~930 lines, one production dep.
+> One chokepoint between your agent and the world. Bounds what the agent **does**, not what it **says**.
+> Single audit log. Hard caps that halt with a human in the loop. ~930 lines, one production dep.
 
 [![test](https://github.com/hamr0/bareguard/actions/workflows/test.yml/badge.svg)](https://github.com/hamr0/bareguard/actions/workflows/test.yml)
 [![npm](https://img.shields.io/npm/v/bareguard.svg)](https://www.npmjs.com/package/bareguard)
@@ -25,273 +24,125 @@
 
 ## What this is
 
-bareguard is a runtime policy library every agent action passes through.
-Every `gate.check(action)` is the only place a decision can be made — no
-duplicate policy in tools, no bypass paths.
+bareguard is a runtime policy library every agent action passes through. One `Gate` class, three call sites (`redact`, `check`, `record`), twelve primitives — bash, fs, net, budget, content, secrets, audit, limits, tools, defer-rate*, spawn-rate*, approval (*v0.2). Each primitive is one small file you can read in a sitting.
 
-- 12 primitives (bash, fs, net, budget, content, secrets, audit, …) — each
-  one is one small file.
-- One single-file JSONL audit across the whole agent family (parent +
-  children + grandchildren), atomic via POSIX `O_APPEND`.
-- Hard caps (budget, maxTurns) **halt** the run and call a human; never
-  silently allow.
-- One callback for all human escalations (`humanChannel`) — bareguard
-  knows nothing about TUIs, Slack, web, or PINs.
-- Safe defaults shipped: `rm -rf /` denied, `DROP TABLE` denied, destructive
-  verbs (`delete`, `revoke`, `force-push`, …) escalate to human.
+Same patterns as [bareagent](https://www.npmjs.com/package/bare-agent), [barebrowse](https://www.npmjs.com/package/barebrowse), and [baremobile](https://www.npmjs.com/package/baremobile) — embed it, don't run it. No daemon, no SaaS, no telemetry.
 
-## What this isn't
+Not a content guardrail (use `guardrails-ai` for toxicity / PII / schema). Not a sandbox (Docker / gVisor for containment). Not authn (caller's concern). Not a scheduler. The five-layer split: system prompt → guardrails-ai → **bareguard** → sandbox → OS perms. bareguard owns exactly one.
 
-- Not a content guardrail (use `guardrails-ai` for toxicity / PII / schema).
-- Not a sandbox (Docker / gVisor contains effects; bareguard prevents calls).
-- Not an authn / authz layer (caller's concern; pass a different `Gate`
-  instance per user).
-- Not a scheduler (cron + bareagent's `defer` tool handles scheduled wakeups).
+## Install
 
-See [`docs/non-roadmap.md`](docs/non-roadmap.md) for the NO-GO list.
-
----
-
-## Quick start
-
-```bash
+```
 npm install bareguard
 ```
 
-Requires Node 20 LTS or higher. One production dep: `proper-lockfile`.
+Requires Node.js >= 20. One production dep: `proper-lockfile`.
+
+## Quick start
 
 ```js
 import { Gate } from "bareguard";
 
 const gate = new Gate({
-  // Capability scope — only listed tool types can be invoked at all.
-  tools: { allowlist: ["bash", "read", "write", "fetch"] },
-
-  // Per-tool deny rules.
-  bash: { allow: ["git", "ls", "cat"], denyPatterns: [/sudo/, /rm\s+-rf/] },
-  fs:   { writeScope: ["/tmp/agent"], readScope: ["/tmp"], deny: ["~/.ssh"] },
-  net:  { allowDomains: ["api.example.com"], denyPrivateIps: true },
-
-  // Hard caps — exhaustion halts the run and calls humanChannel.
-  budget: { maxCostUsd: 5.00, maxTokens: 100_000, sharedFile: "./.bareguard-budget.json" },
-  limits: { maxTurns: 50, maxChildren: 4, maxDepth: 3 },
-
-  // Secrets to redact from actions before audit.
-  secrets: { envVars: ["ANTHROPIC_API_KEY"], patterns: [/sk-[A-Za-z0-9]{40,}/] },
-
-  // ONE callback bareguard calls when a human is needed. You decide the UX.
+  tools:  { allowlist: ["bash", "read", "write", "fetch"] },
+  bash:   { allow: ["git", "ls"], denyPatterns: [/sudo/, /rm\s+-rf/] },
+  fs:     { writeScope: ["/tmp/agent"], readScope: ["/tmp"], deny: ["~/.ssh"] },
+  budget: { maxCostUsd: 5.00, maxTokens: 100_000 },
+  limits: { maxTurns: 50 },
   humanChannel: async (event) => {
-    // event.kind: "ask" | "halt"
-    // event.action / event.severity / event.rule / event.reason / event.context
-    return { decision: "allow" }; // or "deny" / "topup" / "terminate"
+    // event.kind: "ask" | "halt" — your UX decides (TUI, Slack, web, PIN)
+    return { decision: "allow" };  // or "deny" / "topup" / "terminate"
   },
 });
 await gate.init();
 
-// In your loop:
-const action = { type: "bash", cmd: "git status" };
+// In your agent loop:
 const decision = await gate.check(gate.redact(action));
 if (decision.outcome === "allow") {
   const result = await yourExecutor(action);
   await gate.record(action, result);  // result.costUsd / result.tokens
 }
-// bareguard never returns "askHuman" to your code — it resolves that
-// internally via humanChannel and gives you a terminal allow/deny.
+// gate.check never returns "askHuman" — bareguard resolves that internally
+// via humanChannel and gives you a terminal allow/deny.
 ```
 
----
+Full integration guide for AI assistants and developers: **[bareguard.context.md](bareguard.context.md)** — covers the `humanChannel` patterns (TUI / Slack / PIN), shared budget across processes, eval order, audit format, gotchas, and 8 recipes including the bareagent + beeperbox wiring.
+
+## How it works
+
+Every action traverses one gate. The eval order is `deny > ask > scope > default`, **first match wins**:
+
+1. `tools.denylist` → deny
+2. `content.denyPatterns` → deny (universal — catches `DROP TABLE`, `rm -rf /` on any tool)
+3. per-action-type rules → deny (`bash` / `fs` / `net` / `limits.maxChildren` / `tools.denyArgPatterns`)
+4. `content.askPatterns` → ask the human (universal — fires even on allowlisted tools)
+5. `tools.allowlist` enforcement → allow if listed, deny if set+miss
+6. default → allow
+
+Pre-eval halt checks (`budget`, `maxTurns`, `gate.terminated`) run before step 1. Halt-severity events MUST escalate to a human via `humanChannel`; they NEVER bubble to the LLM.
+
+One JSONL audit file per agent family. POSIX `O_APPEND` guarantees atomicity for writes < 4KB — same mechanism nginx access logs use. Parent + children + grandchildren all append the same file; `grep parent_run_id` reconstructs the tree. Windows uses a `proper-lockfile` fallback (auto-detected).
 
 ## What's inside
 
-Every primitive is one file (~50–150 LOC). They compose through the single gate.
+Every primitive is one file (~30–180 LOC). Two ship in v0.2.
 
 | Primitive | What it does |
 |---|---|
-| **bash** | Command allowlist + denyPatterns when `action.type === "bash"`. |
-| **budget** | Tokens + cost USD with hard kill. **Halt severity** — escalates to human. Shared across processes via `proper-lockfile`. |
-| **fs** | `writeScope` / `readScope` / `deny` for `read` / `write` / `edit` actions. Path prefix matching. |
+| **bash** | Command allowlist + `denyPatterns` when `action.type === "bash"`. |
+| **budget** | Tokens + cost USD, **halt severity** (escalates to human). Shared across processes via `proper-lockfile`. |
+| **fs** | `writeScope` / `readScope` / `deny` for `read` / `write` / `edit`. Path prefix matching. |
 | **net** | Egress domain allowlist + private-IP deny for `fetch`. |
 | **limits** | `maxTurns` (halt), `maxChildren` (action), `maxDepth` (action), `timeoutSeconds` (halt, v0.2). |
-| **approval** | Triggers `humanChannel` — bareguard never invokes UI itself. |
-| **tools** | Tool-name `allowlist` / `denylist` (glob-matched) + per-tool `denyArgPatterns` (regex over args). |
-| **secrets** | Redacts known env-var values + cred patterns from actions. Tags with name, never leaks. |
-| **audit** | One JSONL file per agent family. Phases: `gate`, `record`, `approval`, `halt`, `topup`, `terminate`. |
-| **content** | Pattern matches over serialized action. Universal `denyPatterns` (step 2) + `askPatterns` (step 4). Safe defaults shipped. |
-| ~~**defer-rate**~~ | _(v0.2 — needs bareagent's `defer` tool)_ |
-| ~~**spawn-rate**~~ | _(v0.2 — needs bareagent's `spawn` tool)_ |
+| **tools** | Tool-name `allowlist` / `denylist` (glob-matched) + per-tool `denyArgPatterns`. Allowlist is **scope-only** — does not silence asks. |
+| **content** | Pattern matches over serialized action. Universal `denyPatterns` (step 2) + `askPatterns` (step 4). **Safe defaults shipped.** |
+| **secrets** | Redacts known env-var values + cred patterns. Tags with name (`[REDACTED:ANTHROPIC_API_KEY]`); never leaks. |
+| **audit** | One JSONL file per family. Phases: `gate`, `record`, `approval`, `halt`, `topup`, `terminate`. |
+| **approval** | Routes ask events to the runner-supplied `humanChannel` callback. |
+| ~~**defer-rate**~~ | _(v0.2)_ Caps `defer()` calls per minute. Re-validates on emit AND on fire. |
+| ~~**spawn-rate**~~ | _(v0.2)_ Caps `spawn()` calls per minute. Composes with `maxChildren` and `maxDepth`. |
 
-**Eval order** (first match wins): `tools.denylist → content.denyPatterns → per-action-type rules → content.askPatterns → tools.allowlist scope → default allow`. Pre-eval halt checks (`budget`, `maxTurns`) run first. Allowlist is **scope-only** — does not silence asks.
+**Safe defaults** ship in `content`. `rm -rf /`, `DROP TABLE`, `TRUNCATE` denied outright. Destructive verbs (`delete`, `revoke`, `force-push`, destructive HTTP methods) escalate to the human. Override with empty arrays for pure-allow.
 
-**Halt vs deny:** `budget` and `maxTurns` exhaustion produce `severity: "halt"` decisions. The runner MUST escalate via `humanChannel`, MUST NOT bubble to the LLM. Per-action denies (everything else) bubble normally.
+## Common gotchas
 
----
+The design choices that surprise people most often. Read these before wiring it up.
 
-## Single-file audit, no contention
+**1. `tools.allowlist` does NOT silence safe-default `content.askPatterns`.** Allowlist is scope-only ("which tools can be invoked at all"), not a trust shortcut. To silence an ask: narrow `content.askPatterns` or use `tools.denyArgPatterns`.
 
-bareguard writes one JSONL file per agent family (parent + children +
-grandchildren). All processes append to the same path; POSIX `O_APPEND`
-guarantees atomicity for writes < 4KB — same mechanism nginx access logs use.
+**2. Glob `*` matches anything including `/`.** `mcp:foo/admin_*` catches `mcp:foo/admin_baz` AND `mcp:foo/admin_baz/sub`. Safe for denylists; **can over-grant on allowlists** — list specific tools or use a tighter prefix. v0.2 may add `**` so `*` becomes "anything except `/`".
 
-```
-$XDG_STATE_HOME/bareguard/<root-run-id>.jsonl   (default; cwd fallback)
-```
+**3. `humanChannel` is effectively required for safe-default-shipped configs.** First time an ask fires without one wired, bareguard prints a one-time WARN to stderr and denies with `severity: "halt"`. Headless / CI runs that intentionally have no channel see this once and continue.
 
-Every line carries `run_id`, `parent_run_id`, `spawn_depth` so the writer
-is identifiable. Reconstruct the family tree with one `grep`.
+**4. Caps are soft, halts are hard.** Cross-process budget can be exceeded by one action's spend before next refresh. Halt fires reliably on the next check after a record.
 
-```bash
-# spend dimension snapshot
-jq 'select(.phase=="record") | .result.costUsd' run.jsonl | paste -sd+ | bc
+**5. `gate.check` and `gate.record` MUST be called serially per `Gate` instance.** Multiple Gate instances (parent + child processes) run independently and concurrently fine.
 
-# what stopped the run last night?
-grep '"phase":"halt"' run.jsonl
-```
+## Tested against
 
----
-
-## Safe defaults
-
-bareguard ships ~10 lines of regex covering ~90% of dangerous things
-agents do. Not a ceiling — narrow or extend in `content`.
-
-```js
-// Denied outright (no human prompt):
-"DROP TABLE users"        // SQL
-"rm -rf /home/x"          // shell
-"TRUNCATE TABLE accounts" // SQL
-
-// Asks the human:
-"delete the user account"
-"git force-push origin main"
-{ method: "DELETE", url: "..." }
-```
-
-If noisy, narrow `content.askPatterns`. If you want zero floor:
-`content: { askPatterns: [], denyPatterns: [] }`.
-
----
-
-## Public API
-
-```js
-import { Gate, redact, defaultAuditPath, BudgetUnavailableError,
-         SAFE_DEFAULT_DENY_PATTERNS, SAFE_DEFAULT_ASK_PATTERNS } from "bareguard";
-
-await gate.init()
-gate.redact(action)                  // sync: action-side secrets redaction
-await gate.allows(action)             // pure boolean (no audit, no budget delta)
-await gate.check(action)              // { outcome, severity, rule, reason }
-await gate.record(action, result)     // updates budget + emits record line
-await gate.run(action, executor)      // check + execute + record (one call)
-await gate.terminate(reason)          // sticky terminate
-await gate.raiseCap(dimension, n)     // explicit cap raise
-await gate.haltContext()              // deterministic stats over audit
-```
-
-**Caller contracts:**
-1. `gate.check` and `gate.record` MUST be called **serially** per `Gate`
-   instance. (Multiple `Gate` instances, e.g. parent + child processes,
-   MAY run concurrently — they're independent.)
-2. **Redact tool results** before `gate.record(action, result)` — bareguard
-   ships the `redact()` helper for both actions and results.
-3. `humanChannel` returns `{ decision: "allow" | "deny" | "topup" | "terminate", newCap?, reason? }` — never `undefined`.
-
----
-
-## Common gotchas (read these before you wire it up)
-
-These are the design choices that surprise people most often. Calling them out
-front-of-house so you don't trip on them later.
-
-**1. `tools.allowlist` does NOT silence safe-default `content.askPatterns`.**
-If you set `tools.allowlist: ["bash", "fetch"]` thinking that's a "trust these
-tools" shortcut, you'll still get prompted on actions matching the shipped
-askPatterns (`delete`, `revoke`, `truncate`, `force-push`, destructive HTTP
-methods). This is intentional (PRD v0.5 §4) — allowlist is **scope-only** ("which
-tools can be invoked at all"), not a trust shortcut. To silence specific asks:
-narrow `content.askPatterns` or use `tools.denyArgPatterns` for tool-specific
-denies.
-
-**2. Glob `*` matches anything including `/`.** So `mcp:foo/admin_*` matches
-both `mcp:foo/admin_baz` AND `mcp:foo/admin_baz/nested/path`. For denylists
-this is safe (denies more, never less); for **allowlists this can over-grant**:
-
-```js
-// SURPRISE: this allows mcp:linear.app/foo AND mcp:linear.app/sub/foo/bar
-tools: { allowlist: ["mcp:linear.app/*"] }
-
-// SAFER: list specific tools or use a tighter prefix
-tools: { allowlist: ["mcp:linear.app/list_issues", "mcp:linear.app/get_issue"] }
-```
-
-v0.2 may add shell-style `**` so `*` means "anything except `/`". Until then,
-err narrow on allowlists.
-
-**3. `humanChannel` is effectively required for any safety-default-shipped
-config.** Out of the box, `content.askPatterns` ships with destructive verbs.
-First time one fires, if `humanChannel` is unset, bareguard prints a one-time
-WARN to stderr and the action is denied with `severity: "halt"`. This is
-correct behavior for headless / CI runs (deny on no human present), but if
-you're running interactively and the agent suddenly stops working, **check
-your terminal for the WARN line**.
-
-**4. Caps are soft, halts are hard.** Cross-process budget can be exceeded by
-one action's spend before the next refresh (~$0.01–0.10 overshoot). The halt
-fires reliably on the next check after a record. If you need cents-precision
-hard caps, run single-process with `budget.sharedFile: null`.
-
-**5. `gate.check` and `gate.record` MUST be called serially per `Gate`
-instance.** Concurrent calls produce undefined `seq` ordering. Multiple Gate
-instances (parent + child processes) are independent and run concurrently
-fine — each has its own `seq`.
-
----
-
-## Known limitations (v0.1)
-
-- **Glob:** only `*` (matches anything including `/`). No `?`, `[abc]`, escapes.
-- **Safe-default `askPatterns` may over-match** (innocent strings containing
-  "delete"). Right v1 trade — over-asking is recoverable; under-asking is
-  incidents.
-- **Cross-platform:** Linux + macOS are primary (POSIX `O_APPEND`
-  atomicity). Windows uses a lock fallback for audit (bareguard auto-detects).
-- **Rate limits not in v0.1.** `defer-rate` and `spawn-rate` ship in v0.2
-  alongside the bareagent `defer` and `spawn` tools that exercise them.
-- **Soft cap.** Cross-process budget can be exceeded by one action's spend
-  before next refresh. Halt fires reliably on the next check after a record.
-
----
+33 tests pass on the CI matrix: **Linux + macOS + Windows × Node 20 + 22**. Real subprocesses verify shared-budget contention under `proper-lockfile`, halt-cascade across processes, single-audit-file atomicity (3 concurrent writers, no torn lines), `parent_run_id` / `spawn_depth` stitching across a 3-deep tree, and `maxChildren` / `maxDepth` enforcement.
 
 ## The bare ecosystem
 
-Four vanilla JS modules. Same API patterns. Same philosophy: zero deps where
-possible, one allowed dep where necessary, no telemetry, no SaaS.
+Four vanilla JS modules. Zero deps where possible (bareguard has one). Same API patterns.
 
 | | [**bareagent**](https://npmjs.com/package/bare-agent) | [**barebrowse**](https://npmjs.com/package/barebrowse) | [**baremobile**](https://npmjs.com/package/baremobile) | [**bareguard**](https://npmjs.com/package/bareguard) |
 |---|---|---|---|---|
-| **Does** | Gives agents a think → act loop | Gives agents a real browser | Gives agents Android + iOS devices | Gates everything an agent does |
+| **Does** | Gives agents a think→act loop | Gives agents a real browser | Gives agents Android + iOS devices | Gates everything an agent does |
 | **How** | Goal in → coordinated actions out | URL in → pruned snapshot out | Screen in → pruned snapshot out | Action in → allow / deny / human-asked out |
 | **Replaces** | LangChain, CrewAI, AutoGen | Playwright, Selenium, Puppeteer | Appium, Espresso, XCUITest | Hand-rolled allowlists, scattered policy |
 | **Interfaces** | Library · CLI · subprocess | Library · CLI · MCP | Library · CLI · MCP | Library |
 | **Solo or together** | Orchestrates the others as tools | Works standalone | Works standalone | Embedded in bareagent's loop; usable by any runner |
 
-> **Reach 50+ messengers via [beeperbox](https://github.com/hamr0/beeperbox)** — a headless Beeper Desktop in Docker that exposes WhatsApp, iMessage, Signal, Telegram, Slack, Discord, and more as one MCP server. Wire it through bareagent's MCP bridge; bareguard policies the invocations like any other tool (`mcp:beeperbox/send_message`, `mcp:beeperbox/list_chats`, …). Per-chat allowlists and per-tool ask patterns work out of the box.
+> **Reach 50+ messengers with one Docker container via [beeperbox](https://github.com/hamr0/beeperbox)** — a headless Beeper Desktop that exposes WhatsApp, iMessage, Signal, Telegram, Slack, Discord, RCS, SMS and more as a single MCP server. Wire it through bareagent's MCP bridge; bareguard policies the invocations like any other tool.
 
-**What you can build with the suite + beeperbox:**
+## Spec
 
-- Agents that monitor chats across messengers, escalate destructive replies through `humanChannel` (PIN, Slack reaction, web button — your call).
-- Headless QA that browses, taps mobile, runs shell — all under one shared budget + audit log.
-- Multi-agent pipelines where parent + children share a $5 cap and one JSONL audit.
-
----
-
-## Spec & history
-
-- [PRD](docs/01-product/bareguard-prd.md) — unified spec (v0.6, folds v0.5 amendments + v0.1.1 review fixes inline).
-- [non-roadmap](docs/non-roadmap.md) — the NO-GO list. Point here when asked.
+- [PRD](docs/01-product/bareguard-prd.md) — unified design spec.
+- [non-roadmap](docs/non-roadmap.md) — the NO-GO list.
 - [decisions log](docs/decisions-log.md) — design calls resolved across versions.
 - [CHANGELOG](CHANGELOG.md) — release-by-release diff.
 
 ## License
 
-Apache 2.0. See `LICENSE` and `NOTICE`.
+Apache 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
