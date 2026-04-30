@@ -26,8 +26,7 @@ First release. Action-side runtime policy library for autonomous agents — boun
 ### Tests
 
 - 30/30 tests passing on Linux. ~700 LOC of tests covering eval order, safe defaults, secrets redaction, halt flow (humanChannel + topup + terminate + audit dedicated halt line + budget reconstruction from audit), shared-budget under real-subprocess contention, single-audit-file atomicity across 3 concurrent processes, and a full agent-loop integration.
-- macOS: same POSIX guarantees as Linux; should run natively. Untested in CI.
-- Windows: lock fallback for audit (auto-detected via `process.platform`). Untested in CI.
+- **GitHub Actions matrix CI** — `ubuntu-latest`, `macos-latest`, `windows-latest` × Node 20 / Node 22. Six combinations on every push and PR.
 
 ### Constraints
 

@@ -17,6 +17,10 @@
 > not what it **says**. Single audit log. Hard caps that halt with a human in
 > the loop. ~930 lines, one production dep.
 
+[![test](https://github.com/hamr0/bareguard/actions/workflows/test.yml/badge.svg)](https://github.com/hamr0/bareguard/actions/workflows/test.yml)
+[![npm](https://img.shields.io/npm/v/bareguard.svg)](https://www.npmjs.com/package/bareguard)
+[![license](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+
 ---
 
 ## What this is
