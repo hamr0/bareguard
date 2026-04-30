@@ -1,0 +1,10 @@
+{
+  "name": "bareguard-poc",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "proper-lockfile": "^4.1.2"
+  }
+}
