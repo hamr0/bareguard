@@ -7,7 +7,7 @@
 export class Limits {
   constructor(cfg = {}) {
     this.maxTurns = cfg.maxTurns ?? Infinity;
-    this.maxChildren = cfg.maxChildren ?? Infinity;
+    this.maxChildren = cfg.maxChildren ?? Infinity; // lifetime total spawns, not concurrent active
     this.maxDepth = cfg.maxDepth ?? Infinity;
     this.startingDepth = cfg.startingDepth ?? 0;
     this.turns = 0;

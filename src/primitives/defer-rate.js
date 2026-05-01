@@ -19,7 +19,7 @@ export async function deferRateCheck(action, cfg = {}, ctx = {}) {
     auditPath: ctx.auditPath,
     windowMs:  WINDOW_MS,
     now:       ctx.now ?? Date.now(),
-    predicate: rec => rec.phase === "gate" && rec.action?.type === "defer",
+    predicate: rec => rec.phase === "gate" && rec.action?.type === "defer" && rec.decision === "allow",
   });
   if (count >= cap) {
     return {

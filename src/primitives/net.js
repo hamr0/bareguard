@@ -5,8 +5,16 @@ function isPrivateIp(host) {
   if (!host) return false;
   const lower = host.toLowerCase();
   if (lower === "localhost" || lower === "::1") return true;
-  // IPv4 private ranges and loopback
+  // IPv4 loopback
   if (/^127\./.test(host)) return true;
+  // IPv4-mapped IPv6 (::ffff:x.x.x.x) — recurse on the embedded IPv4 address
+  const mapped = lower.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+  if (mapped) return isPrivateIp(mapped[1]);
+  // IPv6 unique local fc00::/7 (fc__ and fd__)
+  if (/^f[cd][0-9a-f]*:/i.test(lower)) return true;
+  // IPv6 link-local fe80::/10 (fe80 through febf)
+  if (/^fe[89ab][0-9a-f]*:/i.test(lower)) return true;
+  // IPv4 private ranges
   const m = host.match(/^(\d+)\.(\d+)\./);
   if (!m) return false;
   const a = +m[1], b = +m[2];

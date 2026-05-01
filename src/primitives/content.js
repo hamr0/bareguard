@@ -5,9 +5,9 @@
 
 export const SAFE_DEFAULT_DENY_PATTERNS = [
   /\bDROP\s+TABLE\b/i,
-  /\bDELETE\s+FROM\s+\w+(?!\s+WHERE)/i,
+  /\bDELETE\s+FROM\s+\w+\b(?!\s+WHERE\b)/i,
   /\brm\s+-rf\s+\//,
-  /:(force|--force|-f)\s/,
+  /(?:^|[\s"'])--force(?=[\s"'}]|$)|:(force|--force|-f)\s/,
   /\bTRUNCATE\s+TABLE\b/i,
 ];
 

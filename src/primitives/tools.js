@@ -19,7 +19,7 @@ export function toolsDenyArgsCheck(action, cfg = {}) {
   const patterns = map[action.type];
   if (!patterns || patterns.length === 0) return null;
   let argStr;
-  try { argStr = JSON.stringify({ args: action.args, ...action }); }
+  try { argStr = JSON.stringify(action); }
   catch { return null; }
   for (const re of patterns) {
     if (re.test(argStr)) {

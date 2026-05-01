@@ -48,18 +48,28 @@ export class Audit {
     };
     let serialized = JSON.stringify(line) + "\n";
     if (Buffer.byteLength(serialized, "utf8") > MAX_LINE_BYTES) {
-      // Truncate action.args / result to keep the line atomic on POSIX FS.
-      // Also tag the line root with _truncated:true so downstream consumers
-      // (replayers, tooling) can filter without regex on string contents.
+      // Truncate all large action fields and result strings to keep the line
+      // atomic on POSIX FS (PIPE_BUF). Tag root with _truncated:true so
+      // downstream consumers can filter without inspecting string contents.
       const truncated = { ...line, _truncated: true };
-      if (truncated.action && truncated.action.args) {
-        truncated.action = { ...truncated.action, args: `[TRUNCATED:${Buffer.byteLength(JSON.stringify(truncated.action.args), "utf8")} bytes]` };
+      if (truncated.action) {
+        const newAction = { ...truncated.action };
+        for (const k of Object.keys(newAction)) {
+          const v = newAction[k];
+          if (v !== null && typeof v === "object") {
+            const bytes = Buffer.byteLength(JSON.stringify(v), "utf8");
+            if (bytes > 200) newAction[k] = `[TRUNCATED:${bytes} bytes]`;
+          } else if (typeof v === "string" && Buffer.byteLength(v, "utf8") > 200) {
+            newAction[k] = v.slice(0, 200) + "[TRUNCATED]";
+          }
+        }
+        truncated.action = newAction;
       }
       if (truncated.result) {
         truncated.result = { ...truncated.result };
         for (const k of Object.keys(truncated.result)) {
           if (typeof truncated.result[k] === "string" && truncated.result[k].length > 200) {
-            truncated.result[k] = truncated.result[k].slice(0, 200) + `[TRUNCATED]`;
+            truncated.result[k] = truncated.result[k].slice(0, 200) + "[TRUNCATED]";
           }
         }
       }

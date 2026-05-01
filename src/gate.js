@@ -47,7 +47,7 @@ export class Gate {
     this.runId = config.runId ?? randomUUID();
     this.parentRunId = config.parentRunId ?? process.env.BAREGUARD_PARENT_RUN_ID ?? null;
     this.spawnDepth = config.spawnDepth ?? +(process.env.BAREGUARD_SPAWN_DEPTH ?? 0);
-    this.rootRunId = config.rootRunId ?? this.parentRunId ?? this.runId;
+    this.rootRunId = config.rootRunId ?? process.env.BAREGUARD_ROOT_RUN_ID ?? this.parentRunId ?? this.runId;
 
     const auditPath = config.audit?.path ?? process.env.BAREGUARD_AUDIT_PATH ?? defaultAuditPath(this.rootRunId);
     this._clock = config._clock ?? (() => Date.now());
@@ -71,25 +71,30 @@ export class Gate {
     if (this._initialized) return;
     await this.audit.init();
     await this.budget.init({
-      rebuildFromAudit: async () => this._rebuildBudgetFromAudit(),
+      rebuildFromAudit: async () => {
+        const rebuilt = await this._rebuildBudgetFromAudit();
+        this.limits.turns = rebuilt.turns;
+        return rebuilt;
+      },
     });
     this._initialized = true;
   }
 
   async _rebuildBudgetFromAudit() {
     const lines = await this.audit.readAll();
-    let spentUsd = 0, spentTokens = 0, capUsd = null, capTokens = null;
+    let spentUsd = 0, spentTokens = 0, capUsd = null, capTokens = null, turns = 0;
     for (const l of lines) {
       if (l.phase === "record" && l.result) {
         spentUsd    += l.result.costUsd ?? 0;
         spentTokens += l.result.tokens  ?? 0;
+        turns++;
       }
       if (l.phase === "topup") {
         if (l.dimension === "costUsd") capUsd    = l.newCap;
         if (l.dimension === "tokens")  capTokens = l.newCap;
       }
     }
-    return { spentUsd, spentTokens, capUsd, capTokens };
+    return { spentUsd, spentTokens, capUsd, capTokens, turns };
   }
 
   // PRE-EVAL: cross-cutting halt checks (budget exhaustion, maxTurns, terminated).
@@ -157,7 +162,7 @@ export class Gate {
     if (!this._initialized) await this.init();
     const action = typeof actionOrName === "string" ? { type: actionOrName } : actionOrName;
     const halt = this._haltCheck();
-    if (halt) return halt.outcome !== "deny" ? halt.outcome === "askHuman" : false;
+    if (halt) return false;
     const decision = await this._stepEval(action);
     return decision.outcome !== "deny";
   }
@@ -302,6 +307,11 @@ export class Gate {
         if (decision.severity !== "halt") {
           // topup only meaningful for halt; for ask events, treat as allow.
           const decided = { outcome: "allow", severity: "action", rule: "humanChannel.allow", reason: "topup-on-ask treated as allow" };
+          await this.audit.emit({
+            phase: "gate", action,
+            decision: "allow", severity: "action",
+            rule: decided.rule, reason: decided.reason,
+          });
           return decided;
         }
         if (typeof human.newCap !== "number" || !isFinite(human.newCap)) {
@@ -317,7 +327,7 @@ export class Gate {
           phase: "topup", action: null,
           dimension, oldCap, newCap: human.newCap,
         });
-        if (++iterations > MAX_TOPUP_ITERATIONS) {
+        if (++iterations >= MAX_TOPUP_ITERATIONS) {
           return { outcome: "deny", severity: "halt", rule: decision.rule,
                    reason: `topup loop exceeded ${MAX_TOPUP_ITERATIONS} iterations` };
         }
@@ -407,8 +417,7 @@ export class Gate {
   _haltDimension(rule) {
     if (rule === "budget.maxCostUsd") return "costUsd";
     if (rule === "budget.maxTokens")  return "tokens";
-    if (rule === "limits.maxTurns")   return "turns";
-    return null;
+    return null; // limits.maxTurns has no raiseable budget dimension
   }
   _haltSpent(rule) {
     if (rule === "budget.maxCostUsd") return this.budget.spentUsd;

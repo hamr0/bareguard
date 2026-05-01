@@ -150,6 +150,36 @@ test("defer-rate: two-phase — fired action is a separate gate.check, doesn't c
   assert.equal(dec.rule,    "defer.ratePerMinute");
 });
 
+test("defer-rate: post-cap deny records don't extend the ban window (I4)", async (t) => {
+  const dir = await makeTmpDir(); t.after(async () => cleanup(dir));
+  const { auditPath } = uniquePaths(dir);
+  const clock = makeClock();
+
+  const gate = new Gate({
+    audit: { path: auditPath },
+    defer: { ratePerMinute: 1 },
+    _clock: clock,
+  });
+  await gate.init();
+
+  // t=0: one allow (at cap)
+  const d1 = await gate.check({ type: "defer", args: { when: "1m" } });
+  assert.equal(d1.outcome, "allow");
+
+  // t=100: deny (cap exceeded) — this record must NOT count toward the window
+  clock.advance(100);
+  const d2 = await gate.check({ type: "defer", args: { when: "1m" } });
+  assert.equal(d2.outcome, "deny");
+
+  // Advance clock so the allow at t=0 ages out but the deny at t=100 is still in window.
+  // cutoff = now - 60000. With now = start+60050: cutoff = start+50.
+  // allow(t=0) < cutoff → excluded. deny(t=100) >= cutoff → in window but not counted.
+  clock.advance(59_950); // total: start + 60050
+
+  const d3 = await gate.check({ type: "defer", args: { when: "1m" } });
+  assert.equal(d3.outcome, "allow", "deny records must not extend the ban window");
+});
+
 test("defer-rate: cap of Infinity disables the guard", async (t) => {
   const dir = await makeTmpDir(); t.after(async () => cleanup(dir));
   const { auditPath } = uniquePaths(dir);

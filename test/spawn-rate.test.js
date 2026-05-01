@@ -128,6 +128,34 @@ test("spawn-rate: window slide — emit cap, wait 61s, next emit allows", async 
   assert.equal(dec.outcome, "allow");
 });
 
+test("spawn-rate: post-cap deny records don't extend the ban window (I4)", async (t) => {
+  const dir = await makeTmpDir(); t.after(async () => cleanup(dir));
+  const { auditPath } = uniquePaths(dir);
+  const clock = makeClock();
+
+  const gate = new Gate({
+    audit: { path: auditPath },
+    spawn: { ratePerMinute: 1 },
+    _clock: clock,
+  });
+  await gate.init();
+
+  // t=0: one allow (at cap)
+  const d1 = await gate.check({ type: "spawn", args: { agent: "child" } });
+  assert.equal(d1.outcome, "allow");
+
+  // t=100: deny — must NOT count toward window
+  clock.advance(100);
+  const d2 = await gate.check({ type: "spawn", args: { agent: "child" } });
+  assert.equal(d2.outcome, "deny");
+
+  // Advance so allow ages out but deny is still in window
+  clock.advance(59_950); // total: start + 60050, cutoff = start + 50
+
+  const d3 = await gate.check({ type: "spawn", args: { agent: "child" } });
+  assert.equal(d3.outcome, "allow", "deny records must not extend the ban window");
+});
+
 test("spawn-rate: defer actions don't count toward spawn cap", async (t) => {
   const dir = await makeTmpDir(); t.after(async () => cleanup(dir));
   const { auditPath } = uniquePaths(dir);

@@ -172,6 +172,72 @@ test("humanChannelTimeoutMs — fast channel still wins the race", async (t) => 
   assert.equal(dec.outcome, "allow", "fast topup beats the timeout");
 });
 
+test("maxTurns halt — humanChannel topup returns deny 'not applicable' (no crash)", async (t) => {
+  const dir = await makeTmpDir(); t.after(async () => cleanup(dir));
+  const { auditPath } = uniquePaths(dir);
+  const channel = makeHumanChannel([
+    { decision: "topup", newCap: 100, reason: "extend turns" },
+  ]);
+  const gate = new Gate({
+    audit: { path: auditPath },
+    limits: { maxTurns: 1 },
+    humanChannel: channel,
+  });
+  await gate.init();
+  await gate.record({ type: "x" }, { costUsd: 0, tokens: 0 }); // consumes turn 1
+  const dec = await gate.check({ type: "x" });
+  assert.equal(dec.outcome, "deny");
+  assert.equal(dec.severity, "halt");
+  assert.match(dec.reason, /topup not applicable/);
+});
+
+test("topup-on-ask path emits terminal gate allow audit line", async (t) => {
+  const dir = await makeTmpDir(); t.after(async () => cleanup(dir));
+  const { auditPath } = uniquePaths(dir);
+  const channel = makeHumanChannel([
+    { decision: "topup", newCap: 5.00, reason: "topup for ask" },
+  ]);
+  const gate = new Gate({ audit: { path: auditPath }, humanChannel: channel });
+  await gate.init();
+  // content.askPatterns fires for this URL
+  const dec = await gate.check({ type: "fetch", url: "https://api/delete-account" });
+  assert.equal(dec.outcome, "allow", "topup-on-ask should resolve as allow");
+  const lines = await gate.audit.readAll();
+  const terminalAllow = lines.filter(l => l.phase === "gate" && l.decision === "allow");
+  assert.ok(terminalAllow.length >= 1, "a terminal gate:allow line must be emitted");
+  assert.equal(terminalAllow[terminalAllow.length - 1].rule, "humanChannel.allow");
+});
+
+test("allows() returns false when budget is exhausted (halt condition)", async (t) => {
+  const dir = await makeTmpDir(); t.after(async () => cleanup(dir));
+  const { auditPath, budgetPath } = uniquePaths(dir);
+  const gate = new Gate({
+    audit:  { path: auditPath },
+    budget: { maxCostUsd: 0.10, sharedFile: budgetPath },
+  });
+  await gate.init();
+  await gate.record({ type: "x" }, { costUsd: 0.15, tokens: 0 });
+  const result = await gate.allows({ type: "bash", cmd: "ls" });
+  assert.equal(result, false, "allows() must return false under halt condition");
+});
+
+test("turns rebuilt from audit on cold start (missing budget file)", async (t) => {
+  const dir = await makeTmpDir(); t.after(async () => cleanup(dir));
+  const { auditPath, budgetPath, runId } = uniquePaths(dir);
+
+  const gate1 = new Gate({ runId, audit: { path: auditPath }, budget: { sharedFile: budgetPath } });
+  await gate1.init();
+  await gate1.record({ type: "x" }, { costUsd: 0, tokens: 0 });
+  await gate1.record({ type: "y" }, { costUsd: 0, tokens: 0 });
+
+  const { promises: fsp } = await import("node:fs");
+  await fsp.unlink(budgetPath);
+
+  const gate2 = new Gate({ runId, audit: { path: auditPath }, budget: { sharedFile: budgetPath } });
+  await gate2.init();
+  assert.equal(gate2.limits.turns, 2, "turns must be restored from audit records");
+});
+
 test("budget reconstruction from audit (cold start, missing budget file)", async (t) => {
   const dir = await makeTmpDir(); t.after(async () => cleanup(dir));
   const { auditPath, budgetPath, runId } = uniquePaths(dir);

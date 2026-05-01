@@ -154,6 +154,53 @@ test("audit truncation tags line root with _truncated: true", async (t) => {
   assert.equal(recordLine._truncated, true, "_truncated boolean must be at line root");
 });
 
+test("BAREGUARD_ROOT_RUN_ID env var is used as rootRunId (I1)", async (t) => {
+  const dir = await makeTmpDir(); t.after(async () => cleanup(dir));
+  const { runId } = uniquePaths(dir);
+  const prev = process.env.BAREGUARD_ROOT_RUN_ID;
+  try {
+    process.env.BAREGUARD_ROOT_RUN_ID = runId;
+    const gate = new Gate({}); // no explicit rootRunId
+    assert.equal(gate.rootRunId, runId, "rootRunId must come from BAREGUARD_ROOT_RUN_ID");
+  } finally {
+    if (prev === undefined) delete process.env.BAREGUARD_ROOT_RUN_ID;
+    else process.env.BAREGUARD_ROOT_RUN_ID = prev;
+  }
+});
+
+test("audit truncation bounds large action.cmd (not just args) (I3)", async (t) => {
+  const dir = await makeTmpDir(); t.after(async () => cleanup(dir));
+  const { auditPath } = uniquePaths(dir);
+  const gate = new Gate({ audit: { path: auditPath } });
+  await gate.init();
+  const hugecmd = "x".repeat(5000);
+  await gate.record({ type: "bash", cmd: hugecmd }, {});
+  const lines = await gate.audit.readAll();
+  const rec = lines.find(l => l.phase === "record");
+  assert.equal(rec._truncated, true, "_truncated must be true");
+  const bytes = Buffer.byteLength(JSON.stringify(rec), "utf8");
+  assert.ok(bytes <= 3500, `line must be ≤ 3500 bytes, got ${bytes}`);
+});
+
+test("fs.deny uses path-segment matching, not substring (m2)", async (t) => {
+  const dir = await makeTmpDir(); t.after(async () => cleanup(dir));
+  const { auditPath } = uniquePaths(dir);
+  const gate = new Gate({
+    audit: { path: auditPath },
+    fs:    { deny: ["/etc"] },
+  });
+  await gate.init();
+
+  const d1 = await gate.check({ type: "read", path: "/etc/passwd" });
+  assert.equal(d1.outcome, "deny", "/etc/passwd must be denied");
+
+  const d2 = await gate.check({ type: "read", path: "/etc/ssl/cert.pem" });
+  assert.equal(d2.outcome, "deny", "/etc/ssl/cert.pem must be denied");
+
+  const d3 = await gate.check({ type: "read", path: "/home/user/etc-backup/file.txt" });
+  assert.equal(d3.outcome, "allow", "/home/user/etc-backup must NOT match deny entry '/etc'");
+});
+
 test("missing humanChannel emits a one-time WARN and denies + halts", async (t) => {
   const dir = await makeTmpDir(); t.after(async () => cleanup(dir));
   const { auditPath } = uniquePaths(dir);

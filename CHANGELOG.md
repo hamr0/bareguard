@@ -4,6 +4,30 @@ All notable changes to bareguard are documented here. Format: [Keep a Changelog]
 
 ## [Unreleased]
 
+## [0.3.1] — 2026-05-01
+
+Bug-fix patch. No API changes.
+
+### Fixed
+
+- **[C1] `gate.check()` no longer throws when humanChannel returns `topup` on a `limits.maxTurns` halt.** `_haltDimension` previously returned `"turns"` for that rule, causing `Budget.raiseCap` to throw (it only accepts `"costUsd"` / `"tokens"`). Now returns `null`, which routes through the existing "topup not applicable to this rule" guard.
+- **[C2] `SAFE_DEFAULT_DENY_PATTERNS` DELETE regex fixed.** `/\bDELETE\s+FROM\s+\w+(?!\s+WHERE)/i` allowed the regex engine to backtrack to a partial table name, causing `DELETE FROM users WHERE id=1` to be falsely hard-denied. Fixed with `\b` after `\w+` to prevent partial-word backtracking.
+- **[I1] `BAREGUARD_ROOT_RUN_ID` env var added.** Deep spawn trees (grandchild+) previously computed `rootRunId` as the child run ID rather than the true root, silently splitting per-family audit files and rate counters. Propagators should now set `BAREGUARD_ROOT_RUN_ID` alongside `BAREGUARD_PARENT_RUN_ID`.
+- **[I2] `topup`-on-ask path now emits a terminal `phase:"gate", decision:"allow"` audit line**, matching the behavior of the normal allow path. Previously the line was omitted, leaving the audit without a terminal record for the action.
+- **[I3] Audit truncation now bounds all large action fields** (e.g. `cmd`, `path`, `content`), not just `args` and `result`. Previously a 5 KB `action.cmd` produced a line exceeding the 3 500-byte POSIX `PIPE_BUF` safety margin even with `_truncated: true` set.
+- **[I4] Rate-window predicates now count only `decision:"allow"` records.** Post-cap deny attempts previously accumulated in the window, making the 60-second ban longer than documented with every retry. Both `defer-rate` and `spawn-rate` affected.
+- **[I5] `gate.allows()` returns `false` under halt conditions** (budget exhaustion, maxTurns, terminated). Previously returned `true` because halt outcomes are `"askHuman"`, misleading catalog pre-filter callers that had no path to recovery without an out-of-band topup.
+- **[m1] Safe-default force-flag deny pattern** now catches `--force` as a standalone token in serialized action content (e.g. `git push --force origin`). The original `:force` prefix form is preserved.
+- **[m2] `fs.deny` entries use path-segment boundary matching** (`p === d || p.startsWith(d + '/')`). The previous `p.includes(d)` caused false positives: `deny: ["/etc"]` denied `/home/user/etc-backup/file`.
+- **[m3] Removed no-op leading `args` key** from `tools.denyArgPatterns` serialization (`JSON.stringify({ args: action.args, ...action })` → `JSON.stringify(action)`). The spread always overwrote the leading key; no behavioral change.
+- **[m5] `limits.turns` is now restored from the audit log on cold start** (missing/corrupt budget file). Previously `haltContext().turns` returned 0 after a crash-restart while `spent.costUsd` was correctly rebuilt.
+- **[m6] Topup loop guard changed from `> MAX_TOPUP_ITERATIONS` to `>=`** so the constant accurately reflects the maximum number of successful topups (5) rather than allowing one extra.
+- **[m7] `isPrivateIp()` now detects IPv6 private ranges:** unique local `fc00::/7`, link-local `fe80::/10`, and IPv4-mapped `::ffff:<ipv4>` addresses (the last by recursing on the embedded IPv4).
+
+### Tests
+
+- Suite grows from 48 → 60. New tests cover every fix above.
+
 ## [0.3.0] — 2026-05-01
 
 Adds `humanChannelTimeoutMs` — optional deadline so a hung escalation channel

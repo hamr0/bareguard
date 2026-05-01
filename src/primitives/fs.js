@@ -10,7 +10,7 @@ export function fsCheck(action, cfg = {}) {
 
   if (cfg.deny) {
     for (const d of cfg.deny) {
-      if (p.includes(d)) {
+      if (p === d || p.startsWith(d.endsWith('/') ? d : d + '/')) {
         return { outcome: "deny", severity: "action", rule: "fs.deny", reason: `path ${p} matches deny entry ${d}` };
       }
     }

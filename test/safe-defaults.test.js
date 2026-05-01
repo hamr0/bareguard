@@ -48,6 +48,33 @@ test("safe defaults — humanChannel approves the destructive verb", async () =>
   assert.equal(dec.rule, "humanChannel.allow");
 });
 
+test("safe defaults — DELETE FROM with WHERE clause is not hard-denied by denyPatterns (C2 regression)", async () => {
+  // The deny pattern must not fire; the ask pattern will fire (expected safe-default),
+  // so wire a permissive humanChannel to let it through.
+  const channel = async () => ({ decision: "allow", reason: "sql is fine" });
+  const gate = new Gate({ humanChannel: channel });
+  await gate.init();
+  const dec = await gate.check({ type: "bash", cmd: "psql -c 'DELETE FROM users WHERE id=42'" });
+  assert.equal(dec.outcome, "allow", "DELETE FROM ... WHERE must not be hard-denied");
+  assert.notEqual(dec.rule, "content.denyPatterns", "hard-deny rule must not fire");
+});
+
+test("safe defaults — DELETE FROM without WHERE is denied", async () => {
+  const gate = new Gate({});
+  await gate.init();
+  const dec = await gate.check({ type: "bash", cmd: "psql -c 'DELETE FROM users'" });
+  assert.equal(dec.outcome, "deny");
+  assert.equal(dec.rule, "content.denyPatterns");
+});
+
+test("safe defaults — git push --force is denied", async () => {
+  const gate = new Gate({});
+  await gate.init();
+  const dec = await gate.check({ type: "bash", cmd: "git push --force origin" });
+  assert.equal(dec.outcome, "deny");
+  assert.equal(dec.rule, "content.denyPatterns");
+});
+
 test("safe defaults — overridable with empty patterns", async () => {
   const gate = new Gate({
     content: { denyPatterns: [], askPatterns: [] },
