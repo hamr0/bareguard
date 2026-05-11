@@ -120,9 +120,124 @@ The design choices that surprise people most often. Read these before wiring it 
 
 **5. `gate.check` and `gate.record` MUST be called serially per `Gate` instance.** Multiple Gate instances (parent + child processes) run independently and concurrently fine.
 
+## Recipes
+
+Patterns the spec supports but most adopters re-derive on first contact. Lead with the foot-guns (#1, #2) — the rest are reference when you need them.
+
+### 1. Content screening on text in/out
+
+`content.{deny,ask}Patterns` match `JSON.stringify(action)` — they don't care about `action.type`. Wrap inbound user text AND outbound LLM responses as actions and they flow through the same gate.
+
+```js
+// BEFORE invoking your agent loop on a new user message:
+const d1 = await gate.check({ type: "user_input", args: { text: message }, _ctx });
+if (d1.outcome !== "allow") return refuse(d1.reason);
+
+// AFTER generate, BEFORE displaying to the user:
+const d2 = await gate.check({ type: "llm_output", args: { text: response }, _ctx });
+if (d2.outcome !== "allow") return refuse(d2.reason);
+```
+
+Both calls emit `phase: "gate"` audit lines — unified record across tool calls, user input, and model output.
+
+> bareguard does NOT classify toxicity, PII, or factuality — that's `guardrails-ai`. What you get here is YOUR `content.denyPatterns` / `askPatterns` firing on text the same way they fire on tool calls. The wrapper shape (`type: "user_input"` / `type: "llm_output"`) is yours; bareguard treats it as opaque and pattern-matches the serialization.
+
+bareguard does not auto-scan messages. If you skip these calls on inbound/outbound text, content rules never fire on user content.
+
+### 2. Multi-tenant chatbot (Gate-per-principal)
+
+One process serving many chats. **Recommended pattern: one Gate per principal**, all sharing one audit file and one budget file so cross-chat caps work.
+
+```js
+// Per-process, once at boot:
+process.env.BAREGUARD_AUDIT_PATH  ??= "/var/lib/myapp/audit.jsonl";
+process.env.BAREGUARD_BUDGET_FILE ??= "/var/lib/myapp/budget.json";
+
+// Per chat, on first message:
+function gateForChat(chatId, isOwner) {
+  return new Gate({
+    runId: chatId,
+    budget: { maxCostUsd: isOwner ? 50 : 1 },     // per-principal cap
+    humanChannel: async (event) => {
+      // event.action._ctx routes the prompt to the right user (Recipe 5)
+      return await promptUser(event.action._ctx.chatId, event);
+    },
+  });
+}
+```
+
+Each Gate attaches `_ctx` by accepting whatever the runner puts on the action — bareguard preserves it verbatim. The shared audit + budget files give you cross-chat spend visibility and family-wide rate caps for free.
+
+> **Scaling caveat:** `proper-lockfile` contention on the shared budget file scales fine to a few hundred concurrent writers. Past ~1K active principals sharing one budget file, drop shared budget and move to per-principal budgets. bareguard does not solve high-fan-out budget consensus, and won't.
+
+### 3. In-process concurrent Gates
+
+Recipe 2 implies N Gates living in the same process. This is safe: each `audit.emit` call does open+append+close, so POSIX `O_APPEND` atomicity applies the same as it does cross-process (writes < 4KB are atomic at the kernel level).
+
+```js
+// 50 Gates, one audit file — works.
+const gates = chatIds.map(id => new Gate({ runId: id, audit: { path: "/var/log/agent.jsonl" } }));
+await Promise.all(gates.map(g => g.init()));
+```
+
+`seq` is per-Gate-instance (was never global). For cross-Gate ordering use `ts`.
+
+### 4. Test idiom — fileless audit + deny-lambda humanChannel
+
+Unit tests don't want temp directories or fs mocks. Set `audit.path: null` and pass a one-line `humanChannel`.
+
+```js
+import { Gate } from "bareguard";
+
+const gate = new Gate({
+  audit: { path: null },                                  // in-memory only
+  humanChannel: async () => ({ decision: "deny" }),       // or "allow" for happy-path
+});
+await gate.init();
+
+const dec = await gate.check({ type: "fetch", url: "https://api/delete-acct" });
+assert.equal(dec.outcome, "deny");
+assert.equal(gate.audit.entries.length, 3);   // gate-askHuman + approval + gate-deny
+```
+
+`gate.audit.entries` is the in-memory replacement for `readFile` + `JSON.parse` per line. No string shorthands like `'deny-all'` — overloaded function args are a smell.
+
+### 5. Halt routing for multi-tenant
+
+Halt events (budget exhausted, maxTurns hit) need to reach the *originating* user, not whoever is logged in to the operator console. Since v0.4, `event.action` carries the action being checked (with any caller-attached `_ctx`) on halts too.
+
+```js
+humanChannel: async (event) => {
+  if (event.kind === "halt") {
+    const chatId = event.action?._ctx?.chatId;
+    // Route the halt prompt back to the right chat — not the operator.
+    return await promptChat(chatId, `Budget exhausted. Top up?`);
+  }
+  // ...ask events
+}
+```
+
+This presumes the Gate-per-principal model from Recipe 2 — `lastAction` from the same Gate is always the same principal. In the (unsupported) one-Gate-many-principals shape, `event.action` is whatever fired most recently and routing is undefined.
+
+### 6. Log rotation
+
+bareguard does not rotate the audit log — that's `logrotate`'s job. bareguard opens the audit file fresh on every `emit` (open+append+close), so `copytruncate` is the right mode:
+
+```
+# /etc/logrotate.d/bareguard
+/var/log/bareguard/*.jsonl {
+    daily
+    rotate 30
+    compress
+    missingok
+    notifempty
+    copytruncate
+}
+```
+
 ## Tested against
 
-46 tests pass on the CI matrix: **Linux + macOS + Windows × Node 20 + 22**. Real subprocesses verify shared-budget contention under `proper-lockfile`, halt-cascade across processes, single-audit-file atomicity (3 concurrent writers, no torn lines), `parent_run_id` / `spawn_depth` stitching across a 3-deep tree, and `maxChildren` / `maxDepth` enforcement.
+71 tests pass on the CI matrix: **Linux + macOS + Windows × Node 20 + 22**. Real subprocesses verify shared-budget contention under `proper-lockfile`, halt-cascade across processes, single-audit-file atomicity (3 concurrent writers, no torn lines), `parent_run_id` / `spawn_depth` stitching across a 3-deep tree, and `maxChildren` / `maxDepth` enforcement.
 
 ## The bare ecosystem
 

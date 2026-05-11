@@ -4,6 +4,24 @@ All notable changes to bareguard are documented here. Format: [Keep a Changelog]
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-05-11
+
+Multis-driven adoption release: three small primitives that surfaced as blockers when wiring bareguard into a multi-tenant chatbot. No API breakage; one contract clarification on halt events.
+
+### Added
+
+- **`audit.path: null` — fileless in-memory audit mode** for tests. Set explicitly to `null` (not `undefined`) to disable fs writes; `gate.audit.entries` collects parsed line objects for assertions. Distinct from omitting `audit.path`, which still falls through to env / XDG default. Use with `humanChannel: async () => ({ decision: "deny" })` as the documented test idiom — no magic-string shorthands. Recipe 4 in the README.
+- **`budget.strict: true` — pre-flight halt via trailing-average projection.** Per-instance rolling buffer of last 5 record costs. With ≥3 samples, halts on the next `gate.check` when `spent + last5Avg > cap` (per dimension, `costUsd` and `tokens` symmetric). Rule names unchanged (`budget.maxCostUsd` / `budget.maxTokens`); reason string distinct (`strict: spent X + est Y > cap Z`). Cold-start with <3 samples falls back to soft semantics. Default `false` — no behavior change for existing adopters. PRD §13.1.
+- **README Recipes section** (6 entries): content screening on inbound/outbound text, multi-tenant Gate-per-principal with shared budget/audit, in-process concurrent Gates, test idiom (fileless + deny-lambda), halt routing via `event.action._ctx`, log rotation via `logrotate copytruncate`.
+
+### Changed
+
+- **`event.action` is now ALWAYS the action being checked** — including for halt events (`event.kind === "halt"`). Previously `event.action = null` for halts, which blocked multi-tenant adopters from routing halt prompts back to the originating principal. The cap was already exhausted on entry — this specific action didn't by itself trip it — but it is the action whose evaluation surfaced the halt and carries any caller-attached routing context (e.g. `action._ctx.chatId`). Halt audit lines (`phase: "halt"`) remain action-less by design — they're the operator grep target. **Non-breaking** for the documented usage (`event.kind === "halt"` as the halt discriminator). **Migration note:** if your `humanChannel` used `event.action == null` as a halt sentinel, switch to `event.kind === "halt"` — `event.action` is now non-null on the halt branch. PRD §10.1.
+
+### Tests
+
+- Suite grows 60 → 71. New tests in `test/v04-features.test.js` cover halt-event action contract (including the halt audit line staying action-less), fileless audit collecting entries + readAll, strict budget pre-flight halt + cold-start fallback + token dimension + topup re-evaluation, and `BAREGUARD_AUDIT_PATH` env-var precedence when `audit.path` is undefined.
+
 ## [0.3.1] — 2026-05-01
 
 Bug-fix patch. No API changes.

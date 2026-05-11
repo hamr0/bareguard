@@ -25,12 +25,19 @@ export class Audit {
     this.parentRunId = parentRunId ?? null;
     this.spawnDepth = spawnDepth ?? 0;
     this.rootRunId = rootRunId ?? runId;
-    this.filePath = filePath ?? defaultAuditPath(this.rootRunId);
+    // filePath === null  → fileless in-memory mode (B4, v0.4).
+    // filePath undefined → use XDG / home / cwd default.
+    this.filePath = filePath === null
+      ? null
+      : (filePath ?? defaultAuditPath(this.rootRunId));
+    this.fileless = this.filePath === null;
+    this.entries = [];                 // populated only in fileless mode
     this.seq = 0;
     this._clock = clock ?? (() => Date.now());
   }
 
   async init() {
+    if (this.fileless) return;
     await fsp.mkdir(path.dirname(this.filePath), { recursive: true });
     // touch the file so subsequent appends always have a target
     const fh = await fsp.open(this.filePath, "a");
@@ -46,6 +53,12 @@ export class Audit {
       spawn_depth: this.spawnDepth,
       ...fields,
     };
+    if (this.fileless) {
+      // No PIPE_BUF concern in-memory; skip truncation. Tests assert on
+      // entries verbatim — keep them intact.
+      this.entries.push(line);
+      return;
+    }
     let serialized = JSON.stringify(line) + "\n";
     if (Buffer.byteLength(serialized, "utf8") > MAX_LINE_BYTES) {
       // Truncate all large action fields and result strings to keep the line
@@ -91,6 +104,11 @@ export class Audit {
   }
 
   async readAll() {
+    // Fileless: shallow copy of the entries array (line objects shared
+    // by reference). Fileless mode is test-only per PRD §12 — tests
+    // should treat entries as read-only; mutating nested fields would
+    // corrupt the live in-memory log.
+    if (this.fileless) return this.entries.slice();
     try {
       const buf = await fsp.readFile(this.filePath, "utf8");
       return buf.split("\n").filter(Boolean).map(l => JSON.parse(l));

@@ -1,12 +1,12 @@
 # bareguard — Product Requirements Document (PRD)
 
-**Status:** v0.6 (unified — folds v0.5 amendments + v0.1.1 review fixes inline)
+**Status:** v0.7 (v0.4 release — multis-driven adoption tweaks: halt-event action contract, fileless audit, strict budget)
 **Owner:** hamr0
-**Last updated:** 2026-04-30
+**Last updated:** 2026-05-11
 **Language:** Node.js (JavaScript), ESM, target Node 20 LTS+
 **Sibling spec:** `bareagent-prd.md`
-**Implementation status:** v0.1.1 published to npm, tests green on Linux/macOS/Windows × Node 20/22
-**Supersedes:** v0.1 (Python draft), v0.2 (orchestration), v0.3 (mid-MCP), v0.4 (post-MCP), v0.5 amendments doc
+**Implementation status:** v0.4.0 — tests green on Linux/macOS/Windows × Node 20/22
+**Supersedes:** v0.1 (Python draft), v0.2 (orchestration), v0.3 (mid-MCP), v0.4 (post-MCP), v0.5 amendments doc, v0.6 unified
 
 > **For future Claude (implementation note):** This document is the single
 > source of truth for bareguard's design. §3/§4 say what bareguard IS / IS
@@ -374,6 +374,8 @@ If `humanChannel` is **not registered** and an ask/halt fires:
 
 **Optional `humanChannelTimeoutMs`** (default: unset = wait forever). When set on the Gate config, bareguard races the `humanChannel` promise against a timer. If the timer wins, gate.check resolves to `{ outcome: "deny", severity: "halt", rule: <originalRule>, reason: "humanChannel timeout after Xms" }` and emits a `phase: "approval"` audit line carrying the timeout reason. The timeout always denies — there is no allow-on-timeout default. Callers wanting allow-on-timeout (e.g. autonomous fleets where one stuck branch shouldn't pin a worker) must implement that policy inside their own `humanChannel`, so the choice is explicit in user code, not a bareguard default. The pending channel promise is not cancelled; if it later resolves, the result is dropped (the agent will re-prompt on the next gate.check).
 
+**`event.action` is ALWAYS the action being checked (v0.4 contract).** For ask events this is the action that fired the askPattern / approval rule. For halt events the cap was already exhausted on entry — this specific action did not by itself trip it — but it is the action whose evaluation surfaced the halt, and the right hook for caller-attached routing context (e.g. `action._ctx` in multi-tenant adopters that need to route halt prompts back to the originating principal). bareguard treats `action` as opaque pass-through; whatever the caller attaches survives verbatim into `event.action` and into audit `phase: "gate" | "record"` lines. The dedicated `phase: "halt"` audit line remains action-less by design (operator grep target with `dimension / spent / cap / rule / awaiting`).
+
 ### 10.2 `gate.allows(action)` — the catalog pre-filter
 
 Pure query, no audit write, no budget delta, no humanChannel call. Used by
@@ -495,6 +497,13 @@ Children inherit via env var `BAREGUARD_AUDIT_PATH` set by the parent.
 **Output sink:** file path OR callback function. Nothing else. (Datadog,
 Loki, S3 are caller-side adapters.)
 
+**Fileless mode (v0.4, test-only):** setting `audit.path: null` explicitly
+puts the Audit instance in in-memory mode. `emit` pushes parsed line
+objects onto `gate.audit.entries`; no fs writes, no PIPE_BUF truncation.
+`audit.readAll()` returns the in-memory entries. Intended for unit tests
+that want to assert on the audit stream without stubbing fs. Distinct
+from `audit.path: undefined` which falls through to env var / XDG default.
+
 ## 13. Shared budget across processes
 
 When a parent spawns a child and both should draw from the same budget
@@ -541,6 +550,39 @@ Caps are soft by design.
 
 Children inherit the path via env var `BAREGUARD_BUDGET_FILE`, set by the
 parent's `spawn` tool.
+
+### 13.1 Strict mode (v0.4, opt-in)
+
+Default budget behavior is soft per §13: caps are tripped on the first
+check AFTER `spent >= cap`. The previous action's spend is the slack —
+unavoidable when cost is only known post-execute.
+
+`budget.strict: true` adds a pre-flight projection. The Budget instance
+maintains a rolling buffer of the last 5 `record.result.{costUsd,tokens}`.
+On every `gate.check` (PRE-EVAL halt phase), if the buffer has **≥3
+samples**, bareguard halts when:
+
+```
+spent + last5Avg > cap
+```
+
+per dimension. The halt fires BEFORE the action executes, eliminating
+the soft-cap slack at the cost of one "false halt" worth of variance
+(when an unusually cheap action would have fit but the average wouldn't).
+
+- Rule name unchanged: `budget.maxCostUsd` / `budget.maxTokens` (so
+  existing humanChannel routing keeps working).
+- Reason string is distinct: `strict: spent $X + est $Y > cap $Z`.
+- Cold start: <3 samples → behaves as soft (no projection halt).
+- `humanChannel` `topup` re-evaluates as usual; once `cap > spent + avg`,
+  the next check passes.
+- **Per-instance, local-only.** The buffer is in-memory on each Gate.
+  In shared-file multi-process setups, each Budget sees only its own
+  deltas. Strict's intended use is tight-cap single-agent loops with
+  variable per-turn cost, not cross-process consensus.
+
+`budget.strict` defaults to `false`; existing adopters see no behavior
+change.
 
 ## 14. Spawn and defer guards
 
@@ -872,6 +914,28 @@ re-litigated unless the user explicitly asks.
   fires. Behavior unchanged (still denies with severity:halt).
 - **`Gate.fromConfig` removed.** `new Gate(config)` is the only canonical
   constructor.
+
+### v0.4 additions (multis-driven adoption tweaks)
+
+- **Halt events carry `event.action`.** v0.1's `event.action = null for halt`
+  was a design choice that turned out to block multi-tenant halt routing.
+  At halt time we DO know the action being checked; passing it through
+  is cleaner than the alternative (instance-state `lastAction`) and works
+  for any Gate shape. Halt audit lines (`phase: "halt"`) remain action-
+  less — they're the operator grep target, not the routing hook.
+- **Fileless audit (`audit.path: null`).** Opt-in in-memory entries for
+  tests. Explicit null (not undefined) — undefined still falls through
+  to env / default. `humanChannel: async () => ({decision: "deny"})` is
+  the documented test idiom; rejected magic-string shorthands like
+  `'deny-all'` (overloaded function args are a smell).
+- **Strict budget (`budget.strict: true`).** Per-dimension trailing-avg
+  pre-flight halt. Requires ≥3 samples; defaults off. Per-instance
+  buffer; not shared across processes.
+- **Recipes section added to README.** Multi-tenant Gate-per-principal,
+  content screening on inbound + outbound text, in-process concurrent
+  Gates, fileless test idiom, halt routing via `event.action._ctx`,
+  log rotation via `logrotate`. Each is a usage pattern the spec
+  already supports — making them discoverable is the v0.4 ask.
 
 ### v0.2 additions (defer-rate + spawn-rate)
 

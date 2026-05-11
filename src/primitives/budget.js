@@ -22,6 +22,9 @@ export class BudgetUnavailableError extends Error {
   }
 }
 
+const STRICT_BUF_SIZE = 5;
+const STRICT_MIN_SAMPLES = 3;
+
 export class Budget {
   constructor(cfg = {}) {
     this.capUsd = cfg.maxCostUsd ?? Infinity;
@@ -30,6 +33,13 @@ export class Budget {
     this.spentUsd = 0;
     this.spentTokens = 0;
     this.startedAt = new Date().toISOString();
+    // Strict mode (v0.4, PRD §13.1): pre-flight halt when
+    // spent + trailing-avg projection would exceed the cap. Opt-in.
+    // Rolling buffers are per-instance and local-only — in shared-file
+    // multi-process setups each Budget sees only its own deltas.
+    this.strict = cfg.strict ?? false;
+    this._costBuf = [];
+    this._tokenBuf = [];
   }
 
   async init({ rebuildFromAudit } = {}) {
@@ -99,6 +109,7 @@ export class Budget {
   // synchronous decision check using the local cache (no file I/O).
   // Refresh policy is the gate's job — it calls refresh() on lock acquisition / post-record.
   check() {
+    // 1. Post-fact halt: already at or over cap.
     if (this.spentUsd >= this.capUsd) {
       return {
         outcome: "askHuman", severity: "halt", rule: "budget.maxCostUsd",
@@ -111,7 +122,41 @@ export class Budget {
         reason: `spent ${this.spentTokens} tokens >= cap ${this.capTokens}`,
       };
     }
+    // 2. Strict pre-flight: project next action via trailing avg; halt if
+    // projection would exceed cap. Requires ≥3 samples to avoid cold-start
+    // false halts. Per-dimension; runs after post-fact so reason strings
+    // stay distinct.
+    if (this.strict) {
+      if (this._costBuf.length >= STRICT_MIN_SAMPLES) {
+        const avg = this._costBuf.reduce((a, b) => a + b, 0) / this._costBuf.length;
+        if (this.spentUsd + avg > this.capUsd) {
+          return {
+            outcome: "askHuman", severity: "halt", rule: "budget.maxCostUsd",
+            reason: `strict: spent $${this.spentUsd.toFixed(4)} + est $${avg.toFixed(4)} > cap $${this.capUsd.toFixed(2)}`,
+          };
+        }
+      }
+      if (this._tokenBuf.length >= STRICT_MIN_SAMPLES) {
+        const avg = this._tokenBuf.reduce((a, b) => a + b, 0) / this._tokenBuf.length;
+        if (this.spentTokens + avg > this.capTokens) {
+          return {
+            outcome: "askHuman", severity: "halt", rule: "budget.maxTokens",
+            reason: `strict: spent ${this.spentTokens} + est ${avg.toFixed(0)} > cap ${this.capTokens}`,
+          };
+        }
+      }
+    }
     return null;
+  }
+
+  _pushBuf(dUsd, dTok) {
+    if (!this.strict) return;
+    // Per-dimension: only push real spend so the projection reflects actual
+    // cost behaviour. Zero-delta records (e.g. free tools, defer emits)
+    // would otherwise drag the trailing avg below the agent's real cost
+    // profile and delay strict halts past the documented semantics.
+    if (dUsd > 0) { this._costBuf.push(dUsd);  if (this._costBuf.length  > STRICT_BUF_SIZE) this._costBuf.shift(); }
+    if (dTok > 0) { this._tokenBuf.push(dTok); if (this._tokenBuf.length > STRICT_BUF_SIZE) this._tokenBuf.shift(); }
   }
 
   async refresh() {
@@ -135,6 +180,7 @@ export class Budget {
   async record(result) {
     const dUsd = result?.costUsd ?? 0;
     const dTok = result?.tokens ?? 0;
+    this._pushBuf(dUsd, dTok);
     if (dUsd === 0 && dTok === 0 && !this.sharedFile) {
       return; // nothing to do
     }

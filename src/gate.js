@@ -49,7 +49,12 @@ export class Gate {
     this.spawnDepth = config.spawnDepth ?? +(process.env.BAREGUARD_SPAWN_DEPTH ?? 0);
     this.rootRunId = config.rootRunId ?? process.env.BAREGUARD_ROOT_RUN_ID ?? this.parentRunId ?? this.runId;
 
-    const auditPath = config.audit?.path ?? process.env.BAREGUARD_AUDIT_PATH ?? defaultAuditPath(this.rootRunId);
+    // audit.path: null is an explicit opt-in to fileless in-memory mode
+    // (B4, v0.4). Use `audit.path === undefined`-style fall-through to env
+    // / default; only an explicit `null` triggers fileless.
+    const auditPath = (config.audit && "path" in config.audit)
+      ? config.audit.path
+      : (process.env.BAREGUARD_AUDIT_PATH ?? defaultAuditPath(this.rootRunId));
     this._clock = config._clock ?? (() => Date.now());
     this.audit = new Audit({
       filePath: auditPath, runId: this.runId,
@@ -148,7 +153,11 @@ export class Gate {
   }
 
   _rateCtx() {
-    return { auditPath: this.audit.filePath, now: this._clock() };
+    return {
+      auditPath: this.audit.filePath,
+      entries: this.audit.fileless ? this.audit.entries : null,
+      now: this._clock(),
+    };
   }
 
   redact(action) {
@@ -230,9 +239,13 @@ export class Gate {
         return denial;
       }
 
+      // event.action is ALWAYS the action being checked (v0.4). For halt
+      // events the cap was already exhausted on entry — this action didn't
+      // by itself trip it — but it is the right hook for caller-attached
+      // routing context (e.g. action._ctx in multi-tenant adopters).
       const event = {
         kind: decision.severity === "halt" ? "halt" : "ask",
-        action: decision.severity === "halt" ? null : action,
+        action,
         severity: decision.severity,
         rule: decision.rule,
         reason: decision.reason,

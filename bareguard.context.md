@@ -1,9 +1,9 @@
 # bareguard — Integration Guide
 
 > For AI assistants and developers wiring bareguard into a project.
-> v0.2.0 | Node.js >= 20 | 1 production dep (`proper-lockfile`) | Apache-2.0
+> v0.4.0 | Node.js >= 20 | 1 production dep (`proper-lockfile`) | Apache-2.0
 >
-> Full design spec: [`docs/01-product/bareguard-prd.md`](docs/01-product/bareguard-prd.md) — unified PRD (v0.6, folds prior v0.5 amendments + v0.1.1 review fixes inline).
+> Full design spec: [`docs/01-product/bareguard-prd.md`](docs/01-product/bareguard-prd.md) — unified PRD (v0.7).
 
 ## What this is
 
@@ -39,6 +39,9 @@ One entry point:
 | One-shot wrapper: check + execute + record | `await gate.run(action, executor)` |
 | Stop the run cleanly with a paper trail | `await gate.terminate(reason)` |
 | Get deterministic stats at halt time | `await gate.haltContext()` — spend, turns, rate over audit log |
+| Run tests without temp files | `audit: { path: null }` — in-memory `gate.audit.entries` (v0.4) |
+| Halt BEFORE overspend (not after) | `budget: { strict: true }` — pre-flight halt via trailing-avg projection (v0.4, opt-in) |
+| Route halt prompts in multi-tenant | `event.action._ctx` is preserved verbatim on halt events (v0.4) |
 
 **Most projects start with `Gate({ tools, budget, limits, humanChannel })`.** Add primitives as needed.
 
@@ -80,7 +83,12 @@ const gate = new Gate({
   // ...
   humanChannel: async (event) => {
     // event.kind:    "ask" | "halt"
-    // event.action:  redacted action (null when kind === "halt")
+    // event.action:  the action being checked (ALWAYS present in v0.4+; for
+    //                halts, the cap was already exhausted on entry — this
+    //                action didn't trip it, but it carries any caller-attached
+    //                routing context like action._ctx.chatId).
+    //                Use event.kind === "halt" as the discriminator, NOT
+    //                event.action == null.
     // event.severity: "action" | "halt"
     // event.rule:    e.g., "content.askPatterns" | "budget.maxCostUsd"
     // event.reason:  human-readable
@@ -514,7 +522,7 @@ const dec = await gate.check({ type: "defer", args: { action, when: "1h" } });
 
 ## See also
 
-- [`docs/01-product/bareguard-prd.md`](docs/01-product/bareguard-prd.md) — unified PRD (v0.6).
+- [`docs/01-product/bareguard-prd.md`](docs/01-product/bareguard-prd.md) — unified PRD (v0.7).
 - [`docs/non-roadmap.md`](docs/non-roadmap.md) — the NO-GO list.
 - [`docs/decisions-log.md`](docs/decisions-log.md) — decisions resolved across versions.
 - [`CHANGELOG.md`](CHANGELOG.md) — release-by-release diff.
