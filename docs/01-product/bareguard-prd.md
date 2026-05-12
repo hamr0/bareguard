@@ -152,11 +152,11 @@ halt-vs-action distinction).
 
 | #  | Primitive            | Severity | What it checks                                                                                                          |
 | -- | -------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------- |
-| 1  | **bash**             | action   | Command allowlist / denyPatterns when `action.type === "bash"`.                                                         |
+| 1  | **bash**             | action   | Command allowlist / denyPatterns when `action.type === "bash"`. Reads `action.cmd`, falling back to `action.args.cmd` / `action.args.command` so wireGate-style `{type, args, _ctx}` adapters compose without translation. |
 | 2  | **budget**           | **halt** | Tokens, cost USD, request count, with hard kill. Shared across sibling processes via backing file + `proper-lockfile`.  |
-| 3  | **fs**               | action   | Write/read scope; deny paths (`~/.ssh`, `/etc/passwd`, `..`).                                                            |
-| 4  | **net**              | action   | Egress domain allowlist; deny private IP ranges.                                                                        |
-| 5  | **limits**           | mixed    | `maxTurns` (**halt**), `maxChildren` (action), `maxDepth` (action), `timeoutSeconds` (**halt**, v0.2).                  |
+| 3  | **fs**               | action   | Write/read scope; deny paths (`~/.ssh`, `/etc/passwd`, `..`). Reads `action.path` / `action.args.path`.                  |
+| 4  | **net**              | action   | Egress domain allowlist; deny private IP ranges. Reads `action.url` / `action.args.url`.                                |
+| 5  | **limits**           | mixed    | `maxTurns` (**halt**), `maxChildren` (action), `maxDepth` (action), `timeoutSeconds` (**halt**, v0.2). `maxTurns` ticks on every `gate.record` — LLM AND tool records. Set `maxTurns = rounds * records_per_round`. |
 | 6  | **approval**         | n/a      | Routes ask events to the runner's `humanChannel` callback. No callback storage in v0.6.                                  |
 | 7  | **tools**            | action   | Tool name allowlist / denylist (glob-matched) + per-tool `denyArgPatterns` (regex over args). Allowlist is **scope-only** — does NOT silence asks. |
 | 8  | **secrets**          | n/a      | Pre-eval action redaction. Env-var matches → `[REDACTED:VAR_NAME]`. Pattern matches → `[REDACTED:pattern=<short prefix>...]`. Caller redacts results. |

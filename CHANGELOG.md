@@ -4,6 +4,22 @@ All notable changes to bareguard are documented here. Format: [Keep a Changelog]
 
 ## [Unreleased]
 
+## [0.4.1] — 2026-05-12
+
+Adopter-feedback patch from multis (first external integrator). One seam fix, one doc clarification. No API additions, no breakage.
+
+### Fixed
+
+- **`bash` / `fs` / `net` primitives now also accept nested `action.args` shape.** wireGate-style adapters that pass `{type, args, _ctx}` (the natural MCP convention used by bareagent's policy hook) previously hit a seam: bareguard's primitives read top-level `action.cmd` / `action.path` / `action.url`, leaving `bash.allow` to silently deny everything because `action.cmd` was `undefined`. Every adopter wrote the same `translateAction()` middleware to hoist fields. Fixed by adding fallback reads: `bash` checks `action.cmd ?? action.args?.cmd ?? action.args?.command`; `fs` checks `action.path ?? action.args?.path`; `net` checks `action.url ?? action.args?.url`. Flat shape is still authoritative when both are present (regression-tested).
+
+### Documented (no code change)
+
+- **`limits.maxTurns` ticks on every `gate.record` — LLM AND tool records.** Counted from the per-Gate `limits.turns` counter, which `gate.record()` increments unconditionally. If your loop records one LLM call AND one tool call per "round", one round consumes two turns. Convert via `maxTurns = rounds * records_per_round`. README "Common gotchas" #6 + PRD §8 row 5. Surfaced by multis after their `max_tool_rounds=N` mental model produced halts at half the expected work.
+
+### Tests
+
+- Suite grows 71 → 82. New `test/v041-action-shape.test.js` covers nested-shape acceptance + flat-shape regression for all three primitives (bash with both `cmd` and `command` spellings; fs scope + deny; net allow + private-IP deny).
+
 ## [0.4.0] — 2026-05-11
 
 Multis-driven adoption release: three small primitives that surfaced as blockers when wiring bareguard into a multi-tenant chatbot. No API breakage; one contract clarification on halt events.

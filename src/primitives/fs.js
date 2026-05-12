@@ -3,9 +3,12 @@
 
 const FS_TYPES = new Set(["read", "write", "edit"]);
 
+// Accepts either flat (action.path) or nested (action.args.path) shapes so
+// wireGate-style {type, args, _ctx} adapters compose without a translation
+// layer. (v0.4.1, multis seam fix.)
 export function fsCheck(action, cfg = {}) {
   if (!FS_TYPES.has(action.type)) return null;
-  const p = action.path;
+  const p = action.path ?? action.args?.path;
   if (typeof p !== "string") return null;
 
   if (cfg.deny) {

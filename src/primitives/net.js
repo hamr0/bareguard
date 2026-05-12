@@ -24,9 +24,12 @@ function isPrivateIp(host) {
   return false;
 }
 
+// Accepts either flat (action.url) or nested (action.args.url) shapes so
+// wireGate-style {type, args, _ctx} adapters compose without a translation
+// layer. (v0.4.1, multis seam fix.)
 export function netCheck(action, cfg = {}) {
   if (action.type !== "fetch") return null;
-  const url = action.url;
+  const url = action.url ?? action.args?.url;
   if (typeof url !== "string") return null;
 
   let host;
