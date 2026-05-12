@@ -79,6 +79,7 @@ export class Gate {
       rebuildFromAudit: async () => {
         const rebuilt = await this._rebuildBudgetFromAudit();
         this.limits.turns = rebuilt.turns;
+        this.limits.toolRounds = rebuilt.toolRounds;
         return rebuilt;
       },
     });
@@ -87,19 +88,20 @@ export class Gate {
 
   async _rebuildBudgetFromAudit() {
     const lines = await this.audit.readAll();
-    let spentUsd = 0, spentTokens = 0, capUsd = null, capTokens = null, turns = 0;
+    let spentUsd = 0, spentTokens = 0, capUsd = null, capTokens = null, turns = 0, toolRounds = 0;
     for (const l of lines) {
       if (l.phase === "record" && l.result) {
         spentUsd    += l.result.costUsd ?? 0;
         spentTokens += l.result.tokens  ?? 0;
         turns++;
+        if (l.action && l.action.type !== "llm") toolRounds++;
       }
       if (l.phase === "topup") {
         if (l.dimension === "costUsd") capUsd    = l.newCap;
         if (l.dimension === "tokens")  capTokens = l.newCap;
       }
     }
-    return { spentUsd, spentTokens, capUsd, capTokens, turns };
+    return { spentUsd, spentTokens, capUsd, capTokens, turns, toolRounds };
   }
 
   // PRE-EVAL: cross-cutting halt checks (budget exhaustion, maxTurns, terminated).
@@ -363,7 +365,7 @@ export class Gate {
 
   async record(action, result) {
     if (!this._initialized) await this.init();
-    this.limits.tick();
+    this.limits.tick(action);
     if (action?.type === "spawn") this.limits.noteSpawn();
     await this.budget.record(result);
     await this.audit.emit({
@@ -430,18 +432,20 @@ export class Gate {
   _haltDimension(rule) {
     if (rule === "budget.maxCostUsd") return "costUsd";
     if (rule === "budget.maxTokens")  return "tokens";
-    return null; // limits.maxTurns has no raiseable budget dimension
+    return null; // limits.maxTurns / maxToolRounds have no raiseable budget dimension
   }
   _haltSpent(rule) {
-    if (rule === "budget.maxCostUsd") return this.budget.spentUsd;
-    if (rule === "budget.maxTokens")  return this.budget.spentTokens;
-    if (rule === "limits.maxTurns")   return this.limits.turns;
+    if (rule === "budget.maxCostUsd")     return this.budget.spentUsd;
+    if (rule === "budget.maxTokens")      return this.budget.spentTokens;
+    if (rule === "limits.maxTurns")       return this.limits.turns;
+    if (rule === "limits.maxToolRounds")  return this.limits.toolRounds;
     return null;
   }
   _haltCap(rule) {
-    if (rule === "budget.maxCostUsd") return this.budget.capUsd;
-    if (rule === "budget.maxTokens")  return this.budget.capTokens;
-    if (rule === "limits.maxTurns")   return this.limits.maxTurns;
+    if (rule === "budget.maxCostUsd")     return this.budget.capUsd;
+    if (rule === "budget.maxTokens")      return this.budget.capTokens;
+    if (rule === "limits.maxTurns")       return this.limits.maxTurns;
+    if (rule === "limits.maxToolRounds")  return this.limits.maxToolRounds;
     return null;
   }
 }

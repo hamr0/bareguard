@@ -4,6 +4,23 @@ All notable changes to bareguard are documented here. Format: [Keep a Changelog]
 
 ## [Unreleased]
 
+## [0.4.2] — 2026-05-12
+
+Follow-up to 0.4.1 after bareagent confirmed multis' two seam reports were bareguard's call. Adds the clean semantic for "tool-calling rounds" so adopters stop reaching for the `maxTurns * 2` workaround.
+
+### Added
+
+- **`limits.maxToolRounds: N`** — sibling halt counter that ticks only on `gate.record` calls whose `action.type !== "llm"`. Pairs naturally with bareagent's split `onLlmResult` (records `{type:"llm"}`) and `onToolResult` (records the tool's action). Halt severity, rule `limits.maxToolRounds`, default `Infinity` (opt-in). Rebuilt from audit on cold start alongside `maxTurns`. Reason string: `toolRounds X >= max Y`. Both adopters who hit bareguard so far (multis, bareagent) independently surfaced this — adding the primitive eliminates the per-round-record-ratio mental math (`maxTurns: rounds * 2`).
+- **README Recipe 6: bareagent wireGate integration** — copy-pasteable wiring showing `actionTranslator` + `onLlmResult` / `onToolResult` + `maxToolRounds: N` as the canonical pattern. Replaces the previous `Loop({ maxRounds: N })` idiom (now removed from bareagent's API).
+
+### Changed
+
+- `Limits.tick()` now accepts the action being recorded (was no-arg). Internal change — only `gate.js`'s `record()` calls it. Public API unchanged.
+
+### Tests
+
+- Suite 82 → 88. New `test/v042-max-tool-rounds.test.js` covers: halt after N non-llm records, llm records do NOT tick the counter, mixed llm+tool record interleaving, default Infinity opt-in, halt routes through humanChannel, cold-start rebuild from audit.
+
 ## [0.4.1] — 2026-05-12
 
 Adopter-feedback patch from multis (first external integrator). One seam fix, one doc clarification. No API additions, no breakage.

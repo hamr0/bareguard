@@ -120,7 +120,7 @@ The design choices that surprise people most often. Read these before wiring it 
 
 **5. `gate.check` and `gate.record` MUST be called serially per `Gate` instance.** Multiple Gate instances (parent + child processes) run independently and concurrently fine.
 
-**6. `limits.maxTurns` ticks on every `gate.record` — LLM AND tool records.** If your loop records one LLM call and one tool call per round, one "round" consumes two turns. To convert from a "tool-calling-rounds" budget set `maxTurns: rounds * 2` (or whatever your record-per-round ratio is). Document the convention you adopt; future-you will forget.
+**6. `limits.maxTurns` ticks on every `gate.record` — LLM AND tool records.** If your loop records one LLM call and one tool call per round, one "round" consumes two turns. For a "tool-calling-rounds" budget the cleaner option is **`limits.maxToolRounds: N`** (v0.4.2) — sibling halt counter that ticks only on records whose `action.type !== "llm"`. Either pattern works; pick one and document it. (For a record-per-round ratio other than 1:1, stick with `maxTurns = rounds * ratio`.)
 
 **7. bash / fs / net primitives accept either flat or nested action shape.** `{type: "bash", cmd: "..."}` and `{type: "bash", args: {cmd: "..."}}` (or `args.command`) both work. Same for `{type: "read", path: "..."}` vs `{type: "read", args: {path: "..."}}` and `fetch` / `url`. Lets adapters that pass MCP-style `{type, args, _ctx}` compose without a translation layer. (v0.4.1.)
 
@@ -223,7 +223,38 @@ humanChannel: async (event) => {
 
 This presumes the Gate-per-principal model from Recipe 2 — `lastAction` from the same Gate is always the same principal. In the (unsupported) one-Gate-many-principals shape, `event.action` is whatever fired most recently and routing is undefined.
 
-### 6. Log rotation
+### 6. bareagent wireGate integration
+
+`bareagent`'s `wireGate(gate, ...)` hooks up the gate to its Loop. The pieces you wire:
+
+```js
+const { HaltError, wireGate, defaultActionTranslator } = require("bare-agent");
+const { Gate }                                          = require("bareguard");
+
+const gate = new Gate({
+  // Cleaner than maxTurns: rounds * 2 — counts only non-"llm" records (v0.4.2):
+  limits: { maxToolRounds: 30 },
+  bash:   { allow: ["git", "ls"] },
+  fs:     { readScope: ["/tmp"], writeScope: ["/tmp"] },
+  humanChannel: yourHumanChannel,
+});
+await gate.init();
+
+const { policy, onLlmResult, onToolResult, filterTools } = wireGate(gate, {
+  actionTranslator: (toolName, args, ctx) => {
+    if (toolName === "shell_exec") return { type: "bash", cmd: args.command, _ctx: ctx };
+    if (toolName === "shell_read") return { type: "read", path: args.path,    _ctx: ctx };
+    return defaultActionTranslator(toolName, args, ctx);
+  },
+});
+
+new Loop({ provider, policy, onLlmResult, onToolResult });
+// Do NOT pass Loop({ maxRounds: N }) — bind via the Gate's maxToolRounds instead.
+```
+
+The `actionTranslator` maps tool names to bareguard's canonical action shape (`bash`/`read`/`write`/`fetch`) so the matching primitives fire. With v0.4.1+, you can leave `args` nested — bareguard reads `action.cmd ?? action.args.cmd`, `action.path ?? action.args.path`, `action.url ?? action.args.url`. `onLlmResult` records LLM cost as `{type:"llm"}`, which is what `maxToolRounds` excludes.
+
+### 7. Log rotation
 
 bareguard does not rotate the audit log — that's `logrotate`'s job. bareguard opens the audit file fresh on every `emit` (open+append+close), so `copytruncate` is the right mode:
 
@@ -241,7 +272,7 @@ bareguard does not rotate the audit log — that's `logrotate`'s job. bareguard 
 
 ## Tested against
 
-82 tests pass on the CI matrix: **Linux + macOS + Windows × Node 20 + 22**. Real subprocesses verify shared-budget contention under `proper-lockfile`, halt-cascade across processes, single-audit-file atomicity (3 concurrent writers, no torn lines), `parent_run_id` / `spawn_depth` stitching across a 3-deep tree, and `maxChildren` / `maxDepth` enforcement.
+88 tests pass on the CI matrix: **Linux + macOS + Windows × Node 20 + 22**. Real subprocesses verify shared-budget contention under `proper-lockfile`, halt-cascade across processes, single-audit-file atomicity (3 concurrent writers, no torn lines), `parent_run_id` / `spawn_depth` stitching across a 3-deep tree, and `maxChildren` / `maxDepth` enforcement.
 
 ## The bare ecosystem
 

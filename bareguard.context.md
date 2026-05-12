@@ -1,7 +1,7 @@
 # bareguard — Integration Guide
 
 > For AI assistants and developers wiring bareguard into a project.
-> v0.4.1 | Node.js >= 20 | 1 production dep (`proper-lockfile`) | Apache-2.0
+> v0.4.2 | Node.js >= 20 | 1 production dep (`proper-lockfile`) | Apache-2.0
 >
 > Full design spec: [`docs/01-product/bareguard-prd.md`](docs/01-product/bareguard-prd.md) — unified PRD (v0.7).
 
@@ -320,7 +320,7 @@ These are deliberately NOT in bareguard. Don't look for them — build them or u
 9. **Children inherit the audit file via env, not config.** Set `BAREGUARD_AUDIT_PATH` (and `BAREGUARD_BUDGET_FILE`, `BAREGUARD_PARENT_RUN_ID`, `BAREGUARD_SPAWN_DEPTH`) when spawning. The child's `new Gate({})` picks them up automatically.
 10. **`gate.terminate()` is sticky.** Once called, every subsequent `gate.check` returns deny+halt with `rule: "gate.terminated"`. Your runner's loop should exit cleanly on this rule.
 11. **Windows uses a lock fallback for audit.** `process.platform === "win32"` triggers `proper-lockfile` around audit appends. Slower than the POSIX `O_APPEND` fast path but correct.
-12. **`limits.maxTurns` counts every `gate.record` call, not "LLM rounds".** One LLM record + one tool record per round means 1 round = 2 turns. Set `maxTurns = rounds * records_per_round`.
+12. **`limits.maxTurns` counts every `gate.record` call, not "LLM rounds".** One LLM record + one tool record per round means 1 round = 2 turns. For a "tool-calling-rounds" budget use **`limits.maxToolRounds: N`** (v0.4.2) — sibling halt counter that ticks only on records where `action.type !== "llm"`. Name your LLM records `type: "llm"` to opt in.
 13. **bash / fs / net primitives accept either flat or nested action shape** (v0.4.1). `{type: "bash", cmd}` and `{type: "bash", args: {cmd | command}}` both work; same for fs (`path`) and net (`url`). Flat wins when both are set. Makes wireGate-style `{type, args, _ctx}` adapters compose without a translation layer.
 
 ## Recipes
