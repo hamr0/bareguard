@@ -937,6 +937,26 @@ re-litigated unless the user explicitly asks.
   log rotation via `logrotate`. Each is a usage pattern the spec
   already supports — making them discoverable is the v0.4 ask.
 
+### v0.4.x patch retro (2026-05-12)
+
+Three patches followed v0.4.0 driven by multis' adoption via bareagent.
+Honest calibration of which landed at the right bar (so future
+contributors don't drift the same way; see Appendix E):
+
+- **0.4.1 nested `action.args` fallback (bash/fs/net)** — at the bar.
+  `bash.allow` silently denied everything for wireGate's `{type, args}`
+  shape; "every adopter writes `translateAction`" met the non-trivial-
+  wrapper test.
+- **0.4.2 `limits.maxToolRounds`** — **below the bar.** The docs already
+  said "use `maxTurns = rounds * 2`," which works. The primitive added
+  a config key, a rule string, a cold-start audit-rebuild branch, and
+  six tests to absorb one line of caller-side arithmetic. Two adopters
+  surfacing it was signal, but not enough — the docs covered it.
+  Recorded here as the calibration anchor for "drift to satisfy" and
+  the trigger for Appendix E. The primitive remains shipped (can't
+  unship without breaking adopters), but the bar going forward is
+  higher.
+
 ### v0.2 additions (defer-rate + spawn-rate)
 
 - **Rate caps count audit records in a trailing window, not a separate
@@ -994,7 +1014,9 @@ Before adding anything to bareguard:
 4. Can it be implemented in **≤ 150 LOC** with at most the one allowed dep?
 5. Is it **opt-in via config** with a sensible safe default?
 
-Five yeses or it doesn't ship.
+Five yeses or it doesn't ship. **All five are necessary; none are
+sufficient on their own.** See Appendix E for the additional gate
+introduced in v0.4.x.
 
 ## Appendix D: file layout (as shipped in v0.1.1)
 
@@ -1039,3 +1061,56 @@ bareguard/
     └── workflows/
         └── test.yml               # matrix: ubuntu/macos/windows × Node 20/22
 ```
+
+## Appendix E: evaluating inbound adopter feedback (added v0.4.x)
+
+Appendix C is necessary but not sufficient. The 0.4.x adoption arc with
+multis (via bareagent) showed that first-adopter feedback always pulls
+toward accommodation: every request can be made to pass the five yeses,
+because the requestor genuinely needs it solved. The drift risk is
+real, and the calibration anchor in §22 ("v0.4.x patch retro") shows
+where one landing (0.4.2 `limits.maxToolRounds`) crossed the line —
+the docs already addressed the harm; the primitive only absorbed one
+line of caller-side arithmetic into the library surface.
+
+The bar going forward for any inbound feedback that touches the API:
+
+**Response order (try each before the next):**
+
+1. **Point at an existing primitive or recipe.** If the request is
+   already supported, the seam is a docs problem, not a code one.
+2. **Add or improve a recipe.** Copy-pasteable patterns absorb most
+   "every adopter writes this" complaints without growing the surface.
+3. **Clarify the PRD contract.** If the request reflects a real
+   ambiguity (e.g., v0.4 halt-event-carries-action), document it
+   sharply. Often the contract is fine; only the explanation was off.
+4. **Extend an existing primitive.** Defensive additions (e.g., v0.4.1
+   `bash`/`fs`/`net` accept nested `args`) close real silent-failure
+   seams without new keys.
+5. **Add a new primitive.** Last resort. Requires:
+   - Appendix C five yeses, AND
+   - The harm persists with docs/recipes alone, AND
+   - The wrapper every adopter would write is non-trivial (not just
+     arithmetic, formatting, or naming), AND
+   - At least two unrelated adopters have surfaced it.
+
+**Smell tests for "below the bar" requests:**
+
+- The proposed primitive is one line of caller-side math → recipe.
+- The proposed primitive renames or aliases something that already
+  exists → docs.
+- The proposed primitive moves work the runner is naturally positioned
+  to do (e.g., wireGate-style adapter concerns, formatting, identity
+  routing) into bareguard → reject; document the wrapper pattern.
+- The proposed primitive is "opt-in and small, why not?" → that's not
+  a reason. Each opt-in key still grows the surface area future-Claude
+  has to defend in the next adoption round.
+
+**The point of this gate:** bareguard's value is that it's *small enough
+to read in an afternoon* (§2). Every accommodation that doesn't clear
+this bar erodes that property by one config key, one rule string, one
+audit branch, and a handful of tests. The first round of adoption
+biases toward yes; subsequent rounds need to bias toward no, or the
+library drifts to "framework with twelve primitives" — which is what
+§4 and §17 exist to prevent.
+
