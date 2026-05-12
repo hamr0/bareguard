@@ -6,7 +6,7 @@
 3. [Testing Standards](#testing-standards)
 4. [Environment](#environment)
 5. [Development Workflow](#development-workflow)
-6. [Twelve-Factor Reference](#twelve-factor-reference)
+6. [Twelve-Factor Checklist](#twelve-factor-checklist)
 7. [CLAUDE.md Stub](#claudemd-stub)
 8. [AI Agent Instructions](#ai-agent-instructions)
 
@@ -198,7 +198,7 @@ Before adding any external dependency, all of these must be true:
 
 ---
 
-## Twelve-Factor Reference
+## Twelve-Factor Checklist
 
 The [Twelve-Factor App](https://12factor.net) methodology for modern, scalable applications:
 
