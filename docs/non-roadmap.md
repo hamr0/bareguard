@@ -52,6 +52,7 @@ When users ask for these, point them here.
 | Rate limiting against external APIs                  | The API does this; or use a separate rate-limit library. Not bareguard's role.   |
 | Built-in scheduler                                   | bareagent's `defer` tool emits records; cron / `wake.sh` / future `barejob` runs them. |
 | Approval UX of any kind                              | `humanChannel` callback only. Caller wires it to TUI / Slack / web / PIN.        |
+| **Sticky / cached approvals (memoized `humanChannel` returns)** | Each `gate.check` ask reaches `humanChannel` fresh. Caching past `yes`es belongs in the runner's `humanChannel`, not the gate. "Same action" has no universal definition (same args? same arg shape? same session? what TTL?) — freezing one inside bareguard freezes it for everyone. **README Recipe 8** is the ~25-line wrapper. |
 | MCP-specific parsing / awareness                     | bareguard glob-matches strings. The `mcp:server/tool` convention is a string.    |
 | MCP server registry or aggregator                    | Different layer. bareguard doesn't connect to MCP servers; bareagent does.       |
 | Per-user / per-tenant policy management              | Caller's concern. Pass a different `Gate` instance per config.                   |

@@ -522,6 +522,20 @@ const dec = await gate.check({ type: "defer", args: { action, when: "1h" } });
 
 **See bareagent v0.9.0 for the consumer side.** The `defer` and `spawn` tools that exercise these caps shipped in [bare-agent@0.9.0](https://www.npmjs.com/package/bare-agent), with [`examples/wake.sh`](https://github.com/hamr0/bareagent/blob/main/examples/wake.sh) as the wake-script reference and [`examples/orchestrator/`](https://github.com/hamr0/bareagent/tree/main/examples/orchestrator) showing parent + child agents sharing one rate cap via inherited audit path.
 
+### Recipe 10: Sticky approvals — humanChannel wrapper
+
+bareguard never caches `humanChannel` returns — every ask reaches it fresh. If your UX wants "ask once, remember the answer" semantics, wrap the channel with a TTL'd decision cache:
+
+```javascript
+import { stickyApprovals } from "./your-wrapper.js";   // ~25 LOC — see README Recipe 8 for the body
+
+const gate = new Gate({
+  humanChannel: stickyApprovals(myActualHumanChannel, { ttlMs: 30 * 60 * 1000 }),
+});
+```
+
+The wrapper caches `allow` returns (deny / halt / topup / terminate always bypass) keyed by the action shape minus `_ctx`, and tags the cached return's `reason` so `phase: "approval"` audit lines still show every cached and fresh decision. **Why this is a recipe and not a primitive:** "same action" has no universal definition — same args? same arg shape? same session? what TTL? — and the gate would have to pick one. PRD §17 records this as a NO-GO. Full body in [README Recipe 8](README.md#8-sticky-approvals--humanchannel-wrapper).
+
 ## See also
 
 - [`docs/01-product/bareguard-prd.md`](docs/01-product/bareguard-prd.md) — unified PRD (v0.7).

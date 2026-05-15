@@ -68,7 +68,7 @@ if (decision.outcome === "allow") {
 // via humanChannel and gives you a terminal allow/deny.
 ```
 
-Full integration guide for AI assistants and developers: **[bareguard.context.md](bareguard.context.md)** — covers the `humanChannel` patterns (TUI / Slack / PIN), shared budget across processes, eval order, audit format, gotchas, and 8 recipes including the bareagent + beeperbox wiring.
+Full integration guide for AI assistants and developers: **[bareguard.context.md](bareguard.context.md)** — covers the `humanChannel` patterns (TUI / Slack / PIN), shared budget across processes, eval order, audit format, gotchas, and 10 recipes including the bareagent + beeperbox wiring and the sticky-approvals wrapper.
 
 ## How it works
 
@@ -269,6 +269,49 @@ bareguard does not rotate the audit log — that's `logrotate`'s job. bareguard 
     copytruncate
 }
 ```
+
+### 8. Sticky approvals — humanChannel wrapper
+
+bareguard does not cache approvals. Every ask reaches `humanChannel` fresh, every time — that's a deliberate non-goal (PRD §17). "Ask once, remember the answer" is the runner's UX: building it into the gate would freeze one definition of "same action" for everyone (same args? same arg shape? same session? what TTL?). Wrap your channel in ~25 lines instead:
+
+```js
+import crypto from "node:crypto";
+
+function stickyApprovals(humanChannel, {
+  ttlMs = 60 * 60 * 1000,                                          // 1h default
+  maxEntries = 1000,
+  keyFn = (a) => { const { _ctx, ...shape } = a; return JSON.stringify(shape); },
+  cacheableDecisions = ["allow"],                                  // never sticky-cache "deny" by default
+} = {}) {
+  const cache = new Map();                                          // key -> { decision, expiresAt, cachedAt }
+  return async (event) => {
+    if (event.kind !== "ask") return humanChannel(event);           // never cache halts / topups / terminates
+    const key = crypto.createHash("sha256").update(keyFn(event.action)).digest("hex").slice(0, 16);
+    const hit = cache.get(key);
+    if (hit && hit.expiresAt > Date.now()) {
+      return { decision: hit.decision, reason: `sticky: prior ${hit.decision} at ${new Date(hit.cachedAt).toISOString()}` };
+    }
+    const result = await humanChannel(event);
+    if (cacheableDecisions.includes(result.decision)) {
+      if (cache.size >= maxEntries) cache.delete(cache.keys().next().value);  // drop oldest
+      cache.set(key, { decision: result.decision, expiresAt: Date.now() + ttlMs, cachedAt: Date.now() });
+    }
+    return result;
+  };
+}
+
+const gate = new Gate({
+  humanChannel: stickyApprovals(myActualHumanChannel, { ttlMs: 30 * 60 * 1000 }),
+});
+```
+
+**What's cached:** ask events whose action serializes to the same key, until TTL expires. The `reason` field tags the cached return so it shows up on the `phase: "approval"` audit line — every approval (cached or fresh) is still in the log.
+
+**What's NOT cached (intentionally):** halts (`event.kind === "halt"`), `topup` and `terminate` returns, and (by default) `deny` returns. Halts gate budget — fresh human eye every time. Deny-caching can be enabled (`cacheableDecisions: ["allow", "deny"]`) if your UX wants it, but the safer default is to re-ask on a denied shape because the user may have meant only "deny *this* one."
+
+**Define "same action" to taste:** the default `keyFn` hashes the full action minus `_ctx` (which is per-principal routing, not action shape). For a noisy field like an ID or timestamp, narrow it (`keyFn: (a) => JSON.stringify({type: a.type, cmd: a.cmd?.split(' ')[0]})`). The library does not pick a definition — that's why this is a recipe, not a primitive (§17).
+
+**Scope:** per-Gate-instance, in-memory. In Recipe 2's Gate-per-principal model the cache is per-principal automatically. For cross-process or cross-restart sticky approvals, persist `cache` to a file your runner owns; the audit log already carries every prior `phase: "approval"` line, so a cold start can warm the Map from `tail audit.jsonl | jq 'select(.phase=="approval")'`.
 
 ## Tested against
 

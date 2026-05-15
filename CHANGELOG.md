@@ -4,6 +4,20 @@ All notable changes to bareguard are documented here. Format: [Keep a Changelog]
 
 ## [Unreleased]
 
+## [0.4.3] — 2026-05-15
+
+Docs-only patch. Sticky-approvals recipe + matching NO-GO entry so future adopter pulls toward "build approval caching into the gate" land on a recipe instead of a primitive.
+
+### Added
+
+- **README Recipe 8: sticky approvals — `humanChannel` wrapper.** ~25-line wrapper that caches `allow` returns from `humanChannel` per action shape, with TTL, max-entries, and a customizable `keyFn`. Halts, topups, terminates, and (by default) denies bypass the cache. The cached return tags its `reason` so `phase: "approval"` audit lines still show every (cached or fresh) decision. Validated against a live `Gate` for: same-shape cache hit, TTL expiry re-prompt, different-shape miss, deny-not-cached default, halts always reach humanChannel.
+- **PRD §10.1 callout** that bareguard never caches `humanChannel` returns — points at Recipe 8.
+- **PRD §17 + non-roadmap NO-GO entry: "Sticky / cached approvals."** Records why this isn't a primitive — "same action" has no universal definition (args / arg-shape / session / TTL — each runner picks differently), so freezing one inside the gate freezes it for everyone. Adopter pulls toward this should land on Recipe 8.
+
+### No code changes
+
+- Source LOC unchanged. Test suite unchanged at 88.
+
 ## [0.4.2] — 2026-05-12
 
 Follow-up to 0.4.1 after bareagent confirmed multis' two seam reports were bareguard's call. Adds the clean semantic for "tool-calling rounds" so adopters stop reaching for the `maxTurns * 2` workaround.
