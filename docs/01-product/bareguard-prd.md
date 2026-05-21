@@ -811,6 +811,37 @@ bareagent v(next) imports `bareguard ^0.1`. Removes its built-in policy code
 - Lock the API. SemVer commitments.
 - Walk-away: maintenance only after this point.
 
+### Future features (candidates — not committed)
+
+Ideas that cleared "interesting" but not the §17 / Appendix C bar yet. Parked here
+so they're not re-litigated from scratch.
+
+**Tamper-evident audit (hash-chained / signed log).** Optionally chain each audit
+entry (`sha256` over the previous hash + the entry) so post-hoc edits, deletions,
+or reorders become detectable — and, as a later step, sign the chain head for
+non-repudiation. Currently a NO-GO *default* (§17: "opt-in flag at earliest, or
+sibling library").
+
+- *Status:* **needs more design time before it ships, even as a flag.** A throwaway
+  POC proved the mechanism works in ~40 LOC with zero new deps, but surfaced the
+  load-bearing constraint: bareguard's audit is **multi-writer and lock-free**
+  (parent + children all `O_APPEND` one file with no coordination). A *global*
+  chain across writers is impossible without taking a lock on every `emit`, which
+  would undo the design the whole audit primitive rests on. A **per-`run_id`** chain
+  is feasible (each `Audit` instance is a serial writer for its own run) but only
+  detects tampering *within* a run — not global cross-run ordering, and not whole-run
+  deletion. And a hash chain is **integrity, not authorship**: anyone who can rewrite
+  the file can recompute a valid chain unless the head is signed.
+- *Why parked:* a naive `audit.hashChain` flag oversells "tamper-proof" given the
+  per-run caveat. The per-run-vs-global boundary and the signing/non-repudiation
+  story need to be designed and documented *before* exposing anything, or it becomes
+  a footgun. Likely lands as a clearly-scoped opt-in flag or a sibling library
+  (`bareseal`-style), never a v1 default.
+- *Origin / relation:* prompted by [bindu](https://github.com/GetBindu/bindu)'s
+  Ed25519-signed A2A records, but this is integrity of bareguard's **own log**, not
+  agent authentication — bareguard authorizes the action, not the actor. See
+  [identity-and-the-gate.md](../identity-and-the-gate.md).
+
 ## 20. POC retrospective (what we built, why)
 
 bareguard v0.1 was developed via three POC phases (per the original v0.4

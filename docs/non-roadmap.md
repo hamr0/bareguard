@@ -30,7 +30,7 @@ When users ask for these, point them here.
 | Web UI for the audit log                             | JSONL is grep-able. UIs are downstream of the file.                              |
 | Anomaly detection on audit log                       | Same — downstream.                                                               |
 | Log rotation                                         | `logrotate` exists. README documents the pattern.                                |
-| Hash-chain tamper-evidence                           | Opt-in flag in v0.x at earliest, or sibling library. Not v1 default.             |
+| Hash-chain tamper-evidence                           | Opt-in flag in v0.x at earliest, or sibling library. Not v1 default. Now a parked **future-feature candidate** — see PRD §19 "Future features": the multi-writer lock-free log can't carry a global chain without a per-emit lock, so the per-`run_id`-vs-global tradeoff + signing story need design first. |
 
 ## Out of scope — framework features
 
@@ -46,7 +46,7 @@ When users ask for these, point them here.
 | ---------------------------------------------------- | -------------------------------------------------------------------------------- |
 | Sandboxing (Docker, gVisor, Firecracker)             | Different layer. bareguard prevents the call; sandboxing contains effects.       |
 | Cross-machine distributed budget                     | Single-machine `proper-lockfile` is v1. Cross-machine = future sibling library.  |
-| Identity / authn / authz                             | Caller's concern. bareguard sees actions, not principals.                        |
+| Identity / authn / authz (agent DID / token verification) | Caller's concern. bareguard authorizes the *action*, not the *actor*. Per-principal policy = attach runner-verified identity to `action._ctx` (Gate-per-principal + content patterns); no auth code in the gate. Reasoning + recipe: **[identity-and-the-gate.md](identity-and-the-gate.md)**. Inter-agent message *signing* (bindu's `X-DID-Signature` slice) is bareagent's layer. |
 | **PIN / biometric / second-factor for approvals**    | Authentication is the runner's UX. bareguard says "ask the human"; how the      |
 |                                                      | human is verified (PIN, button, Slack reaction) is the runner's choice.          |
 | Rate limiting against external APIs                  | The API does this; or use a separate rate-limit library. Not bareguard's role.   |

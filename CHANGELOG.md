@@ -4,6 +4,20 @@ All notable changes to bareguard are documented here. Format: [Keep a Changelog]
 
 ## [Unreleased]
 
+Docs-only restructure + a new identity boundary doc. No `src/` change; suite unchanged at 88. Not published — bundles into the next release.
+
+### Added
+
+- **`docs/identity-and-the-gate.md`** — where agent identity / auth sits relative to bareguard (upstream) and how to policy per-principal via `action._ctx` without any auth code in the gate. Frames the reframe "bareguard authorizes the *action*, not the *actor*," separates the four things bundled as "agent auth," and records why bareguard owns at most *audit* integrity, not agent authn. Prompted by evaluating [bindu](https://github.com/GetBindu/bindu)'s mTLS + Hydra + DID/Ed25519 stack — the conclusion was "borrow the boundary, not the infra."
+- **`docs/02-features/usage-guide.md`** — human-facing companion to the LLM `bareguard.context.md`, mirroring the bareagent README/context split. Holds the eval-order walkthrough, the 7 common gotchas, and the 8 deployment recipes (content screening, Gate-per-principal, concurrent Gates, fileless test idiom, halt routing, wireGate, log rotation, sticky approvals) — all moved verbatim out of the README.
+- **PRD §19 "Future features (candidates — not committed)"** — parks **tamper-evident audit (hash-chained / signed log)** as a candidate that *needs more design time before it ships even as a flag*. Records the load-bearing constraint a throwaway POC surfaced: the audit is multi-writer and lock-free, so a global chain is impossible without a per-`emit` lock; a per-`run_id` chain is feasible but only detects tampering within a run and isn't a signature. Likely an opt-in flag or `bareseal`-style sibling, never a v1 default.
+
+### Changed
+
+- **README slimmed 343 → 130 lines.** Now an overview: banner → install → quick start (with the "hand your AI assistant `bareguard.context.md`" pattern) → the twelve-primitives feature table → a Docs link table → ecosystem table. Recipes and gotchas relocated to the new Usage Guide; the verbose eval-order section moved there too.
+- **`docs/README.md`** rewritten into a real bareguard doc index (table of every doc + "start here"). It previously contained **stale addypin v2 content** — a copy-paste leftover that described location-sharing, not bareguard.
+- **`docs/non-roadmap.md`** — the "Identity / authn / authz" NO-GO entry now points at `identity-and-the-gate.md` and clarifies per-principal policy is done via `_ctx`, not gate-side auth; the "Hash-chain tamper-evidence" entry now references the PRD §19 future-feature candidate.
+
 ## [0.4.3] — 2026-05-15
 
 Docs-only patch. Sticky-approvals recipe + matching NO-GO entry so future adopter pulls toward "build approval caching into the gate" land on a recipe instead of a primitive.
