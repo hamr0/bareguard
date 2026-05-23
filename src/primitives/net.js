@@ -23,11 +23,19 @@ function isPrivateIp(host) {
     const hi = parseInt(mapped[1], 16), lo = parseInt(mapped[2], 16);
     return isPrivateIp(`${(hi >> 8) & 255}.${hi & 255}.${(lo >> 8) & 255}.${lo & 255}`);
   }
+  // IPv4-compatible IPv6 (deprecated, ::a.b.c.d → ::hi:lo). The whole ::/96
+  // block is non-public, so decode and classify the embedded v4. Note ::1/::
+  // are handled above and won't reach here (no second hextet).
+  mapped = h.match(/^::([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+  if (mapped) {
+    const hi = parseInt(mapped[1], 16), lo = parseInt(mapped[2], 16);
+    return isPrivateIp(`${(hi >> 8) & 255}.${hi & 255}.${(lo >> 8) & 255}.${lo & 255}`);
+  }
 
   // IPv6 unique local fc00::/7 (fc__ and fd__)
   if (/^f[cd][0-9a-f]*:/.test(h)) return true;
-  // IPv6 link-local fe80::/10 (fe80 through febf)
-  if (/^fe[89ab][0-9a-f]*:/.test(h)) return true;
+  // IPv6 link-local fe80::/10 + deprecated site-local fec0::/10 (fe8 through fef)
+  if (/^fe[89a-f][0-9a-f]*:/.test(h)) return true;
 
   // IPv4 ranges
   const m = h.match(/^(\d+)\.(\d+)\./);
