@@ -3,24 +3,42 @@
 
 function isPrivateIp(host) {
   if (!host) return false;
-  const lower = host.toLowerCase();
-  if (lower === "localhost" || lower === "::1") return true;
-  // IPv4 loopback
-  if (/^127\./.test(host)) return true;
-  // IPv4-mapped IPv6 (::ffff:x.x.x.x) — recurse on the embedded IPv4 address
-  const mapped = lower.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+  let h = host.toLowerCase();
+  // URL.hostname returns IPv6 literals wrapped in brackets ("[::1]"); strip
+  // them so the IPv6 matchers below actually fire. Without this every IPv6
+  // branch is dead code and denyPrivateIps is a no-op for IPv6.
+  if (h.startsWith("[") && h.endsWith("]")) h = h.slice(1, -1);
+
+  if (h === "localhost") return true;
+  // IPv6 loopback (::1) and unspecified (::, routes to localhost)
+  if (h === "::1" || h === "::") return true;
+
+  // IPv4-mapped IPv6, dotted form (::ffff:127.0.0.1) — recurse on embedded v4
+  let mapped = h.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
   if (mapped) return isPrivateIp(mapped[1]);
+  // IPv4-mapped IPv6, hex form (::ffff:7f00:1) — URL parser compresses the
+  // embedded v4 to hex; decode the low 32 bits back to dotted form.
+  mapped = h.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+  if (mapped) {
+    const hi = parseInt(mapped[1], 16), lo = parseInt(mapped[2], 16);
+    return isPrivateIp(`${(hi >> 8) & 255}.${hi & 255}.${(lo >> 8) & 255}.${lo & 255}`);
+  }
+
   // IPv6 unique local fc00::/7 (fc__ and fd__)
-  if (/^f[cd][0-9a-f]*:/i.test(lower)) return true;
+  if (/^f[cd][0-9a-f]*:/.test(h)) return true;
   // IPv6 link-local fe80::/10 (fe80 through febf)
-  if (/^fe[89ab][0-9a-f]*:/i.test(lower)) return true;
-  // IPv4 private ranges
-  const m = host.match(/^(\d+)\.(\d+)\./);
+  if (/^fe[89ab][0-9a-f]*:/.test(h)) return true;
+
+  // IPv4 ranges
+  const m = h.match(/^(\d+)\.(\d+)\./);
   if (!m) return false;
   const a = +m[1], b = +m[2];
-  if (a === 10) return true;
+  if (a === 0)   return true;              // 0.0.0.0/8 — incl. 0.0.0.0 (routes to localhost)
+  if (a === 127) return true;              // loopback 127.0.0.0/8
+  if (a === 10)  return true;
   if (a === 172 && b >= 16 && b <= 31) return true;
   if (a === 192 && b === 168) return true;
+  if (a === 169 && b === 254) return true; // link-local 169.254.0.0/16 — incl. cloud metadata 169.254.169.254
   return false;
 }
 
