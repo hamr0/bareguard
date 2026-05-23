@@ -4,7 +4,16 @@ All notable changes to bareguard are documented here. Format: [Keep a Changelog]
 
 ## [Unreleased]
 
-Docs-only restructure + a new identity boundary doc. No `src/` change; suite unchanged at 88. Not published — bundles into the next release.
+Docs restructure + a new identity boundary doc, plus two security fixes to the `fs` and `net` containment primitives surfaced by a `/security` audit. Suite 88 → 93. Not published — bundles into the next release.
+
+### Security
+
+- **`fs` no longer allows path-traversal or prefix-boundary escapes.** Scope and deny matching previously did raw string `startsWith` with no normalization, so `..`/`.` segments walked straight out of a `readScope`/`writeScope` or past an `fs.deny` entry (e.g. `/app/data/../../etc/passwd` satisfied `readScope: ["/app/data"]`; `/etc/./secrets/key` slipped past `deny: ["/etc/secrets"]`). Scopes also matched on bare prefix, so `/app/data` granted `/app/data-secrets`. Now paths are lexically normalized (`path.posix.normalize`) before matching and scope/deny use boundary-aware containment — closing the gap PRD §8 row 3 already promised (`..` is deny-worthy). Lexical only: symlinks are **not** resolved (would need async `realpath`); callers needing symlink-proofing must canonicalize before the gate.
+- **`net.denyPrivateIps` now actually blocks IPv6 and more IPv4 ranges.** `URL.hostname` returns IPv6 literals wrapped in brackets (`[::1]`), so the entire IPv6 branch of `isPrivateIp` was dead code — `[::1]`, `[fd00::1]` (ULA), `[fe80::1]` (link-local), `[::]`, and `[::ffff:127.0.0.1]` all passed despite `denyPrivateIps: true`. Also missing: IPv4 link-local `169.254.0.0/16` (cloud-metadata IMDS `169.254.169.254`) and `0.0.0.0`. Fixed by stripping brackets before matching, decoding hex-compressed IPv4-mapped addresses, and adding `0.0.0.0/8` + `169.254.0.0/16`. Hostname-based (pre-DNS-resolution) — does not defend against DNS rebinding to a private address; resolve-then-check remains the caller's job.
+
+### Tests
+
+- **Suite 88 → 93.** New `test/security-regression.test.js` drives the two fixes through the public `Gate` API: fs deny/`readScope`/`writeScope` traversal + prefix-boundary escapes (with paired legit-still-allowed cases), and `net.denyPrivateIps` IPv6 / IPv4-mapped / link-local / `0.0.0.0` coverage (with public IPv4/IPv6 still allowed).
 
 ### Added
 
