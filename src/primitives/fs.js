@@ -16,9 +16,15 @@ function norm(p) {
 
 // Boundary-aware containment: `p` is `base` itself or a path *under* `base`.
 // The trailing-separator guard stops `/app/data` from matching `/app/data-x`.
+// `path.posix.normalize` keeps a single trailing slash, so strip it from the
+// base first — otherwise a config entry written as `/etc/secret/` would miss
+// the directory node itself (`/etc/secret`): a fail-open on deny and a
+// fail-closed on scope.
 function within(p, base) {
-  const b = norm(base);
-  return p === b || p.startsWith(b.endsWith("/") ? b : b + "/");
+  let b = norm(base);
+  if (b === "/") return p.startsWith("/"); // root contains every absolute path
+  if (b.endsWith("/")) b = b.slice(0, -1);
+  return p === b || p.startsWith(b + "/");
 }
 
 // Accepts either flat (action.path) or nested (action.args.path) shapes so

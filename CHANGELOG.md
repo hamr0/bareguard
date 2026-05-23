@@ -6,6 +6,20 @@ All notable changes to bareguard are documented here. Format: [Keep a Changelog]
 
 _Nothing yet — next changes land here._
 
+## [0.4.6] — 2026-05-23
+
+Fixes from a `/code-review` pass over the 0.4.4/0.4.5 security changes — it caught a fail-open in the `fs` primitive those releases were meant to harden. Suite 100 → 106.
+
+### Security
+
+- **`fs` deny/scope entries written with a trailing slash no longer mishandle the directory node itself.** `path.posix.normalize` keeps one trailing slash, and `within()` only stripped it on the prefix arm — so `deny: ["/etc/secret/"]` did **not** deny `read /etc/secret` (fail-open on the node itself; children were still denied), and `writeScope: ["/app/data/"]` wrongly denied a write to `/app/data` (fail-closed). `within()` now strips a trailing slash from the normalized base before both the exact-match and prefix checks, and special-cases root (`/`).
+- **`secrets` redaction now masks every occurrence on a line, even for a non-global pattern.** `redact()` used `String.replace`, which only replaces the *first* match when the pattern lacks the `g` flag — a natural config mistake (e.g. `/sk-[a-z0-9]+/`) that left the second secret on a line in cleartext. Since v0.4.5 routes every audit line through `redact()`, this undercut the audit-safety guarantee. Patterns are now normalized to global at the match site.
+- **`net.denyPrivateIps` — defense-in-depth for two deprecated IPv6 forms.** IPv4-compatible IPv6 (`::a.b.c.d`, e.g. `[::127.0.0.1]`) is now decoded and classified like the IPv4-mapped form, and the IPv6 local range is widened to cover deprecated site-local `fec0::/10` (`fe8`–`fef`). Both formats are non-public, so this is a safe tightening; public addresses are unaffected.
+
+### Tests
+
+- **Suite 100 → 106.** New `test/security-review-followup.test.js`: trailing-slash deny/scope (dir node + root + escapes), redaction of multiple secrets via a non-global pattern (direct + through the audit log), and the two net IPv6 forms (with public-address regression guards).
+
 ## [0.4.5] — 2026-05-23
 
 Security hardening pass — the follow-up to 0.4.4's audit. Three of the remaining findings fixed (the fourth, `allows()`/askHuman, is documented rather than changed since it's correct for its pre-filter purpose). Suite 93 → 100.

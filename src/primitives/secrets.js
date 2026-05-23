@@ -21,7 +21,11 @@ export function redact(action, cfg = {}) {
   }
 
   for (const re of cfg.patterns ?? []) {
-    const next = serialized.replace(re, m => {
+    // Force global matching: a non-global pattern (a natural config mistake,
+    // e.g. /sk-[a-z0-9]+/) would replace only the FIRST match via
+    // String.replace, leaving a second secret on the same line in cleartext.
+    const g = re.global ? re : new RegExp(re.source, re.flags + "g");
+    const next = serialized.replace(g, m => {
       changed = true;
       const prefix = m.slice(0, 4).replace(/[\\"]/g, "_");
       return `[REDACTED:pattern=${prefix}...]`;
