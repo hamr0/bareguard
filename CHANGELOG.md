@@ -4,7 +4,9 @@ All notable changes to bareguard are documented here. Format: [Keep a Changelog]
 
 ## [Unreleased]
 
-_Nothing yet — next changes land here._
+### Tests
+
+- **Fixed a flaky cross-process budget test** (`shared-budget.test.js`). It asserted an *exact* `$0.60` total across two concurrent workers, which contradicts the documented soft-budget contract (gotcha #2: "don't rely on hard cents-precision enforcement") and flaked CI under lock contention (one lost `$0.03` update). It now asserts the invariants that hold regardless of scheduling — `record()` never over-counts (the hard invariant), and both workers' spend accumulates cross-process (a collapse smoke check) — instead of penny-exactness. No production change; `budget.js` untouched.
 
 ## [0.4.6] — 2026-05-23
 
