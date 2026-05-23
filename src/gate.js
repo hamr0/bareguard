@@ -60,6 +60,10 @@ export class Gate {
       filePath: auditPath, runId: this.runId,
       parentRunId: this.parentRunId, spawnDepth: this.spawnDepth,
       rootRunId: this.rootRunId, clock: this._clock,
+      // Auto-redact persisted action/result when secrets are configured, so
+      // the audit log never carries raw secrets — without the caller having
+      // to remember to pre-redact (which would also weaken policy matching).
+      redact: config.secrets ? (x) => redact(x, config.secrets) : null,
     });
 
     const sharedFile = config.budget?.sharedFile ?? process.env.BAREGUARD_BUDGET_FILE ?? null;
@@ -329,7 +333,7 @@ export class Gate {
           });
           return decided;
         }
-        if (typeof human.newCap !== "number" || !isFinite(human.newCap)) {
+        if (typeof human.newCap !== "number" || !isFinite(human.newCap) || human.newCap < 0) {
           return { outcome: "deny", severity: "halt", rule: decision.rule, reason: "topup with invalid newCap" };
         }
         const dimension = this._haltDimension(decision.rule);

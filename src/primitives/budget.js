@@ -210,6 +210,12 @@ export class Budget {
     if (!["costUsd", "tokens"].includes(dimension)) {
       throw new Error(`unknown budget dimension: ${dimension}`);
     }
+    // A negative or non-finite cap is never meaningful — a negative cap makes
+    // `spent >= cap` permanently true, silently wedging the run in halt.
+    // Lowering a positive cap is allowed (tightening a budget is safe).
+    if (typeof newCap !== "number" || !isFinite(newCap) || newCap < 0) {
+      throw new Error(`invalid budget cap: ${newCap} (must be a finite number >= 0)`);
+    }
     await this._withLock(async () => {
       try {
         const buf = await fsp.readFile(this.sharedFile, "utf8");

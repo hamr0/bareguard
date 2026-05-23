@@ -63,7 +63,7 @@ await gate.init();
 
 // In your agent loop:
 const action = { type: "bash", cmd: "git status" };
-const decision = await gate.check(gate.redact(action));
+const decision = await gate.check(action);  // audit auto-redacts if `secrets` is set
 if (decision.outcome === "allow") {
   const result = await yourExecutor(action);                // your code
   await gate.record(action, result);                        // budget + audit
@@ -168,21 +168,27 @@ bareguard's `redact()` helper handles both actions and results.
 ```javascript
 import { redact } from "bareguard";
 
-const cfg = {
-  envVars:  ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GITHUB_TOKEN"],
-  patterns: [/sk-[A-Za-z0-9]{40,}/, /ghp_[A-Za-z0-9]{36}/],
-};
+const gate = new Gate({
+  secrets: {
+    envVars:  ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GITHUB_TOKEN"],
+    patterns: [/sk-[A-Za-z0-9]{40,}/, /ghp_[A-Za-z0-9]{36}/],
+  },
+  // ...
+});
 
-// Action-side: gate.redact() uses cfg from gate config
-const cleanAction = gate.redact(rawAction);
+// That's it. When `secrets` is configured, the gate auto-redacts the
+// action, result, and reason on every audit line at write time (v0.4.5).
+// You do NOT pre-redact before check() — eval runs on the real action so
+// policy matching is never weakened; only the persisted log is redacted.
+await gate.check(rawAction);
+await gate.record(rawAction, rawResult);
 
-// Result-side: redact yourself before record
-const result = await yourExecutor(action);
-const cleanResult = redact(result, cfg);
-await gate.record(cleanAction, cleanResult);
+// `redact()` is still exported for ad-hoc redaction outside the gate.
+import { redact } from "bareguard";
+const masked = redact(anyObject, { patterns: [/sk-[A-Za-z0-9]{40,}/] });
 ```
 
-Format: `[REDACTED:ANTHROPIC_API_KEY]` for env-var matches, `[REDACTED:pattern=sk-...]` for unknown-source pattern matches. **Never** shows full secrets, **never** shows the suffix.
+Format: `[REDACTED:ANTHROPIC_API_KEY]` for env-var matches, `[REDACTED:pattern=sk-...]` for unknown-source pattern matches. **Never** shows full secrets, **never** shows the suffix. Redaction needs values ≥ 8 chars (short env vars like a port aren't redacted).
 
 ## Eval order in detail
 
@@ -314,7 +320,7 @@ These are deliberately NOT in bareguard. Don't look for them — build them or u
 3. **Audit line size capped at 3.5KB.** POSIX `O_APPEND` atomicity requires < PIPE_BUF (4KB). Larger `action.args` are auto-truncated with `[TRUNCATED:...]` markers. Don't put 10MB blobs in your action.
 4. **Glob is `*`-only in v0.1.** No `?`, no `[abc]`, no escapes. `mcp:*/admin_*` matches anything in the middle, including `/`. v0.2 may add `**`.
 5. **Secrets redaction needs values ≥ 8 chars.** Short env vars (e.g., `PORT=5432`) are not redacted because they're likely not secrets and would over-match.
-6. **`gate.allows()` returns true for askHuman.** Catalog pre-filters should show ask-gated tools so the LLM can attempt them and the human gets the prompt at invoke time.
+6. **`gate.allows()` is a catalog pre-filter, NOT an authorization gate.** It returns `true` for askHuman actions (so ask-gated tools still show in a catalog and the human is prompted at invoke time) — it only returns `false` for outright `deny`/halt. **Always call `gate.check()` before executing**; never use `allows()` as the security decision.
 7. **`gate.run(action, executor)` returns the executor's result on allow, OR `{ error: { type: "policy_denied", rule, reason, action_summary } }` on deny.** Doesn't throw. Halt severity inside `run` returns the same error shape with `severity: "halt"`.
 8. **Topup loop max 5 iterations.** If humanChannel returns topup but the new cap still halts, bareguard re-calls humanChannel up to 5 times before forcing a deny+halt with reason `"topup loop exceeded 5 iterations"`. Defensive guard against runaway humans.
 9. **Children inherit the audit file via env, not config.** Set `BAREGUARD_AUDIT_PATH` (and `BAREGUARD_BUDGET_FILE`, `BAREGUARD_PARENT_RUN_ID`, `BAREGUARD_SPAWN_DEPTH`) when spawning. The child's `new Gate({})` picks them up automatically.
@@ -324,6 +330,8 @@ These are deliberately NOT in bareguard. Don't look for them — build them or u
 13. **bash / fs / net primitives accept either flat or nested action shape** (v0.4.1). `{type: "bash", cmd}` and `{type: "bash", args: {cmd | command}}` both work; same for fs (`path`) and net (`url`). Flat wins when both are set. Makes wireGate-style `{type, args, _ctx}` adapters compose without a translation layer.
 14. **fs scope/deny is lexically normalized, not symlink-resolved.** `.`/`..` segments are collapsed before matching, and scopes/deny entries match on path segments (so `/app/data` does NOT cover `/app/data-secrets`) — traversal like `/app/data/../../etc/passwd` can't escape `readScope: ["/app/data"]`. But a symlink *inside* an allowed scope that points outside it is not caught; canonicalize (`fs.realpath`) before the gate if your filesystem has untrusted symlinks.
 15. **`net.denyPrivateIps` is hostname-based, not post-DNS.** It blocks IPv4 private/loopback/link-local (incl. cloud-metadata `169.254.169.254` and `0.0.0.0`), IPv6 loopback/ULA/link-local (brackets stripped), and IPv4-mapped IPv6. It does NOT resolve DNS, so a public hostname that resolves to a private address (DNS rebinding) is not caught — resolve-then-check upstream if that's in your threat model. Pair with `net.allowDomains` for a positive egress allowlist.
+16. **`bash.allow` fails closed on shell metacharacters** (v0.4.5). When `bash.allow` is set, any command containing `;`, `|`, `&`, `$`, `` ` ``, `(`, `)`, `<`, `>`, or a newline is **denied** (rule `bash.allow.shellMeta`) — a prefix allowlist can't bound what runs after a chain/pipe/substitution. This also denies legitimate pipes like `git log | head`. If you need chaining, don't rely on `bash.allow` as the boundary — use `content.denyPatterns` (which scans the whole command) or `bash.denyPatterns`.
+17. **Audit auto-redacts when `secrets` is configured** (v0.4.5). The gate redacts `action`, `result`, and `reason` on every audit line at write time. Eval runs on the *unredacted* action (matching is never weakened); only the persisted log is masked. Don't pre-redact before `check()`/`record()` — it's redundant and pre-redaction would weaken policy matching.
 
 ## Recipes
 
