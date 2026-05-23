@@ -4,7 +4,11 @@ All notable changes to bareguard are documented here. Format: [Keep a Changelog]
 
 ## [Unreleased]
 
-Docs restructure + a new identity boundary doc, plus two security fixes to the `fs` and `net` containment primitives surfaced by a `/security` audit. Suite 88 → 93. Not published — bundles into the next release.
+_Nothing yet — next changes land here._
+
+## [0.4.4] — 2026-05-23
+
+Docs restructure + a new identity boundary doc, plus two security fixes to the `fs` and `net` containment primitives surfaced by a `/security` audit. Suite 88 → 93.
 
 ### Security
 

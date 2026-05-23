@@ -84,8 +84,8 @@ Every primitive is one file (~30–180 LOC). The gate evaluates them in a fixed 
 | Primitive | What it does |
 |---|---|
 | **bash** | Command allowlist + `denyPatterns` when `action.type === "bash"`. |
-| **fs** | `writeScope` / `readScope` / `deny` for `read` / `write` / `edit`. Path prefix matching. |
-| **net** | Egress domain allowlist + private-IP deny for `fetch`. |
+| **fs** | `writeScope` / `readScope` / `deny` for `read` / `write` / `edit`. Paths normalized (`.`/`..` collapsed) + segment-boundary matched — no traversal escapes. |
+| **net** | Egress domain allowlist + private-IP deny for `fetch` (IPv4/IPv6, link-local incl. cloud metadata). |
 | **budget** | Tokens + cost USD, **halt severity** (escalates to human). Shared across processes via `proper-lockfile`. |
 | **limits** | `maxTurns` (halt), `maxToolRounds` (halt), `maxChildren` / `maxDepth` (action), `timeoutSeconds` (halt). |
 | **tools** | Tool-name `allowlist` / `denylist` (glob-matched) + per-tool `denyArgPatterns`. Allowlist is **scope-only** — does not silence asks. |
