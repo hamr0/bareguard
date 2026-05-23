@@ -6,6 +6,25 @@ All notable changes to bareguard are documented here. Format: [Keep a Changelog]
 
 _Nothing yet — next changes land here._
 
+## [0.4.5] — 2026-05-23
+
+Security hardening pass — the follow-up to 0.4.4's audit. Three of the remaining findings fixed (the fourth, `allows()`/askHuman, is documented rather than changed since it's correct for its pre-filter purpose). Suite 93 → 100.
+
+### Security
+
+- **`bash.allow` now fails closed on shell metacharacters.** A prefix allowlist can't bound what runs after a chain/pipe/substitution — `bash.allow: ["git "]` previously permitted `git x; rm -rf ~`. Now, when `allow` is set, any command containing `;`, `|`, `&`, `$`, `` ` ``, `(`, `)`, `<`, `>`, or a newline is denied with rule `bash.allow.shellMeta`. This also denies legitimate pipes like `git log | head` — that's the intended trade for making the allowlist a real boundary; use `content.denyPatterns` (whole-command scan) when you need chaining. `denyPatterns` still evaluate first; the metachar guard only applies when `allow` is configured.
+- **Audit auto-redacts when `secrets` is configured.** The gate now redacts `action`, `result`, **and** `reason` on every audit line at write time, so raw secrets never reach the JSONL on disk. Redaction happens at the persist boundary only — policy eval still runs on the unredacted action, so matching is never weakened (this is strictly more correct than the old `gate.check(gate.redact(action))` pattern, which redacted *before* eval). `reason` is included because diagnostic strings can echo action data (e.g. `net.invalidUrl` embeds the URL). No behavior change when `secrets` is unset.
+- **`budget.raiseCap` / topup reject negative & non-finite caps.** A negative cap silently wedged the run in permanent halt (`spent >= cap` always true). `raiseCap` now throws on a non-finite or negative cap (matching its existing unknown-dimension throw); a `topup` with a negative `newCap` returns a clean deny instead of throwing out of `check()`. Lowering a positive cap is still allowed (tightening a budget is the safe direction).
+
+### Changed
+
+- **`gate.allows()` docs sharpened** (no behavior change). Clarified it is a catalog pre-filter that returns `true` for askHuman actions and must never be used as the authorization decision — always call `gate.check()` before executing. Gotcha #6 in the Integration Guide.
+- **Secrets recipe rewritten** in `bareguard.context.md` to show config-only auto-redaction; the manual `gate.redact()` / pre-`record` redaction dance is gone (the export remains for ad-hoc use). README + PRD §8 rows 1/8 updated.
+
+### Tests
+
+- **Suite 93 → 100.** New `test/security-hardening.test.js`: `bash.allow` metachar denial + clean-command/off-list/no-allow cases; audit redaction of action/result/reason with proof that eval saw the unredacted command; `raiseCap`/topup cap-validation.
+
 ## [0.4.4] — 2026-05-23
 
 Docs restructure + a new identity boundary doc, plus two security fixes to the `fs` and `net` containment primitives surfaced by a `/security` audit. Suite 88 → 93.

@@ -20,11 +20,15 @@ function defaultAuditPath(rootRunId) {
 }
 
 export class Audit {
-  constructor({ filePath, runId, parentRunId, spawnDepth, rootRunId, clock }) {
+  constructor({ filePath, runId, parentRunId, spawnDepth, rootRunId, clock, redact }) {
     this.runId = runId;
     this.parentRunId = parentRunId ?? null;
     this.spawnDepth = spawnDepth ?? 0;
     this.rootRunId = rootRunId ?? runId;
+    // Optional redactor (from gate, when `secrets` is configured). Applied to
+    // action/result at emit time so the persisted log is clean — eval runs on
+    // the real action upstream, so policy matching is never weakened.
+    this._redact = redact ?? null;
     // filePath === null  → fileless in-memory mode (B4, v0.4).
     // filePath undefined → use XDG / home / cwd default.
     this.filePath = filePath === null
@@ -53,6 +57,13 @@ export class Audit {
       spawn_depth: this.spawnDepth,
       ...fields,
     };
+    if (this._redact) {
+      if (line.action) line.action = this._redact(line.action);
+      if (line.result) line.result = this._redact(line.result);
+      // reason strings can echo action-derived data (e.g. net.invalidUrl puts
+      // the full URL in the reason), so redact them too.
+      if (typeof line.reason === "string") line.reason = this._redact(line.reason);
+    }
     if (this.fileless) {
       // No PIPE_BUF concern in-memory; skip truncation. Tests assert on
       // entries verbatim — keep them intact.
