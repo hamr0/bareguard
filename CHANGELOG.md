@@ -4,9 +4,20 @@ All notable changes to bareguard are documented here. Format: [Keep a Changelog]
 
 ## [Unreleased]
 
+_Nothing yet — next changes land here._
+
+## [0.4.7] — 2026-05-24
+
+Hardens shared-budget cross-process locking — follow-up to the flaky-test investigation in 0.4.6, validated by a second `/code-review` pass (which empirically tested crash modes and corrected the first cut).
+
+### Changed
+
+- **`budget.record()` now fails loud on an unreadable/corrupt shared budget file.** Previously, if the under-lock read or `JSON.parse` failed, it silently fell back to `spentUsd += dUsd` (stale local state) and wrote that over the committed total — losing spend and risking overspend. It now throws `BudgetUnavailableError` instead, matching the documented PRD §13 contract ("surface `BudgetUnavailableError` and terminate cleanly"). **Migration:** a corrupt budget file that was previously swallowed now propagates out of `gate.record()` / `gate.run()`; wrap those if you want to degrade rather than halt. Normal operation is unaffected — the throw only fires on genuine corruption (a missing file is still re-seeded before the lock, and `init()` keeps its rebuild-from-audit recovery).
+- **`proper-lockfile` `stale` raised 10s → 20s** for the budget file. The critical section is sub-millisecond, so a lock steal (which would put two writers in the section and silently lose an update) requires the holder to be frozen that long; 20s shrinks the window while the unchanged ~2.25s retry budget stays well under it (so a process waiting on a live holder always errors before it would steal). Fail-safe tradeoff: a holder hard-killed (SIGKILL) mid-lock makes `record()` throw `BudgetUnavailableError` until the lock ages past `stale` — halting rather than overspending.
+
 ### Tests
 
-- **Fixed a flaky cross-process budget test** (`shared-budget.test.js`). It asserted an *exact* `$0.60` total across two concurrent workers, which contradicts the documented soft-budget contract (gotcha #2: "don't rely on hard cents-precision enforcement") and flaked CI under lock contention (one lost `$0.03` update). It now asserts the invariants that hold regardless of scheduling — `record()` never over-counts (the hard invariant), and both workers' spend accumulates cross-process (a collapse smoke check) — instead of penny-exactness. No production change; `budget.js` untouched.
+- **Suite 106 → 107.** New case: `record()` on a corrupt budget file throws `BudgetUnavailableError` and leaves the file untouched (no stale-local clobber). Also folds in 0.4.6's flaky-test fix: `shared-budget.test.js`'s concurrent-spend assertion now checks scheduling-independent invariants (never over-counts; spend accumulates) instead of penny-exact `$0.60`, which contradicted the documented soft-budget contract and flaked CI under lock contention.
 
 ## [0.4.6] — 2026-05-23
 
