@@ -14,7 +14,7 @@
 ```
 
 > One chokepoint between your agent and the world. Bounds what the agent **does**, not what it **says**.
-> Single audit log. Hard caps that halt with a human in the loop. ~930 lines, one production dep.
+> Single audit log. Hard caps that halt with a human in the loop. ~1,000 lines, one production dep.
 
 <p align="center">
   <a href="https://github.com/hamr0/bareguard/actions/workflows/test.yml"><img src="https://github.com/hamr0/bareguard/actions/workflows/test.yml/badge.svg" alt="test"></a>
@@ -59,7 +59,7 @@ const gate = new Gate({
 await gate.init();
 
 // In your agent loop:
-const decision = await gate.check(gate.redact(action));
+const decision = await gate.check(action);   // audit auto-redacts if `secrets` is set
 if (decision.outcome === "allow") {
   const result = await yourExecutor(action);
   await gate.record(action, result);  // result.costUsd / result.tokens
@@ -98,7 +98,7 @@ Every primitive is one file (~30–180 LOC). The gate evaluates them in a fixed 
 
 **Safe defaults** ship in `content`: `rm -rf /`, `DROP TABLE`, `TRUNCATE` denied outright; destructive verbs (`delete`, `revoke`, `force-push`, destructive HTTP methods) escalate to the human. Override with empty arrays for pure-allow.
 
-88 tests pass on the CI matrix: **Linux + macOS + Windows × Node 20 + 22** — including real-subprocess shared-budget contention, halt cascades, single-file audit atomicity, and `parent_run_id` / `spawn_depth` stitching across a 3-deep tree.
+107 tests pass on the CI matrix: **Linux + macOS + Windows × Node 20 + 22** — including real-subprocess shared-budget contention, halt cascades, single-file audit atomicity, and `parent_run_id` / `spawn_depth` stitching across a 3-deep tree.
 
 ## Docs
 

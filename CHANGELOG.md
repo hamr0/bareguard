@@ -4,7 +4,9 @@ All notable changes to bareguard are documented here. Format: [Keep a Changelog]
 
 ## [Unreleased]
 
-_Nothing yet — next changes land here._
+### Docs
+
+- **README quick-start no longer pre-redacts before `check()`.** It showed `gate.check(gate.redact(action))`, but since v0.4.5 the gate auto-redacts at the audit boundary when `secrets` is configured, and pre-redacting before `check()` can weaken policy matching (eval should see the real action). Now `gate.check(action)`, matching the Integration Guide. Also refreshed the stale test count (88 → 107) and LOC (~930 → ~1,000).
 
 ## [0.4.7] — 2026-05-24
 
