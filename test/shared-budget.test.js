@@ -4,6 +4,7 @@ import { spawn } from "node:child_process";
 import { promises as fsp } from "node:fs";
 import path from "node:path";
 import url from "node:url";
+import { Budget, BudgetUnavailableError } from "../src/primitives/budget.js";
 import { makeTmpDir, cleanup } from "./_helpers.js";
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
@@ -94,4 +95,26 @@ test("second worker hits halt mid-work after first worker exhausted shared cap",
   assert.equal(last.kind, "deny");
   assert.equal(last.severity, "halt");
   assert.equal(last.rule, "budget.maxCostUsd");
+});
+
+test("record() fails loud on a corrupt budget file — no silent stale-local write", async (t) => {
+  const dir = await makeTmpDir(); t.after(async () => cleanup(dir));
+  const budgetPath = path.join(dir, "budget.json");
+
+  const b = new Budget({ sharedFile: budgetPath, maxCostUsd: 5 });
+  await b.init();                                       // seeds a valid file
+  const corrupt = "{ not valid json";
+  await fsp.writeFile(budgetPath, corrupt);             // corrupt it post-init
+
+  // Under the lock the read now fails — record must throw rather than fall
+  // back to writing stale local state (which would clobber/lose spend).
+  await assert.rejects(
+    () => b.record({ costUsd: 0.01, tokens: 10 }),
+    (err) => err instanceof BudgetUnavailableError,
+    "corrupt budget file under record must fail loud, not silently overwrite",
+  );
+
+  // and the corrupt file must NOT have been clobbered with a stale-local value
+  assert.equal(await fsp.readFile(budgetPath, "utf8"), corrupt,
+    "record must not write over a budget file it couldn't read");
 });

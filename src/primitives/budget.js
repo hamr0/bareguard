@@ -96,8 +96,23 @@ export class Budget {
     let release;
     try {
       release = await lockfile.lock(this.sharedFile, {
-        retries: { retries: 10, minTimeout: 30, maxTimeout: 300 },
-        stale: 10_000,
+        retries: { retries: 10, minTimeout: 30, maxTimeout: 300 }, // ~2.25s total
+        // `stale`: how long a held lock may exist before another process treats
+        // it as abandoned and STEALS it. record()'s critical section is
+        // sub-millisecond, so a steal — which puts two writers in the section
+        // and silently loses an update — requires the holder to be frozen this
+        // long. Raised 10s → 20s to shrink that window. The retry budget above
+        // (~2.25s) stays well under `stale`, so a process merely WAITING on a
+        // live holder always throws before it would steal — steal-during-
+        // contention is exactly what would re-open the lost-update gap.
+        // Tradeoff to know: a holder hard-killed mid-lock is NOT released
+        // (SIGKILL doesn't fire proper-lockfile's signal-exit cleanup, and a
+        // frozen holder can't run handlers); record() then throws
+        // BudgetUnavailableError until the lock ages past `stale` and can be
+        // stolen. That's fail-safe (halt, never overspend), so a longer `stale`
+        // trades a slightly longer post-hard-kill outage for stronger
+        // lost-update protection.
+        stale: 20_000,
       });
     } catch (err) {
       throw new BudgetUnavailableError(`lock failed: ${err.message}`);
@@ -190,18 +205,23 @@ export class Budget {
       return;
     }
     await this._withLock(async () => {
+      let s;
       try {
-        const buf = await fsp.readFile(this.sharedFile, "utf8");
-        const s = JSON.parse(buf);
-        this.spentUsd    = (s.spent_usd ?? 0)    + dUsd;
-        this.spentTokens = (s.spent_tokens ?? 0) + dTok;
-        this.capUsd      = s.cap_usd      ?? this.capUsd;
-        this.capTokens   = s.cap_tokens   ?? this.capTokens;
-        this.startedAt   = s.started_at   ?? this.startedAt;
-      } catch {
-        this.spentUsd += dUsd;
-        this.spentTokens += dTok;
+        s = JSON.parse(await fsp.readFile(this.sharedFile, "utf8"));
+      } catch (err) {
+        // Under a held lock the file is always present and well-formed
+        // (init() seeds it; _withLock re-creates it if missing). A read/parse
+        // failure here means real corruption or fs trouble — do NOT fall back
+        // to `spentUsd += dUsd`, which writes stale local state over the
+        // committed total and silently loses spend. Fail loud so the run halts
+        // rather than overspends against a budget file it can't read.
+        throw new BudgetUnavailableError(`record could not read budget file: ${err.message}`);
       }
+      this.spentUsd    = (s.spent_usd ?? 0)    + dUsd;
+      this.spentTokens = (s.spent_tokens ?? 0) + dTok;
+      this.capUsd      = s.cap_usd      ?? this.capUsd;
+      this.capTokens   = s.cap_tokens   ?? this.capTokens;
+      this.startedAt   = s.started_at   ?? this.startedAt;
       await this._write();
     });
   }
