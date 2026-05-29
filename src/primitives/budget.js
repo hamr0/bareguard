@@ -120,10 +120,31 @@ export class Budget {
     const tmp = `${this.sharedFile}.${process.pid}.${randomUUID()}.tmp`;
     try {
       await fsp.writeFile(tmp, JSON.stringify(state, null, 2));
-      await fsp.rename(tmp, this.sharedFile);
+      await this._renameAtomic(tmp, this.sharedFile);
     } catch (err) {
       try { await fsp.unlink(tmp); } catch { /* best-effort cleanup */ }
       throw err;
+    }
+  }
+
+  // Replace `dest` with `tmp` atomically. On Windows, rename-replace
+  // (MoveFileEx) can transiently fail with EPERM/EACCES/EBUSY when `dest` is
+  // momentarily held by another process — Defender, the search indexer, or a
+  // lagging handle close — even though our write is already serialized under the
+  // budget lock. Those are external and transient, so retry with a short backoff
+  // (~550ms worst case, well under the 20s lock `stale`). POSIX rename is atomic
+  // and never hits this, so the retry is win32-only and the happy path is
+  // unaffected. (This is the documented failure mode of fs.rename on Windows; the
+  // same strategy is used by write-file-atomic / fs-extra.)
+  async _renameAtomic(tmp, dest) {
+    if (process.platform !== "win32") { await fsp.rename(tmp, dest); return; }
+    const TRANSIENT = new Set(["EPERM", "EACCES", "EBUSY"]);
+    for (let attempt = 0; ; attempt++) {
+      try { await fsp.rename(tmp, dest); return; }
+      catch (err) {
+        if (attempt >= 9 || !TRANSIENT.has(err.code)) throw err;
+        await new Promise(resolve => setTimeout(resolve, 10 * (attempt + 1)));
+      }
     }
   }
 

@@ -4,7 +4,11 @@ All notable changes to bareguard are documented here. Format: [Keep a Changelog]
 
 ## [0.5.2] — 2026-05-29
 
-Turns on `strictNullChecks` over the sources — closing the null-safety gap behind the v0.5 types — and simplifies the typecheck setup. No runtime or public-API change.
+Turns on `strictNullChecks` over the sources — closing the null-safety gap behind the v0.5 types — and simplifies the typecheck setup. Also fixes a Windows-only flake in the v0.5.1 atomic budget write. No public-API change.
+
+### Fixed
+
+- **Atomic budget write no longer flakes on Windows (`EPERM` on `rename`).** v0.5.1 made `Budget._write()` write to a temp file then `rename` it over the target — atomic on POSIX, but on Windows `rename`-replace (`MoveFileEx`) intermittently throws `EPERM`/`EACCES`/`EBUSY` when the destination is momentarily held by another process (Defender, the search indexer, a lagging handle close), even with the write serialized under the budget lock. That error propagated out of `record()` and crashed the worker — which is what failed the `windows-latest / Node 22` CI leg (a worker exited non-zero in `audit-stitching`). The rename now retries on those transient codes with a short backoff (~550ms worst case, well under the 20s lock `stale`); the retry is win32-only, so the POSIX path and the happy path are unchanged. Same strategy as `write-file-atomic`/`fs-extra`.
 
 ### Changed
 
