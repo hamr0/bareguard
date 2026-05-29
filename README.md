@@ -17,7 +17,7 @@
 > Single audit log. Hard caps that halt with a human in the loop. ~1,000 lines, one production dep.
 
 <p align="center">
-  <a href="https://github.com/hamr0/bareguard/actions/workflows/test.yml"><img src="https://github.com/hamr0/bareguard/actions/workflows/test.yml/badge.svg" alt="test"></a>
+  <a href="https://github.com/hamr0/bareguard/actions/workflows/ci.yml"><img src="https://github.com/hamr0/bareguard/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <img src="https://img.shields.io/github/package-json/v/hamr0/bareguard?label=version&color=2a4f8c" alt="version (auto from package.json)">
   <img src="https://img.shields.io/badge/license-Apache%202.0-2a4f8c" alt="license: Apache 2.0">
 </p>
