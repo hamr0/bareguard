@@ -222,9 +222,9 @@ export class Gate {
 
     let iterations = 0;
     while (true) {
-      // PRE-EVAL: halt
-      let decision = this._haltCheck();
-      if (!decision) decision = await this._stepEval(action);
+      // PRE-EVAL: halt, else the 6-step eval. `_stepEval` always returns a
+      // terminal decision, so `??` makes `decision` provably non-null.
+      const decision = this._haltCheck() ?? await this._stepEval(action);
 
       // Terminal allow/deny → audit and return.
       if (decision.outcome === "allow" || decision.outcome === "deny") {
@@ -299,10 +299,11 @@ export class Gate {
       try {
         const channelPromise = this.humanChannel(event);
         if (this.humanChannelTimeoutMs != null && this.humanChannelTimeoutMs > 0) {
+          const timeoutMs = this.humanChannelTimeoutMs;
           const TIMEOUT = Symbol("humanChannelTimeout");
           let timer;
           const timeoutPromise = new Promise((resolve) => {
-            timer = setTimeout(() => resolve(TIMEOUT), this.humanChannelTimeoutMs);
+            timer = setTimeout(() => resolve(TIMEOUT), timeoutMs);
             if (typeof timer.unref === "function") timer.unref();
           });
           const raced = await Promise.race([channelPromise, timeoutPromise]);

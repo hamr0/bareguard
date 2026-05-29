@@ -1,5 +1,5 @@
 {
-  "// note": "Types are generated FROM JSDoc in the .js sources — bareguard ships as plain ESM JS. `npm run build:types` emits .d.ts into ./types (mirroring src/); `npm run typecheck` runs this plus the strict consumer check. Both ./types and src/**/*.d.ts are git-ignored and built via the `prepare` script. `strict` is off because the sources are hand-written JS, not TS — the strict, end-to-end gate on the PUBLIC surface lives in tsconfig.consumer.json; checkJs here still validates the JSDoc that drives the emitted declarations.",
+  "// note": "Types are generated FROM JSDoc in the .js sources — bareguard ships as plain ESM JS. `npm run build:types` emits .d.ts into ./types (mirroring src/); `npm run typecheck` runs this single project. Both ./types and src/**/*.d.ts are git-ignored and built via the `prepublishOnly` script. Full `strict` is off because the hand-written JS throws ~130 strict errors that don't affect the emitted public types — but `strictNullChecks` IS on: it catches real null-safety bugs in the sources (it surfaced ~45, several genuine) and is the strictness that actually matters for the emitted declarations. checkJs validates the JSDoc that drives those declarations.",
   "compilerOptions": {
     "allowJs": true,
     "checkJs": true,
@@ -12,6 +12,7 @@
     "lib": ["ES2022"],
     "types": ["node"],
     "strict": false,
+    "strictNullChecks": true,
     "skipLibCheck": true
   },
   "include": ["src/**/*.js"]

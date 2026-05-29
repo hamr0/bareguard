@@ -2,6 +2,16 @@
 
 All notable changes to bareguard are documented here. Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [SemVer](https://semver.org/).
 
+## [0.5.2] — 2026-05-29
+
+Turns on `strictNullChecks` over the sources — closing the null-safety gap behind the v0.5 types — and simplifies the typecheck setup. No runtime or public-API change.
+
+### Changed
+
+- **`strictNullChecks` is now enabled on the source typecheck (`tsconfig.json`), and the ~45 findings it surfaced are fixed.** The v0.5.0 type work checked a strict *consumer fixture* but ran the source itself with no null-checking, so genuine null hazards in the `.js` were invisible. The fixes are behaviour-preserving narrowing: `gate.check()` now derives its decision as `this._haltCheck() ?? await this._stepEval(action)` (was a nullable `let` that TypeScript couldn't prove non-null); `Audit` and `Budget` capture the nullable `filePath` / `sharedFile` into locals past their fileless/local-mode guards so the narrowing survives `await` and closure boundaries; and the rate-window helper takes `string | null` / `object[] | null` and returns `0` for "no audit source" instead of throwing a `TypeError`. Full `strict` stays off (the hand-written JS still trips ~130 unrelated strict errors that don't affect the emitted declarations); `strictNullChecks` is the slice that matters for null safety and for the generated `.d.ts`.
+- **Typecheck simplified to a single `tsc` project.** The strict consumer-resolution fixture (`tsconfig.consumer.json` + `test/types/consumer.ts`) is removed: it ran full-strict against a stub while missing every real null issue in the actual source, so `strictNullChecks` on the source is both simpler and strictly more thorough. `npm run typecheck` is now just `tsc -p tsconfig.json`.
+- **`prepare` → `prepublishOnly` for the `.d.ts` build.** Declarations are still generated into `types/` and shipped via the `files` allowlist; they're now built before publish rather than on every `npm install`. npm consumers are unaffected (the tarball carries pre-built `types/`); a git/`file:` dependency would need `npm run build:types` to populate them.
+
 ## [0.5.1] — 2026-05-29
 
 ### Fixed

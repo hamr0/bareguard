@@ -5,7 +5,7 @@
 **Last updated:** 2026-05-29
 **Language:** Node.js (JavaScript), ESM, target Node 20 LTS+. Ships `.d.ts` generated from JSDoc (v0.5) — typed consumption with no `@types` package.
 **Sibling spec:** `bareagent-prd.md`
-**Implementation status:** v0.5.1 — tests green on Linux/macOS/Windows × Node 20/22 (+ a `tsc` typecheck job)
+**Implementation status:** v0.5.2 — tests green on Linux/macOS/Windows × Node 20/22 (+ a `strictNullChecks` `tsc` typecheck job)
 **Supersedes:** v0.1 (Python draft), v0.2 (orchestration), v0.3 (mid-MCP), v0.4 (post-MCP), v0.5 amendments doc, v0.6 unified
 
 > **For future Claude (implementation note):** This document is the single
@@ -788,11 +788,17 @@ justification in the PRD.
 
 **TypeScript types (v0.5).** bareguard stays plain ESM JS — but the public API
 carries full JSDoc, and `.d.ts` is generated from it (`tsc --emitDeclarationOnly
---allowJs`) into `types/`, shipped via the `prepare` script and the `files`
-allowlist (not committed). JSDoc is the single source of truth; named config
-types are importable from the root or the `bareguard/types` subpath. `typescript`
-is a **dev** dependency only — the production-dep target of 1 is unchanged. A
-`tsc` typecheck job plus a strict consumer-resolution fixture guard against drift.
+--allowJs`) into `types/`, built by the `prepublishOnly` script and shipped via
+the `files` allowlist (not committed). JSDoc is the single source of truth; named
+config types are importable from the root or the `bareguard/types` subpath.
+`typescript` is a **dev** dependency only — the production-dep target of 1 is
+unchanged. The `tsc` typecheck job runs `tsconfig.json` with `strictNullChecks`
+enabled (v0.5.2), which gates the sources for null safety as well as validating
+the JSDoc behind the emitted declarations. (Full `strict` stays off: the
+hand-written JS trips ~130 unrelated strict errors that don't affect the public
+types.) v0.5.0's separate strict consumer-resolution fixture was dropped in
+v0.5.2 — it checked a stub while missing the real null hazards in the source, so
+`strictNullChecks` on the source itself is both simpler and more thorough.
 
 ## 19. Migration plan (post-v0.1.1)
 

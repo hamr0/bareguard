@@ -63,10 +63,11 @@ export class Audit {
    * @returns {Promise<void>}
    */
   async init() {
-    if (this.fileless) return;
-    await fsp.mkdir(path.dirname(this.filePath), { recursive: true });
+    const { filePath } = this;
+    if (filePath === null) return; // fileless mode
+    await fsp.mkdir(path.dirname(filePath), { recursive: true });
     // touch the file so subsequent appends always have a target
-    const fh = await fsp.open(this.filePath, "a");
+    const fh = await fsp.open(filePath, "a");
     await fh.close();
   }
 
@@ -91,9 +92,10 @@ export class Audit {
       // the full URL in the reason), so redact them too.
       if (typeof line.reason === "string") line.reason = this._redact(line.reason);
     }
-    if (this.fileless) {
-      // No PIPE_BUF concern in-memory; skip truncation. Tests assert on
-      // entries verbatim — keep them intact.
+    const { filePath } = this;
+    if (filePath === null) {
+      // Fileless mode. No PIPE_BUF concern in-memory; skip truncation. Tests
+      // assert on entries verbatim — keep them intact.
       this.entries.push(line);
       return;
     }
@@ -129,15 +131,15 @@ export class Audit {
     if (NEEDS_LOCK) {
       // Windows: O_APPEND cross-process atomicity not guaranteed.
       // Acquire a lock on the audit file for the duration of the write.
-      const release = await lockfile.lock(this.filePath, {
+      const release = await lockfile.lock(filePath, {
         retries: { retries: 10, minTimeout: 20, maxTimeout: 200 },
         stale: 10_000,
       });
-      try { await fsp.appendFile(this.filePath, serialized); }
+      try { await fsp.appendFile(filePath, serialized); }
       finally { try { await release(); } catch { /* unlock failure non-fatal */ } }
     } else {
       // Linux/macOS: kernel guarantees atomic appends below PIPE_BUF.
-      await fsp.appendFile(this.filePath, serialized);
+      await fsp.appendFile(filePath, serialized);
     }
   }
 
@@ -150,9 +152,10 @@ export class Audit {
     // by reference). Fileless mode is test-only per PRD §12 — tests
     // should treat entries as read-only; mutating nested fields would
     // corrupt the live in-memory log.
-    if (this.fileless) return this.entries.slice();
+    const { filePath } = this;
+    if (filePath === null) return this.entries.slice(); // fileless mode
     try {
-      const buf = await fsp.readFile(this.filePath, "utf8");
+      const buf = await fsp.readFile(filePath, "utf8");
       return buf.split("\n").filter(Boolean).map(l => JSON.parse(l));
     } catch (err) {
       if (err.code === "ENOENT") return [];

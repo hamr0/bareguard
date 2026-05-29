@@ -9,8 +9,8 @@ import { promises as fsp } from "node:fs";
 /**
  * Count audit records matching `predicate` within a trailing time window.
  * @param {object} opts
- * @param {string} [opts.auditPath] path to the JSONL audit file (file mode)
- * @param {object[]} [opts.entries] already-parsed audit entries (fileless mode); takes precedence over auditPath
+ * @param {string|null} [opts.auditPath] path to the JSONL audit file (file mode); null in fileless mode
+ * @param {object[]|null} [opts.entries] already-parsed audit entries (fileless mode); takes precedence over auditPath
  * @param {number} opts.windowMs trailing window size in milliseconds
  * @param {(rec: object) => boolean} opts.predicate per-record match test
  * @param {number} [opts.now] window-end timestamp in ms (defaults to Date.now())
@@ -33,6 +33,9 @@ export async function countAuditWindow({ auditPath, entries, windowMs, predicate
   // instead of falling through to a file read.
   if (entries) {
     records = entries;
+  } else if (auditPath == null) {
+    // No fileless entries and no file path → no audit source → no matches.
+    return 0;
   } else {
     let buf;
     try { buf = await fsp.readFile(auditPath, "utf8"); }

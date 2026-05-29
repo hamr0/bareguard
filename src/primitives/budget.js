@@ -259,10 +259,11 @@ export class Budget {
       this.spentTokens += dTok;
       return;
     }
+    const sharedFile = this.sharedFile; // non-null past the guard above
     await this._withLock(async () => {
       let s;
       try {
-        s = JSON.parse(await fsp.readFile(this.sharedFile, "utf8"));
+        s = JSON.parse(await fsp.readFile(sharedFile, "utf8"));
       } catch (err) {
         // Under a held lock the file is always present and well-formed
         // (init() seeds it; _withLock re-creates it if missing). A read/parse
@@ -299,14 +300,17 @@ export class Budget {
       throw new Error(`invalid budget cap: ${newCap} (must be a finite number >= 0)`);
     }
     await this._withLock(async () => {
-      try {
-        const buf = await fsp.readFile(this.sharedFile, "utf8");
-        const s = JSON.parse(buf);
-        this.spentUsd    = s.spent_usd    ?? this.spentUsd;
-        this.spentTokens = s.spent_tokens ?? this.spentTokens;
-        this.capUsd      = s.cap_usd      ?? this.capUsd;
-        this.capTokens   = s.cap_tokens   ?? this.capTokens;
-      } catch { /* keep local */ }
+      const sharedFile = this.sharedFile;
+      if (sharedFile) {
+        try {
+          const buf = await fsp.readFile(sharedFile, "utf8");
+          const s = JSON.parse(buf);
+          this.spentUsd    = s.spent_usd    ?? this.spentUsd;
+          this.spentTokens = s.spent_tokens ?? this.spentTokens;
+          this.capUsd      = s.cap_usd      ?? this.capUsd;
+          this.capTokens   = s.cap_tokens   ?? this.capTokens;
+        } catch { /* keep local */ }
+      }
       if (dimension === "costUsd") this.capUsd = newCap;
       else this.capTokens = newCap;
       await this._write();

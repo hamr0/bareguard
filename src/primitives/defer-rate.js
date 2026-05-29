@@ -18,8 +18,8 @@ const WINDOW_MS = 60_000;
  * @param {object} [cfg] defer config
  * @param {number} [cfg.ratePerMinute] cap per trailing 60s (default 15; Infinity disables)
  * @param {object} [ctx] rate context from the gate
- * @param {string} [ctx.auditPath] audit file path (file mode)
- * @param {object[]} [ctx.entries] parsed audit entries (fileless mode)
+ * @param {string|null} [ctx.auditPath] audit file path (file mode); null in fileless mode
+ * @param {object[]|null} [ctx.entries] parsed audit entries (fileless mode)
  * @param {number} [ctx.now] current timestamp in ms
  * @returns {Promise<{outcome:string,severity:string,rule:string,reason:string}|null>} deny decision, or null if under cap/not applicable
  */

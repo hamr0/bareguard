@@ -1,6 +1,6 @@
 {
   "name": "bareguard",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "Action-side runtime policy library for autonomous agents — bounds what the agent does, not what it says. Sibling of bareagent in the bare suite.",
   "type": "module",
   "main": "./src/index.js",
@@ -28,8 +28,8 @@
   "scripts": {
     "test": "node --test",
     "build:types": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.consumer.json",
-    "prepare": "npm run build:types"
+    "typecheck": "tsc -p tsconfig.json",
+    "prepublishOnly": "npm run build:types"
   },
   "dependencies": {
     "proper-lockfile": "^4.1.2"
