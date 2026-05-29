@@ -29,6 +29,7 @@ export async function deferRateCheck(action, cfg = {}, ctx = {}) {
   if (cap === Infinity) return null;
   const count = await countAuditWindow({
     auditPath: ctx.auditPath,
+    entries:   ctx.entries, // fileless mode: count from in-memory entries, not a (null) path
     windowMs:  WINDOW_MS,
     now:       ctx.now ?? Date.now(),
     predicate: rec => rec.phase === "gate" && rec.action?.type === "defer" && rec.decision === "allow",

@@ -34,6 +34,28 @@ test("spawn-rate: default cap 10 — 11th spawn denies", async (t) => {
   assert.match(dec.reason,   /10\/10/);
 });
 
+test("spawn-rate: fileless mode enforces the cap from in-memory entries (no fail-open)", async (t) => {
+  // Regression: in fileless mode the rate context carries `entries`, not a path;
+  // spawn-rate must count from them rather than silently counting 0 (fail-open).
+  const clock = makeClock();
+  const gate = new Gate({
+    audit:  { path: null }, // fileless / in-memory
+    spawn:  { ratePerMinute: 3 },
+    _clock: clock,
+  });
+  await gate.init();
+
+  for (let i = 0; i < 3; i++) {
+    const dec = await gate.check({ type: "spawn", args: { agent: "child" } });
+    assert.equal(dec.outcome, "allow", `fileless spawn ${i + 1}/3 should allow`);
+    clock.advance(100);
+  }
+  const dec = await gate.check({ type: "spawn", args: { agent: "child" } });
+  assert.equal(dec.outcome, "deny", "4th spawn must deny in fileless mode too");
+  assert.equal(dec.rule,    "spawn.ratePerMinute");
+  assert.match(dec.reason,  /3\/3/);
+});
+
 test("spawn-rate: per-family — parent + child share one counter via shared audit file", async (t) => {
   const dir = await makeTmpDir(); t.after(async () => cleanup(dir));
   const { auditPath } = uniquePaths(dir);

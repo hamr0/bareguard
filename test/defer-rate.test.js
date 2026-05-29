@@ -180,6 +180,29 @@ test("defer-rate: post-cap deny records don't extend the ban window (I4)", async
   assert.equal(d3.outcome, "allow", "deny records must not extend the ban window");
 });
 
+test("defer-rate: fileless mode enforces the cap from in-memory entries (no fail-open)", async (t) => {
+  // Regression: the rate context carries `entries` (not a file path) in fileless
+  // mode; defer-rate must count from them. Previously `entries` was not forwarded,
+  // so the count was always 0 and the cap silently never fired (fail-open).
+  const clock = makeClock();
+  const gate = new Gate({
+    audit:  { path: null }, // fileless / in-memory
+    defer:  { ratePerMinute: 3 },
+    _clock: clock,
+  });
+  await gate.init();
+
+  for (let i = 0; i < 3; i++) {
+    const dec = await gate.check({ type: "defer", args: { when: "1m" } });
+    assert.equal(dec.outcome, "allow", `fileless defer ${i + 1}/3 should allow`);
+    clock.advance(100);
+  }
+  const dec = await gate.check({ type: "defer", args: { when: "1m" } });
+  assert.equal(dec.outcome, "deny", "4th defer must deny in fileless mode too");
+  assert.equal(dec.rule,    "defer.ratePerMinute");
+  assert.match(dec.reason,  /3\/3/);
+});
+
 test("defer-rate: cap of Infinity disables the guard", async (t) => {
   const dir = await makeTmpDir(); t.after(async () => cleanup(dir));
   const { auditPath } = uniquePaths(dir);
