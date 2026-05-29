@@ -38,7 +38,7 @@ It owns exactly one layer. Not a content guardrail (use `guardrails-ai` for toxi
 npm install bareguard
 ```
 
-Requires Node.js >= 20. One production dep: `proper-lockfile`.
+Requires Node.js >= 20. One production dep: `proper-lockfile`. Ships with TypeScript types (generated from JSDoc) — `import { Gate, type GateConfig } from "bareguard"` works out of the box, no `@types` package needed.
 
 ## Quick start
 
@@ -85,7 +85,7 @@ Every primitive is one file (~30–180 LOC). The gate evaluates them in a fixed 
 |---|---|
 | **bash** | Command allowlist + `denyPatterns` when `action.type === "bash"`. With `allow` set, shell metacharacters (`;` `\|` `&` `$` `` ` `` `()` `<>`) are denied — a prefix allowlist can't bound chaining. |
 | **fs** | `writeScope` / `readScope` / `deny` for `read` / `write` / `edit`. Paths normalized (`.`/`..` collapsed) + segment-boundary matched — no traversal escapes. |
-| **net** | Egress domain allowlist + private-IP deny for `fetch` (IPv4/IPv6, link-local incl. cloud metadata). |
+| **net** | Egress domain allowlist + private-IP deny for `fetch` (IPv4/IPv6, link-local incl. cloud metadata). `denyPrivateIps` matches the **literal host** — it doesn't resolve DNS, so it's defense-in-depth, not an SSRF boundary; use `allowDomains` (fail-closed) to bound egress. |
 | **budget** | Tokens + cost USD, **halt severity** (escalates to human). Shared across processes via `proper-lockfile`. |
 | **limits** | `maxTurns` (halt), `maxToolRounds` (halt), `maxChildren` / `maxDepth` (action), `timeoutSeconds` (halt). |
 | **tools** | Tool-name `allowlist` / `denylist` (glob-matched) + per-tool `denyArgPatterns`. Allowlist is **scope-only** — does not silence asks. |

@@ -13,6 +13,18 @@ import { countAuditWindow } from "../audit-window.js";
 const DEFAULT_RATE = 10;
 const WINDOW_MS = 60_000;
 
+/**
+ * Step-3 deny for `spawn` actions: deny when allowed spawns in the trailing 60s window reach the per-minute cap.
+ * @param {object} action action being evaluated
+ * @param {string} action.type action type (no-op unless "spawn")
+ * @param {object} [cfg] spawn config
+ * @param {number} [cfg.ratePerMinute] cap per trailing 60s (default 10; Infinity disables)
+ * @param {object} [ctx] rate context from the gate
+ * @param {string} [ctx.auditPath] audit file path (file mode)
+ * @param {object[]} [ctx.entries] parsed audit entries (fileless mode)
+ * @param {number} [ctx.now] current timestamp in ms
+ * @returns {Promise<{outcome:string,severity:string,rule:string,reason:string}|null>} deny decision, or null if under cap/not applicable
+ */
 export async function spawnRateCheck(action, cfg = {}, ctx = {}) {
   if (action.type !== "spawn") return null;
   const cap = cfg.ratePerMinute ?? DEFAULT_RATE;

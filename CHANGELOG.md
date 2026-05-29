@@ -2,7 +2,28 @@
 
 All notable changes to bareguard are documented here. Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [SemVer](https://semver.org/).
 
-## [Unreleased]
+## [0.5.0] — 2026-05-29
+
+Ships TypeScript types for the library, plus policy-bypass hardening from a security audit. Minor bump for the new public capability (typed consumption).
+
+### Security
+
+- **Type-confusion fail-open closed in `fs` / `net` / `bash` (H1).** A present-but-non-string `path` / `url` / `cmd` (an array, a `{ toString }` object, a number) previously made the primitive return "no opinion" — the action then fell through to the allowlist and was **allowed**, bypassing `deny` / `writeScope` / `readScope` / `denyPrivateIps` / `allowDomains`, while the executor coerced the value back to a real string (`{ toString: () => "/etc/passwd" }`). The `bash` allow path additionally threw a `TypeError` mid-eval. These now **deny** with `fs.invalidPath` / `net.invalidUrl` / `bash.invalidCmd`. An absent field is still a no-op.
+- **Backslash traversal no longer escapes `fs` scope on Windows (M2).** `norm()` used `path.posix.normalize`, which treats `\` as an ordinary character — so `/scope/..\..\etc` left its `..` segments uncollapsed and escaped the scope on win32 (a CI-supported platform). Backslashes are now folded to `/` before normalization.
+- **Glob `*` now matches line terminators (L1).** `globToRegex` compiled without the `s` flag, so `.` didn't match `\n` / `\r` — a tool name like `"danger\nous"` slipped past a `tools.denylist` glob (`"danger*"`). The compiled RegExp now uses dotAll. The allowlist direction was already fail-closed and is unaffected.
+
+### Documented (intentional limitations surfaced by the audit)
+
+- **`net.denyPrivateIps` matches the literal host only — it does not resolve DNS (M1),** so a hostname whose record points at a private/metadata address is not caught. It's defense-in-depth, not an SSRF boundary; `allowDomains` (fail-closed) is the control to bound egress. Numeric-encoding vectors (decimal/octal/hex/short-form/mapped-IPv6) are **not** a bypass — the WHATWG URL parser normalizes them before the check. Now noted in the README, the `net` JSDoc, and `NetConfig`.
+- **`secrets.envVars` skips values shorter than 8 characters (L2)** to avoid masking incidental short strings (port numbers); use a `patterns` entry for short secrets. Now noted in `SecretsConfig` and the source.
+
+### Not changed
+
+- **`defer`/`spawn` rate window scans the full audit log per check (validated, left as-is).** It's O(n) per check (O(n²) over a long run) on the hot path. An early-stop optimization was implemented and then **reverted**: the audit log is only approximately time-ordered across processes, so any position-based early-stop can under-count in-window records — and for a rate limiter an under-count is a cap **bypass**. A full timestamp scan is the only provably-correct option; bound the cost by keeping runs / audit files reasonably sized. (Equivalence testing under reordered timestamps is what caught the regression.)
+
+### Added
+
+- **Ships with TypeScript types.** The public API is now fully documented with JSDoc, and `.d.ts` declarations are generated from it (`tsc --emitDeclarationOnly --allowJs`) so TypeScript consumers — and JS editors — get full IntelliSense and compile-time checking on the `Gate` config, the decision/event shapes, and every re-exported primitive. JSDoc is the single source of truth; the declarations are generated (into `types/`) by the `prepare` script and shipped in the package, never hand-maintained. Named config types are importable from the root (`import { Gate, type GateConfig } from "bareguard"`) or from the `bareguard/types` subpath. No runtime change — bareguard remains plain ESM JS. A `typecheck` CI job (`tsc`) plus a strict consumer-resolution fixture (`test/types/consumer.ts`) guard the JSDoc and the published types against drift.
 
 ### Docs
 

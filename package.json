@@ -1,14 +1,23 @@
 {
   "name": "bareguard",
-  "version": "0.4.7",
+  "version": "0.5.0",
   "description": "Action-side runtime policy library for autonomous agents — bounds what the agent does, not what it says. Sibling of bareagent in the bare suite.",
   "type": "module",
   "main": "./src/index.js",
+  "types": "./types/index.d.ts",
   "exports": {
-    ".": "./src/index.js"
+    ".": {
+      "types": "./types/index.d.ts",
+      "default": "./src/index.js"
+    },
+    "./types": {
+      "types": "./types/types.d.ts",
+      "default": "./src/types.js"
+    }
   },
   "files": [
     "src",
+    "types",
     "README.md",
     "CHANGELOG.md",
     "LICENSE",
@@ -17,10 +26,17 @@
   ],
   "engines": { "node": ">=20" },
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "build:types": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.consumer.json",
+    "prepare": "npm run build:types"
   },
   "dependencies": {
     "proper-lockfile": "^4.1.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "typescript": "^5.6.0"
   },
   "license": "Apache-2.0",
   "author": "hamr0",

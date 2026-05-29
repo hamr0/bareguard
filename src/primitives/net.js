@@ -1,6 +1,11 @@
 // net primitive (PRD §8 row 4). Runs at step 3 when action.type === "fetch".
 // Domain allowlist + private-IP deny.
 
+/**
+ * True if `host` is a loopback/private/link-local IP or "localhost" (IPv4 + IPv6 incl. mapped/compatible forms).
+ * @param {string} host hostname or IP literal (IPv6 brackets tolerated)
+ * @returns {boolean}
+ */
 function isPrivateIp(host) {
   if (!host) return false;
   let h = host.toLowerCase();
@@ -53,9 +58,32 @@ function isPrivateIp(host) {
 // Accepts either flat (action.url) or nested (action.args.url) shapes so
 // wireGate-style {type, args, _ctx} adapters compose without a translation
 // layer. (v0.4.1, multis seam fix.)
+/**
+ * Step-3 deny for `fetch` actions: invalid-URL deny, optional private-IP deny, optional domain allowlist.
+ * @param {object} action action being evaluated; URL read from action.url or action.args.url
+ * @param {string} action.type action type (no-op unless "fetch")
+ * @param {string} [action.url] target URL (flat shape)
+ * @param {object} [action.args] nested-shape args
+ * @param {object} [cfg] net config
+ * @param {boolean} [cfg.denyPrivateIps] deny private/loopback/link-local hosts.
+ *   NOTE: matches the URL's literal host only — it does NOT perform DNS
+ *   resolution, so a hostname whose A/AAAA record points at a private address
+ *   (e.g. a rebinding domain, `metadata.google.internal`) is NOT caught. This
+ *   is defense-in-depth, not an SSRF boundary; use `allowDomains` (a fail-closed
+ *   allowlist) when egress must be bounded.
+ * @param {string[]} [cfg.allowDomains] if set, host must equal or be a subdomain of one of these
+ * @returns {{outcome:string,severity:string,rule:string,reason:string}|null} deny decision, or null if allowed/not applicable
+ */
 export function netCheck(action, cfg = {}) {
   if (action.type !== "fetch") return null;
   const url = action.url ?? action.args?.url;
+  // A present-but-non-string url fails OPEN if waved through (the action
+  // reaches the allowlist while the executor coerces it back to a fetchable
+  // string). Deny anything that isn't a plain string. (Absent → not a fetch
+  // shape we gate.)
+  if (url != null && typeof url !== "string") {
+    return { outcome: "deny", severity: "action", rule: "net.invalidUrl", reason: `url is not a string (type ${typeof url})` };
+  }
   if (typeof url !== "string") return null;
 
   let host;

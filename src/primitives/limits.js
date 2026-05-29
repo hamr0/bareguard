@@ -7,7 +7,18 @@
 
 const LLM_TYPE = "llm";
 
+/**
+ * Tracks turn/tool-round/spawn counts and enforces per-run limits.
+ */
 export class Limits {
+  /**
+   * @param {object} [cfg] limits config
+   * @param {number} [cfg.maxTurns] max gate.record ticks before halt (default Infinity)
+   * @param {number} [cfg.maxToolRounds] max non-"llm" records before halt (default Infinity)
+   * @param {number} [cfg.maxChildren] max lifetime spawns (default Infinity)
+   * @param {number} [cfg.maxDepth] max spawn depth (default Infinity)
+   * @param {number} [cfg.startingDepth] this run's spawn depth (default 0)
+   */
   constructor(cfg = {}) {
     this.maxTurns = cfg.maxTurns ?? Infinity;
     this.maxToolRounds = cfg.maxToolRounds ?? Infinity;
@@ -19,7 +30,10 @@ export class Limits {
     this.children = 0;
   }
 
-  // Pre-eval halt: maxTurns + maxToolRounds
+  /**
+   * Pre-eval halt check for maxTurns / maxToolRounds.
+   * @returns {{outcome:string,severity:string,rule:string,reason:string}|null} halt decision, or null if under limits
+   */
   preCheck() {
     if (this.turns >= this.maxTurns) {
       return {
@@ -36,7 +50,12 @@ export class Limits {
     return null;
   }
 
-  // Step 3: per-spawn action denies
+  /**
+   * Step-3 per-spawn action deny for maxChildren / maxDepth.
+   * @param {object} action action being evaluated
+   * @param {string} action.type action type (no-op unless "spawn")
+   * @returns {{outcome:string,severity:string,rule:string,reason:string}|null} deny decision, or null if within limits/not a spawn
+   */
   spawnCheck(action) {
     if (action.type !== "spawn") return null;
     if (this.children + 1 > this.maxChildren) {
@@ -54,7 +73,17 @@ export class Limits {
     return null;
   }
 
+  /**
+   * Increment the lifetime spawn (children) counter.
+   * @returns {void}
+   */
   noteSpawn() { this.children += 1; }
+  /**
+   * Tick counters once per gate.record: always turns, and toolRounds for non-"llm" actions.
+   * @param {object} [action] the recorded action
+   * @param {string} [action.type] action type ("llm" does not tick toolRounds)
+   * @returns {void}
+   */
   // tick is called once per gate.record. Pass `action` so non-"llm" records
   // tick maxToolRounds — adopters using bareagent's onLlmResult/onToolResult
   // split can budget by "rounds" directly instead of multiplying by 2.

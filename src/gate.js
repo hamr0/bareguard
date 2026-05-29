@@ -41,7 +41,19 @@ function actionSummary(action) {
   }
 }
 
+/**
+ * The single chokepoint every agent action passes through. Construct once per
+ * run, `await gate.init()`, then call {@link Gate#check} / {@link Gate#record}
+ * (or {@link Gate#run}) for each action. Runs PRE-EVAL halt checks then the
+ * 6-step eval order, resolves ask/halt events via `humanChannel`, and returns
+ * terminal allow/deny decisions. See README.md and bareguard.context.md for
+ * wiring recipes.
+ */
 export class Gate {
+  /**
+   * @param {import("./types.js").GateConfig & { _clock?: () => number }} [config]
+   *   Gate configuration. `_clock` is a millisecond clock override for tests.
+   */
   constructor(config = {}) {
     this.cfg = config;
     this.runId = config.runId ?? randomUUID();
@@ -76,6 +88,10 @@ export class Gate {
     this._initialized = false;
   }
 
+  /**
+   * Initialize audit and budget subsystems (idempotent; auto-called by check/allows/record/etc.).
+   * @returns {Promise<void>}
+   */
   async init() {
     if (this._initialized) return;
     await this.audit.init();
@@ -166,6 +182,12 @@ export class Gate {
     };
   }
 
+  /**
+   * Redact configured secrets from an action using this gate's secrets config.
+   * @template T
+   * @param {T} action value to redact
+   * @returns {T} redacted copy (or the original if nothing changed)
+   */
   redact(action) {
     return redact(action, this.cfg.secrets);
   }
@@ -173,6 +195,12 @@ export class Gate {
   // Pure query: would this action be allowed? Used for catalog pre-filter.
   // No audit, no budget delta, no humanChannel call. (PRD v0.5 §11.)
   // Accepts either a full action object or a tool-name string (shorthand for { type: name }).
+  /**
+   * Pure query: would this action be allowed? No audit, budget delta, or humanChannel call.
+   * @param {import("./types.js").Action|string} actionOrName a full action
+   *   object, or a tool-name string (shorthand for `{ type: name }`)
+   * @returns {Promise<boolean>} true unless a deny decision (or halt) applies
+   */
   async allows(actionOrName) {
     if (!this._initialized) await this.init();
     const action = typeof actionOrName === "string" ? { type: actionOrName } : actionOrName;
@@ -184,6 +212,11 @@ export class Gate {
 
   // Main eval entry. Returns terminal { outcome, severity, rule, reason } —
   // never askHuman; bareguard resolves that internally via humanChannel.
+  /**
+   * Main eval entry: evaluate the action, audit, and resolve any ask/halt via humanChannel.
+   * @param {import("./types.js").Action} action action to evaluate
+   * @returns {Promise<import("./types.js").Decision>} terminal decision (never askHuman)
+   */
   async check(action) {
     if (!this._initialized) await this.init();
 
@@ -200,7 +233,9 @@ export class Gate {
           decision: decision.outcome, severity: decision.severity,
           rule: decision.rule, reason: decision.reason,
         });
-        return decision;
+        // Control flow above guarantees outcome is "allow" | "deny"; the cast
+        // pins the internal eval result to the public Decision shape.
+        return /** @type {import("./types.js").Decision} */ (decision);
       }
 
       // askHuman path: emit gate audit, dispatch to humanChannel, apply.
@@ -232,6 +267,7 @@ export class Gate {
             `See https://github.com/hamr0/bareguard#wiring-with-humanchannel\n`
           );
         }
+        /** @type {import("./types.js").Decision} */
         const denial = {
           outcome: "deny", severity: "halt",
           rule: decision.rule,
@@ -249,6 +285,7 @@ export class Gate {
       // events the cap was already exhausted on entry — this action didn't
       // by itself trip it — but it is the right hook for caller-attached
       // routing context (e.g. action._ctx in multi-tenant adopters).
+      /** @type {import("./types.js").HumanEvent} */
       const event = {
         kind: decision.severity === "halt" ? "halt" : "ask",
         action,
@@ -300,6 +337,7 @@ export class Gate {
       });
 
       if (human.decision === "allow") {
+        /** @type {import("./types.js").Decision} */
         const decided = { outcome: "allow", severity: "action", rule: "humanChannel.allow", reason: human.reason ?? null };
         await this.audit.emit({
           phase: "gate", action,
@@ -309,6 +347,7 @@ export class Gate {
         return decided;
       }
       if (human.decision === "deny") {
+        /** @type {import("./types.js").Decision} */
         const decided = {
           outcome: "deny",
           severity: decision.severity, // preserve halt vs action source
@@ -325,6 +364,7 @@ export class Gate {
       if (human.decision === "topup") {
         if (decision.severity !== "halt") {
           // topup only meaningful for halt; for ask events, treat as allow.
+          /** @type {import("./types.js").Decision} */
           const decided = { outcome: "allow", severity: "action", rule: "humanChannel.allow", reason: "topup-on-ask treated as allow" };
           await this.audit.emit({
             phase: "gate", action,
@@ -367,6 +407,12 @@ export class Gate {
     }
   }
 
+  /**
+   * Record an executed action: tick limits, apply spend to budget, and emit a record audit line.
+   * @param {import("./types.js").Action} action the executed action
+   * @param {import("./types.js").Result} [result] execution result; `costUsd` / `tokens` drive the budget
+   * @returns {Promise<void>}
+   */
   async record(action, result) {
     if (!this._initialized) await this.init();
     this.limits.tick(action);
@@ -379,6 +425,14 @@ export class Gate {
   }
 
   // Convenience: gate.check + execute + gate.record. Caller supplies executor.
+  /**
+   * Convenience: check the action, run the executor if allowed, then record the result.
+   * @param {import("./types.js").Action} action action to gate and execute
+   * @param {(action: import("./types.js").Action) => (import("./types.js").Result | Promise<import("./types.js").Result>)} executor
+   *   invoked with the action when allowed; its return value is recorded and returned
+   * @returns {Promise<import("./types.js").Result | { error: { type: string, rule: string, severity: string, reason: (string|null), action_summary: string } }>}
+   *   the executor's result, or a structured `policy_denied` error object if denied
+   */
   async run(action, executor) {
     const decision = await this.check(action);
     if (decision.outcome !== "allow") {
@@ -389,6 +443,12 @@ export class Gate {
     return result;
   }
 
+  /**
+   * Raise (or set) a budget cap and emit a topup audit line.
+   * @param {import("./types.js").BudgetDimension} dimension which cap to change
+   * @param {number} newCap new cap value (finite, >= 0)
+   * @returns {Promise<void>}
+   */
   async raiseCap(dimension, newCap) {
     if (!this._initialized) await this.init();
     const oldCap = dimension === "costUsd" ? this.budget.capUsd : this.budget.capTokens;
@@ -399,6 +459,11 @@ export class Gate {
     });
   }
 
+  /**
+   * Terminate the gate: all subsequent checks halt-deny. Idempotent.
+   * @param {string} [reason] reason recorded in the terminate audit line
+   * @returns {Promise<{ok:true, alreadyTerminated?:boolean}>}
+   */
   async terminate(reason) {
     if (!this._initialized) await this.init();
     if (this.terminated) return { ok: true, alreadyTerminated: true };
@@ -409,6 +474,10 @@ export class Gate {
     return { ok: true };
   }
 
+  /**
+   * Build the spend/turns/spend-rate context summary attached to ask/halt events.
+   * @returns {Promise<import("./types.js").HaltContext>}
+   */
   async haltContext() {
     if (!this._initialized) await this.init();
     const lines = await this.audit.readAll();

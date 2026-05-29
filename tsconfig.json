@@ -1,0 +1,18 @@
+{
+  "// note": "Types are generated FROM JSDoc in the .js sources — bareguard ships as plain ESM JS. `npm run build:types` emits .d.ts into ./types (mirroring src/); `npm run typecheck` runs this plus the strict consumer check. Both ./types and src/**/*.d.ts are git-ignored and built via the `prepare` script. `strict` is off because the sources are hand-written JS, not TS — the strict, end-to-end gate on the PUBLIC surface lives in tsconfig.consumer.json; checkJs here still validates the JSDoc that drives the emitted declarations.",
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "declarationDir": "./types",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "types": ["node"],
+    "strict": false,
+    "skipLibCheck": true
+  },
+  "include": ["src/**/*.js"]
+}

@@ -1,5 +1,10 @@
 node_modules/
 *.log
+
+# Generated TypeScript declarations (emitted from JSDoc by `npm run build:types`
+# into ./types; shipped via the `prepare` script + `files`, never committed).
+/types/
+src/**/*.d.ts
 .DS_Store
 .env
 .env.*

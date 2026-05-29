@@ -7,11 +7,14 @@ const FS_TYPES = new Set(["read", "write", "edit"]);
 
 // Collapse `.` / `..` segments before matching so a path can't escape a deny
 // entry or a scope root via traversal (PRD §8 row 3 lists `..` as deny-worthy).
-// posix semantics: action paths are unix-style. NOTE: this resolves lexical
-// traversal only — it does NOT follow symlinks (would require async realpath);
-// callers needing symlink-proofing must canonicalise before the gate.
+// Backslashes are folded to `/` FIRST so a Windows-style path
+// (`/scope/..\..\etc`) can't slip past `path.posix.normalize` — which treats
+// `\` as an ordinary character and would leave the `..` segments uncollapsed,
+// a scope escape on win32 where `\` is a real separator. NOTE: this resolves
+// lexical traversal only — it does NOT follow symlinks (would require async
+// realpath); callers needing symlink-proofing must canonicalise before the gate.
 function norm(p) {
-  return path.posix.normalize(p);
+  return path.posix.normalize(p.replace(/\\/g, "/"));
 }
 
 // Boundary-aware containment: `p` is `base` itself or a path *under* `base`.
@@ -30,9 +33,29 @@ function within(p, base) {
 // Accepts either flat (action.path) or nested (action.args.path) shapes so
 // wireGate-style {type, args, _ctx} adapters compose without a translation
 // layer. (v0.4.1, multis seam fix.)
+/**
+ * Step-3 deny for `read`/`write`/`edit` actions: lexical-normalized path deny + read/write scope enforcement.
+ * @param {object} action action being evaluated; path read from action.path or action.args.path
+ * @param {string} action.type action type ("read", "write", or "edit"; no-op otherwise)
+ * @param {string} [action.path] target path (flat shape)
+ * @param {object} [action.args] nested-shape args
+ * @param {object} [cfg] fs config
+ * @param {string[]} [cfg.deny] paths/prefixes denied for all fs actions
+ * @param {string[]} [cfg.readScope] if set, read paths must fall under one of these
+ * @param {string[]} [cfg.writeScope] if set, write/edit paths must fall under one of these
+ * @returns {{outcome:string,severity:string,rule:string,reason:string}|null} deny decision, or null if allowed/not applicable
+ */
 export function fsCheck(action, cfg = {}) {
   if (!FS_TYPES.has(action.type)) return null;
   const raw = action.path ?? action.args?.path;
+  // A present-but-non-string path (array, object with `toString`, number) must
+  // NOT fall through as "no opinion" — that fails OPEN, letting the action
+  // reach the allowlist while the executor coerces the value back to a real
+  // path (e.g. `{ toString: () => "/etc/passwd" }`), escaping deny/scope.
+  // Deny anything that isn't a plain string. (Absent → not an fs shape we gate.)
+  if (raw != null && typeof raw !== "string") {
+    return { outcome: "deny", severity: "action", rule: "fs.invalidPath", reason: `path is not a string (type ${typeof raw})` };
+  }
   if (typeof raw !== "string") return null;
   const p = norm(raw);
 

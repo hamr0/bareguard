@@ -2,8 +2,23 @@
 //   - env-var match → [REDACTED:ENV_VAR_NAME]
 //   - pattern match → [REDACTED:pattern=<short prefix>...]
 
-const MIN_ENV_VAR_LEN = 8; // don't redact short values that may be meaningful (e.g., port numbers)
+// Don't redact short env values that may be meaningful (e.g., port numbers).
+// Trade-off: a secret shorter than this is NOT masked via `envVars` — use a
+// `patterns` entry for short secrets that must be redacted.
+const MIN_ENV_VAR_LEN = 8;
 
+/**
+ * Redact configured secrets from an action/value by serializing, replacing
+ * env-var values and pattern matches, then re-parsing. Env-var values shorter
+ * than 8 chars are skipped; patterns are forced global so every match on a line
+ * is replaced.
+ * @template T
+ * @param {T} action value to redact (typically an action object; returned as-is
+ *   if falsy or non-serializable)
+ * @param {import("../types.js").SecretsConfig} [cfg] secrets config
+ * @returns {T} redacted copy, or the original value if nothing changed / it
+ *   could not be processed
+ */
 export function redact(action, cfg = {}) {
   if (!action) return action;
   let serialized;

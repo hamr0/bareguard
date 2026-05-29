@@ -1,7 +1,7 @@
 # bareguard — Integration Guide
 
 > For AI assistants and developers wiring bareguard into a project.
-> v0.4.2 | Node.js >= 20 | 1 production dep (`proper-lockfile`) | Apache-2.0
+> v0.5.0 | Node.js >= 20 | 1 production dep (`proper-lockfile`) | ships TypeScript types | Apache-2.0
 >
 > Full design spec: [`docs/01-product/bareguard-prd.md`](docs/01-product/bareguard-prd.md) — unified PRD (v0.7).
 
@@ -226,6 +226,7 @@ Universal denies first (1-2-3), universal asks second (4), capability scope thir
 | `net.allowDomains`, `net.denyPrivateIps` | action | return error to LLM, continue loop |
 | `tools.allowlist.exclusive` (not in scope) | action | return error to LLM, continue loop |
 | `tools.denyArgPatterns` | action | return error to LLM, continue loop |
+| `fs.invalidPath`, `net.invalidUrl`, `bash.invalidCmd` (path/url/cmd present but not a string) | action | return error to LLM, continue loop |
 | `limits.maxChildren`, `limits.maxDepth` | action | return error to LLM, continue loop |
 | `content.askPatterns` (after humanChannel resolves) | action | terminal allow or deny |
 | **`budget.maxCostUsd`, `budget.maxTokens`** | **halt** | **escalate to humanChannel; never bubble to LLM** |
@@ -248,6 +249,11 @@ import {
   SAFE_DEFAULT_ASK_PATTERNS,      // exposed in case you want to extend
   globToRegex, matchAny,          // glob helpers (v0.1: `*` only)
 } from "bareguard";
+
+// Ships TypeScript types (generated from JSDoc; v0.5). Config + decision/event
+// shapes are fully typed — no @types package needed. Named config types are
+// importable from the root or the `bareguard/types` subpath:
+//   import { Gate, type GateConfig } from "bareguard";
 
 // Gate methods (all async unless noted):
 const gate = new Gate(config);

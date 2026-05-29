@@ -11,6 +11,11 @@ import lockfile from "proper-lockfile";
 const MAX_LINE_BYTES = 3500; // safety margin under PIPE_BUF (4096 on Linux/macOS)
 const NEEDS_LOCK = process.platform === "win32";
 
+/**
+ * Resolve the default audit file path: XDG_STATE_HOME, then ~/.local/state, then cwd.
+ * @param {string} rootRunId root run id used in the filename
+ * @returns {string} absolute path to the per-family JSONL audit file
+ */
 function defaultAuditPath(rootRunId) {
   const xdgState = process.env.XDG_STATE_HOME;
   const home = os.homedir();
@@ -19,7 +24,20 @@ function defaultAuditPath(rootRunId) {
   return path.join(process.cwd(), `bareguard-${rootRunId}.jsonl`);
 }
 
+/**
+ * Single-file JSONL audit log (or fileless in-memory mode when filePath is null).
+ */
 export class Audit {
+  /**
+   * @param {object} opts
+   * @param {string|null} [opts.filePath] audit file path; null = fileless in-memory mode; undefined = XDG/home/cwd default
+   * @param {string} opts.runId this run's id
+   * @param {string|null} [opts.parentRunId] parent run id, if spawned
+   * @param {number} [opts.spawnDepth] spawn depth (default 0)
+   * @param {string} [opts.rootRunId] root run id (default runId)
+   * @param {() => number} [opts.clock] millisecond clock (default Date.now)
+   * @param {((x: *) => *)|null} [opts.redact] optional redactor applied to action/result/reason at emit time
+   */
   constructor({ filePath, runId, parentRunId, spawnDepth, rootRunId, clock, redact }) {
     this.runId = runId;
     this.parentRunId = parentRunId ?? null;
@@ -40,6 +58,10 @@ export class Audit {
     this._clock = clock ?? (() => Date.now());
   }
 
+  /**
+   * Create the audit directory and touch the file (no-op in fileless mode).
+   * @returns {Promise<void>}
+   */
   async init() {
     if (this.fileless) return;
     await fsp.mkdir(path.dirname(this.filePath), { recursive: true });
@@ -48,6 +70,11 @@ export class Audit {
     await fh.close();
   }
 
+  /**
+   * Append one audit line: stamps ts/seq/run ids, applies redaction, and writes (atomic append or in-memory push).
+   * @param {object} fields caller-supplied line fields (e.g. phase, action, decision, severity, rule, reason, result)
+   * @returns {Promise<void>}
+   */
   async emit(fields) {
     const line = {
       ts: new Date(this._clock()).toISOString(),
@@ -114,6 +141,10 @@ export class Audit {
     }
   }
 
+  /**
+   * Read all audit lines as parsed objects (shallow copy in fileless mode; empty array if the file is missing).
+   * @returns {Promise<object[]>}
+   */
   async readAll() {
     // Fileless: shallow copy of the entries array (line objects shared
     // by reference). Fileless mode is test-only per PRD §12 — tests

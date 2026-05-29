@@ -15,7 +15,13 @@ import lockfile from "proper-lockfile";
 
 const FORMAT_VERSION = 1;
 
+/**
+ * Thrown when the shared budget file cannot be read, locked, or is an unsupported version.
+ */
 export class BudgetUnavailableError extends Error {
+  /**
+   * @param {string} detail human-readable cause appended to the message
+   */
   constructor(detail) {
     super(`Budget file unavailable: ${detail}`);
     this.name = "BudgetUnavailableError";
@@ -25,7 +31,17 @@ export class BudgetUnavailableError extends Error {
 const STRICT_BUF_SIZE = 5;
 const STRICT_MIN_SAMPLES = 3;
 
+/**
+ * Tracks USD/token spend against caps, optionally persisted to a shared cross-process file.
+ */
 export class Budget {
+  /**
+   * @param {object} [cfg] budget config
+   * @param {number} [cfg.maxCostUsd] USD cap (default Infinity)
+   * @param {number} [cfg.maxTokens] token cap (default Infinity)
+   * @param {string|null} [cfg.sharedFile] path to the shared budget JSON file (null = local in-memory)
+   * @param {boolean} [cfg.strict] enable trailing-average pre-flight halts (default false)
+   */
   constructor(cfg = {}) {
     this.capUsd = cfg.maxCostUsd ?? Infinity;
     this.capTokens = cfg.maxTokens ?? Infinity;
@@ -42,6 +58,13 @@ export class Budget {
     this._tokenBuf = [];
   }
 
+  /**
+   * Load state from the shared file, or seed it (optionally rebuilding spend/caps from the audit log).
+   * @param {object} [opts]
+   * @param {() => Promise<{spentUsd?:number,spentTokens?:number,capUsd?:(number|null),capTokens?:(number|null)}>} [opts.rebuildFromAudit] called when the file is missing/corrupt to reconstruct totals
+   * @returns {Promise<void>}
+   * @throws {BudgetUnavailableError} on unsupported version or unreadable file
+   */
   async init({ rebuildFromAudit } = {}) {
     if (!this.sharedFile) return;
     await fsp.mkdir(path.dirname(this.sharedFile), { recursive: true });
@@ -121,6 +144,10 @@ export class Budget {
     finally { try { await release(); } catch { /* unlock failure is non-fatal */ } }
   }
 
+  /**
+   * Synchronous halt check against the local cache: post-fact over-cap, then (in strict mode) trailing-avg pre-flight.
+   * @returns {{outcome:string,severity:string,rule:string,reason:string}|null} halt decision, or null if within budget
+   */
   // synchronous decision check using the local cache (no file I/O).
   // Refresh policy is the gate's job — it calls refresh() on lock acquisition / post-record.
   check() {
@@ -174,6 +201,11 @@ export class Budget {
     if (dTok > 0) { this._tokenBuf.push(dTok); if (this._tokenBuf.length > STRICT_BUF_SIZE) this._tokenBuf.shift(); }
   }
 
+  /**
+   * Re-read spend and caps from the shared file into the local cache (no-op when local-only or file missing).
+   * @returns {Promise<void>}
+   * @throws on unexpected (non-ENOENT, non-version, non-syntax) read errors
+   */
   async refresh() {
     if (!this.sharedFile) return;
     try {
@@ -192,6 +224,14 @@ export class Budget {
     }
   }
 
+  /**
+   * Add a result's spend deltas to the budget (atomic read-modify-write under lock when shared).
+   * @param {object} [result] execution result
+   * @param {number} [result.costUsd] USD spent (default 0)
+   * @param {number} [result.tokens] tokens spent (default 0)
+   * @returns {Promise<void>}
+   * @throws {BudgetUnavailableError} if the shared file can't be read under the held lock
+   */
   async record(result) {
     const dUsd = result?.costUsd ?? 0;
     const dTok = result?.tokens ?? 0;
@@ -226,6 +266,13 @@ export class Budget {
     });
   }
 
+  /**
+   * Set a budget cap to a new value (raise or lower) and persist it atomically.
+   * @param {"costUsd"|"tokens"} dimension which cap to set
+   * @param {number} newCap new cap (finite, >= 0)
+   * @returns {Promise<void>}
+   * @throws {Error} on unknown dimension or invalid newCap
+   */
   async raiseCap(dimension, newCap) {
     if (!["costUsd", "tokens"].includes(dimension)) {
       throw new Error(`unknown budget dimension: ${dimension}`);
