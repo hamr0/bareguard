@@ -11,6 +11,7 @@
 
 import { promises as fsp } from "node:fs";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import lockfile from "proper-lockfile";
 
 const FORMAT_VERSION = 1;
@@ -109,7 +110,21 @@ export class Budget {
       started_at:    this.startedAt,
       updated_at:    new Date().toISOString(),
     };
-    await fsp.writeFile(this.sharedFile, JSON.stringify(state, null, 2));
+    // Atomic write: serialize to a unique temp file, then rename over the
+    // target. rename(2) is atomic within a filesystem (and libuv maps it to an
+    // atomic replace on Windows), so a reader — even one racing the lock — sees
+    // a COMPLETE old or new file, never the zero-length window that a plain
+    // `writeFile` (open O_TRUNC, then write) exposes. That window is what made
+    // record()'s under-lock read intermittently throw "Unexpected end of JSON
+    // input" (a real-corruption signal) under concurrent load.
+    const tmp = `${this.sharedFile}.${process.pid}.${randomUUID()}.tmp`;
+    try {
+      await fsp.writeFile(tmp, JSON.stringify(state, null, 2));
+      await fsp.rename(tmp, this.sharedFile);
+    } catch (err) {
+      try { await fsp.unlink(tmp); } catch { /* best-effort cleanup */ }
+      throw err;
+    }
   }
 
   async _withLock(fn) {

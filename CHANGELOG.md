@@ -2,6 +2,12 @@
 
 All notable changes to bareguard are documented here. Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [SemVer](https://semver.org/).
 
+## [0.5.1] — 2026-05-29
+
+### Fixed
+
+- **Shared budget file is now written atomically (temp file + `rename`).** `Budget._write()` used `fs.writeFile`, which opens the target with `O_TRUNC` and then writes — exposing a zero-length window. Under concurrent multi-process load a reader could hit that window and `JSON.parse` an empty string, throwing `BudgetUnavailableError: …Unexpected end of JSON input` (the v0.4.7 "fail loud on corrupt read" path misclassifying a transient truncation as corruption). This surfaced as an intermittently-flaky `shared-budget` test. Writes now go to a unique temp file and `rename` over the target (atomic within a filesystem; an atomic replace on Windows via libuv), so a reader always sees a complete old-or-new file. Genuine corruption is still detected and still fails loud. Reproduced at ~1/240 concurrent worker runs before the fix; 0/400 after.
+
 ## [0.5.0] — 2026-05-29
 
 Ships TypeScript types for the library, plus policy-bypass hardening from a security audit. Minor bump for the new public capability (typed consumption).
