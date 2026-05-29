@@ -1,11 +1,11 @@
 # bareguard — Product Requirements Document (PRD)
 
-**Status:** v0.7 (v0.4 release — multis-driven adoption tweaks: halt-event action contract, fileless audit, strict budget)
+**Status:** v0.7 (v0.5 release — ships TypeScript types generated from JSDoc; policy-bypass hardening: type-confusion denies, atomic budget write)
 **Owner:** hamr0
-**Last updated:** 2026-05-11
-**Language:** Node.js (JavaScript), ESM, target Node 20 LTS+
+**Last updated:** 2026-05-29
+**Language:** Node.js (JavaScript), ESM, target Node 20 LTS+. Ships `.d.ts` generated from JSDoc (v0.5) — typed consumption with no `@types` package.
 **Sibling spec:** `bareagent-prd.md`
-**Implementation status:** v0.4.0 — tests green on Linux/macOS/Windows × Node 20/22
+**Implementation status:** v0.5.1 — tests green on Linux/macOS/Windows × Node 20/22 (+ a `tsc` typecheck job)
 **Supersedes:** v0.1 (Python draft), v0.2 (orchestration), v0.3 (mid-MCP), v0.4 (post-MCP), v0.5 amendments doc, v0.6 unified
 
 > **For future Claude (implementation note):** This document is the single
@@ -152,10 +152,10 @@ halt-vs-action distinction).
 
 | #  | Primitive            | Severity | What it checks                                                                                                          |
 | -- | -------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------- |
-| 1  | **bash**             | action   | Command allowlist / denyPatterns when `action.type === "bash"`. With `allow` set, commands containing shell metacharacters (`;` `\|` `&` `$` backtick `()` `<>` newline) are denied (rule `bash.allow.shellMeta`) — a prefix allowlist can't bound a chain/pipe/substitution; use `content.denyPatterns` for chaining-aware screening. Reads `action.cmd`, falling back to `action.args.cmd` / `action.args.command` so wireGate-style `{type, args, _ctx}` adapters compose without translation. |
-| 2  | **budget**           | **halt** | Tokens, cost USD, request count, with hard kill. Shared across sibling processes via backing file + `proper-lockfile`.  |
-| 3  | **fs**               | action   | Write/read scope; deny paths (`~/.ssh`, `/etc/passwd`). Paths are lexically normalized (`.`/`..` collapsed) and matched with segment boundaries before scope/deny — traversal can't escape a scope or deny entry. Symlinks are **not** resolved (canonicalize upstream if needed). Reads `action.path` / `action.args.path`. |
-| 4  | **net**              | action   | Egress domain allowlist; deny private IP ranges — covers IPv4 (incl. `127/8`, `10/8`, `172.16/12`, `192.168/16`, link-local `169.254/16` / cloud metadata, `0.0.0.0/8`), IPv6 (loopback/ULA/link-local, bracket-stripped) and IPv4-mapped IPv6. Hostname-based, pre-DNS-resolution (no DNS-rebinding defense). Reads `action.url` / `action.args.url`. |
+| 1  | **bash**             | action   | Command allowlist / denyPatterns when `action.type === "bash"`. With `allow` set, commands containing shell metacharacters (`;` `\|` `&` `$` backtick `()` `<>` newline) are denied (rule `bash.allow.shellMeta`) — a prefix allowlist can't bound a chain/pipe/substitution; use `content.denyPatterns` for chaining-aware screening. Reads `action.cmd`, falling back to `action.args.cmd` / `action.args.command` so wireGate-style `{type, args, _ctx}` adapters compose without translation. A present-but-non-string `cmd` is denied (`bash.invalidCmd`, v0.5) — closes a type-confusion fail-open. |
+| 2  | **budget**           | **halt** | Tokens, cost USD, request count, with hard kill. Shared across sibling processes via backing file + `proper-lockfile`. The backing file is written **atomically** (temp file + `rename`, v0.5.1) so a racing reader never observes a truncated/empty file. |
+| 3  | **fs**               | action   | Write/read scope; deny paths (`~/.ssh`, `/etc/passwd`). Paths are lexically normalized (`.`/`..` collapsed, and backslashes folded to `/` first so Windows-style traversal can't slip past — v0.5) and matched with segment boundaries before scope/deny — traversal can't escape a scope or deny entry. Symlinks are **not** resolved (canonicalize upstream if needed). Reads `action.path` / `action.args.path`; a present-but-non-string path is denied (`fs.invalidPath`, v0.5). |
+| 4  | **net**              | action   | Egress domain allowlist; deny private IP ranges — covers IPv4 (incl. `127/8`, `10/8`, `172.16/12`, `192.168/16`, link-local `169.254/16` / cloud metadata, `0.0.0.0/8`), IPv6 (loopback/ULA/link-local, bracket-stripped) and IPv4-mapped IPv6. Hostname-based, **pre-DNS-resolution** (no DNS-rebinding defense — defense-in-depth, not an SSRF boundary; use `allowDomains` to bound egress). Reads `action.url` / `action.args.url`; a present-but-non-string url is denied (`net.invalidUrl`, v0.5). |
 | 5  | **limits**           | mixed    | `maxTurns` (**halt**, ticks on every `gate.record`), `maxToolRounds` (**halt**, ticks only on non-`"llm"` records — v0.4.2), `maxChildren` (action), `maxDepth` (action), `timeoutSeconds` (**halt**, v0.2). |
 | 6  | **approval**         | n/a      | Routes ask events to the runner's `humanChannel` callback. No callback storage in v0.6.                                  |
 | 7  | **tools**            | action   | Tool name allowlist / denylist (glob-matched) + per-tool `denyArgPatterns` (regex over args). Allowlist is **scope-only** — does NOT silence asks. |
@@ -223,11 +223,13 @@ THE 6 STEPS (first match wins):
   1. tools.denylist                 → deny (action)
   2. content.denyPatterns           → deny (action)
   3. per-action-type deny rules     → deny (action)
-        bash.denyPatterns / bash.allow (when action.type === "bash")
-        fs.deny / fs.readScope / fs.writeScope (when read/write/edit)
-        net.allowDomains / net.denyPrivateIps (when fetch)
+        bash.denyPatterns / bash.allow / bash.invalidCmd (when action.type === "bash")
+        fs.deny / fs.readScope / fs.writeScope / fs.invalidPath (when read/write/edit)
+        net.allowDomains / net.denyPrivateIps / net.invalidUrl (when fetch)
         limits.maxChildren / limits.maxDepth (when spawn)
         tools.denyArgPatterns (any tool with matching args)
+        (*.invalid* — present-but-non-string cmd/path/url is denied, not waved
+         through; closes a type-confusion fail-open, v0.5)
   4. content.askPatterns            → askHuman (action; resolved via humanChannel)
   5. tools.allowlist enforcement    → set+match: allow; set+miss: deny (rule: tools.allowlist.exclusive)
   6. default                        → allow (rule: "default")
@@ -546,8 +548,17 @@ Caps are soft by design.
 - Lock leftover from crashed process → `proper-lockfile` handles stale lock
   detection by default.
 - Concurrent writes → serialized.
+- **Torn/empty read under contention (v0.5.1)** → writes are atomic (serialize
+  to a unique temp file, then `rename` over the target — atomic within a
+  filesystem; an atomic replace on Windows via libuv). A plain `writeFile`
+  (open `O_TRUNC`, then write) exposed a zero-length window where a racing
+  reader could `JSON.parse` an empty string and misfire the corruption path
+  below; the atomic write removes that window so a reader always sees a
+  complete old-or-new file.
 - Budget file corruption → JSON parse error surfaces; rebuild from audit log
   if possible, else surface `BudgetUnavailableError` and terminate cleanly.
+  (Distinct from the torn-read case above, which is now eliminated — a parse
+  error now means genuine corruption, not a transient truncation.)
 - Cross-machine → NOT supported in v1. Single-machine only. See §17.
 
 Children inherit the path via env var `BAREGUARD_BUDGET_FILE`, set by the
@@ -775,6 +786,14 @@ at this list when they ask.
 **Production deps target: 1.** Hard target. Any deviation requires explicit
 justification in the PRD.
 
+**TypeScript types (v0.5).** bareguard stays plain ESM JS — but the public API
+carries full JSDoc, and `.d.ts` is generated from it (`tsc --emitDeclarationOnly
+--allowJs`) into `types/`, shipped via the `prepare` script and the `files`
+allowlist (not committed). JSDoc is the single source of truth; named config
+types are importable from the root or the `bareguard/types` subpath. `typescript`
+is a **dev** dependency only — the production-dep target of 1 is unchanged. A
+`tsc` typecheck job plus a strict consumer-resolution fixture guard against drift.
+
 ## 19. Migration plan (post-v0.1.1)
 
 Three releases.
@@ -805,6 +824,28 @@ bareagent v(next) imports `bareguard ^0.1`. Removes its built-in policy code
 - `**` glob support if bareagent integration surfaces real allowlist
   over-grant pain (deferred per §16.4 / v0.6 §9).
 - Sliding-window rate (if fixed-window proves insufficient).
+
+### bareguard 0.4 — multis-driven adoption tweaks (SHIPPED)
+
+Halt-event action contract, fileless audit (test-only), strict budget mode,
+flat/nested action-shape acceptance, secrets auto-redaction at the audit
+boundary, and shared-budget lock hardening (fail-loud on corrupt read).
+
+### bareguard 0.5 — TypeScript types + policy-bypass hardening (SHIPPED 2026-05-29)
+
+- **Ships `.d.ts` generated from JSDoc** (`0.5.0`) — typed consumption with no
+  `@types` package; `typescript` is a dev dep only (prod-dep target stays 1).
+- **Type-confusion fail-open closed** (`0.5.0`): a present-but-non-string
+  `cmd` / `path` / `url` is denied (`bash.invalidCmd` / `fs.invalidPath` /
+  `net.invalidUrl`) instead of waved through to the allowlist.
+- **Windows scope escape closed** (`0.5.0`): `fs` folds `\` → `/` before
+  lexical normalization.
+- **Glob `*` matches line terminators** (`0.5.0`, dotAll) — closes a
+  `tools.denylist` bypass.
+- **Atomic shared-budget write** (`0.5.1`, temp file + `rename`) — removes the
+  torn/empty-read window that intermittently misfired the corruption path.
+- Documented (not changed): `denyPrivateIps` is literal-host/pre-DNS;
+  `secrets.envVars` skips values < 8 chars.
 
 ### bareguard 1.0 — stabilize
 
