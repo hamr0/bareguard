@@ -5,6 +5,7 @@ All notable changes to bareguard are documented here. Format: [Keep a Changelog]
 ## [Unreleased]
 
 ### Changed
+- **CI:** the publish workflow now polls the npm registry for ~2 min (was ~15s; `--prefer-online` skips npm's view cache) and accepts an `exit 0` publish even if the registry hasn't reflected it yet, so a successful-but-slow-to-reflect publish no longer reports a false failure.
 - **`publish.yml` is now manual-only (`workflow_dispatch`) — npm OIDC trusted publishing with provenance, idempotent, and verifies the registry end-state.**
 
 ## [0.5.2] — 2026-05-29
