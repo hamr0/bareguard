@@ -2,6 +2,11 @@
 
 All notable changes to bareguard are documented here. Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+- **`publish.yml` is now manual-only (`workflow_dispatch`) — npm OIDC trusted publishing with provenance, idempotent, and verifies the registry end-state.**
+
 ## [0.5.2] — 2026-05-29
 
 Turns on `strictNullChecks` over the sources — closing the null-safety gap behind the v0.5 types — and simplifies the typecheck setup. Also fixes a Windows-only flake in the v0.5.1 atomic budget write. No public-API change.
