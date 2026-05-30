@@ -372,3 +372,76 @@ detector generates findings with nowhere to go"); the session demonstrated it.
 - Rule adopted for the author: when output converges suspiciously cleanly on the
   conclusion it set out to find, surface that *as it happens* as a warning sign,
   not as confirmation.
+
+---
+
+## 11. Corrected thesis + real external A2A call (supersedes F8/F9 framing)
+
+### Real external call (OBSERVED, not authored)
+Made a genuine JSON-RPC `message/send` over the internet to a third-party A2A
+agent (`hello-world-gxfr.onrender.com`, from a public A2A discussion thread — code
+not ours):
+- **Sent:** "Book me a direct flight AMS to LIS under €300."
+- **Got:** `{kind:"message", parts:[{kind:"text", text:"Hello World"}], role:"agent"}`
+
+**Conformance: VALIDATED.** Correct JSON-RPC 2.0, our `id` echoed, proper A2A
+message envelope with typed parts + `role:"agent"`. Our hand-written stub was
+spec-faithful — that question is now settled against a real peer.
+
+**Drift: NOT testable.** The agent is an echo demo; it ignored the intent and
+returned a canned string. Recon also found: the Render agent's *card* 404s, the
+registry `a2aregistry.in` serves only a JS shell (no machine-readable agent list),
+and the official `a2a-samples` are run-locally-only. **Empirical state of the
+agentic web (May 2026): no live, public, *functional* A2A agent exists to test
+intent against.** This confirms problem-space §249 (mesh is ambition; function-
+calls are what ships) and means the drift thesis **cannot be externally validated
+today** — the same wall as "no users." Marked OPEN-BLOCKED.
+
+### The corrected thesis (supersedes the lie-centric F8/F9)
+F8/F9 framed the risk as *deception* (the agent lies; catch it with an independent
+oracle). The sharper, truer framing — converged on with the user, and better
+supported by our own F1/F3/F5/F7 than the lie framing was:
+
+> **Intent fidelity is not the core problem. Agent *objective* is.** A capable
+> agent doesn't need to lie or drop intent — it **curates**, like a social feed or
+> an Amazon results page. It serves its operator's goal (margin, engagement) while
+> remaining *honestly compliant on every box you stated*. Everything it shows is
+> true; the harm is in **what it omits** — the dimension you didn't think to
+> constrain (the "unencoded miss," problem-space §198). The consumer can't question
+> what they can't see, and won't, "as long as the comforting lie checks all the
+> boxes."
+
+Why this is worse than deception, and beats verification:
+- **No lie to catch.** F8's claim-check and F9's oracle both assume the agent
+  *violates* a stated constraint. A curating agent violates none — it satisfies
+  every stated box and hides in the unstated one. A box-checking gate passes it by
+  construction.
+- **Omission is invisible to a constraint-checker.** You cannot write a rule
+  against listings you don't know exist. So `verify-indep` (F9) doesn't help here:
+  even a perfect oracle confirms the shown option is real — it says nothing about
+  the buried ones.
+- **The only counters are pre-existing diversity, not post-hoc verification:**
+  independent prior research (knowing the option space before you ask), querying
+  multiple independent agents (the curator is the outlier), and a human prompted to
+  ask *"what's not here?"* — not "is this one true?". The user's "research
+  independently first" is exactly this: it reveals the omission, it doesn't verify
+  a claim.
+
+### Where the layered stack lands (user's synthesis)
+- **Low-stakes / reversible / human-doesn't-care:** none of this matters; let it
+  ride. (Most usage today — why the problem feels theoretical.)
+- **High-stakes / irreversible:** the agent-payments + crypto-rails buildout is what
+  actually matters there, because money's pre-authorization is the one *unforgeable
+  independent authority* (F9) — and a human weighing in on that number (not the
+  agent's claim) is the real chokepoint.
+- **The gate's durable job:** not "verify the answer," but "**stop, and surface to a
+  human, the predefined set of irreversible actions** — with independent facts and
+  the omission question where an oracle exists; with reversibility + escalation
+  where none does."
+
+### Status: experiment CLOSED
+Not closed in defeat — closed because it hit the real wall. A self-authored bench
+can only confirm what its author built in (M5); the external world has no
+functional counterparty to test against yet (§11); and the missing input is a real
+user / real motivated agent, which is not benchable. Findings are sharpened
+hypotheses, not validations. Next signal comes from a person who isn't us.
