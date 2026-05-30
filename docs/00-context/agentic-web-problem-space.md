@@ -250,6 +250,43 @@ bareagent's interpretation diverge from what you meant (the whole thing you're c
   (one orchestrator calling sub-agents like functions), not a true peer mesh. The mesh
   is the spec's ambition; function-calls are what's shipping.
 
+### Run it as a measurement, not a demo (observe before you build)
+
+The toy's real payoff isn't learning JSON-RPC — it's that it **manufactures
+trigger-condition #1 on your own bench**, cheaply, instead of reasoning about
+hop-1 atrophy you've never actually measured. So don't just *feel* the
+degradation at the narrowing hop — **instrument it.**
+
+Log, per request, three things at the NL-ask → structured-sub-task hop:
+- the original NL intent (verbatim),
+- the structured sub-task actually sent to the flight agent,
+- the **delta**: which clauses survived, which silently vanished.
+
+After ~20–30 varied asks you have decision-grade data on the question the whole
+thesis currently *assumes the answer to*:
+
+> What fraction of intent degrades at hop 1 — and is the lost part in the
+> **encodable** clauses (`price<=300`, `stops==0`) or in the **unencodable
+> residue** ("good itinerary", "not a miserable 5am layover")?
+
+**The decision rule this produces:**
+- Loss mostly in **encodable** clauses → the deterministic gate is worth
+  building *when a user appears*. The atrophy is real and catchable.
+- Loss mostly in **unencodable residue** → the gate is **cosmetic**: it would
+  pass every check while missing what you meant. Don't build it. (Same shape as
+  "tests pass ≠ bug fixed" — §198's unencoded miss, now measured instead of
+  assumed.)
+- Either way the rig **earns the build or kills it** for ~a weekend of Workers
+  code. That ROI is why this is the one thing worth building now.
+
+**Framing guard (don't let A2A inflate the build):** the mesh is *motivation,
+not mechanism*. The gate you'd eventually build is operator-side egress
+middleware that is **identical whether your agent calls one tool or delegates
+six hops** — A2A is just the most convenient bench for *observing* the atrophy,
+not a dependency of the fix. And name the buildable thing honestly: an
+**irreversible-egress contract gate**, not "intent integrity." The grand name
+re-opens the unencodable-residue hole every time you lean on it.
+
 ---
 
 ## Where the gate fires, and confirmation ≠ contract check
