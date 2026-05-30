@@ -4,7 +4,7 @@
 > That doc reasons about whether an intent-integrity gate is worth building.
 > This doc records what the **bench** actually measured, so the build/no-build
 > call rests on data, not argument. The bench code lives in the gitignored
-> `experiments/a2a-intent/` (throwaway, per AGENT_RULES — never shipped).
+> `notes/smol/a2a-intent/` (throwaway, per AGENT_RULES — never shipped).
 >
 > Status legend: OBSERVED (measured), HYPOTHESIS (stated, not yet tested),
 > OPEN (unresolved). Findings carry an **F-id**; reference them in later runs.
@@ -445,3 +445,57 @@ can only confirm what its author built in (M5); the external world has no
 functional counterparty to test against yet (§11); and the missing input is a real
 user / real motivated agent, which is not benchable. Findings are sharpened
 hypotheses, not validations. Next signal comes from a person who isn't us.
+
+---
+
+## 12. bareguard implications — strengthen, supersede, defer
+
+The experiment was also a stress-test of *bareguard's own primitives*: did it expose
+a weakness to harden? Honest answer: **importance confirmed, no defect found.**
+"Important" ≠ "broken" — no hardening task is manufactured here. What stands:
+
+### 12.1 · approval / humanChannel — DESIGN NOTE (not a build)
+Already core. The session validated it as the load-bearing layer; it added no new
+primitive, only sharpens the *contract* of the one that ships:
+- **Show the human independent facts, not the agent's claim** — where an oracle
+  exists (payment pre-auth, supplier-of-record). A human approving the agent's own
+  number is rubber-stamping a possible forgery (F8, M2).
+- **You define the must-ask action set by SHAPE; the agent never self-tags** —
+  customs decides, the package doesn't declare itself exempt (problem-space §265).
+Both are already the design's *intent*; this just records them explicitly. Doc, not code.
+
+### 12.2 · audit — IMPORTANCE CONFIRMED (no change)
+The single JSONL log is the only artifact that survives the omission problem (§11):
+you can't catch curation/omission live, so the after-the-fact trail is what lets you
+reconstruct "what I asked vs what came back." This is an argument *for* the existing
+primitive, not a flaw in it. Possible recipe: log the request alongside the response
+so ask-vs-response is reconstructable.
+
+### 12.3 · "friction / drift meter" — DROPPED (supersedes §9-era idea)
+The idea of an async postmortem that *measures drift* does **not** survive: drift is
+subjective and, worse, **blind to omission** — you cannot measure against what was
+hidden, because by definition it isn't in the response (§11). Drop the drift framing.
+
+### 12.4 · constraint reconciliation — DEFERRED candidate (replaces the drift idea)
+What *does* survive from "compare ask vs response" is the objective, hard-fact half:
+caller declares machine-checkable constraints (`maxPrice<=300`, `stops==0`); a check
+compares the **returned values** against them.
+- **Value:** makes F7's "invisible loss" visible — a returned `450` against a stated
+  `300` gets flagged instead of silently logged as "no match."
+- **Shape:** synchronous + decisional → fits bareguard's chokepoint. It is **not**
+  "friction" (which is async); calling it that was a category error.
+- **Two hard ceilings — name them, don't over-claim:**
+  1. **Defeated by in-spec lying (F8):** it checks the *claim*; a liar who reports
+     `199` but books `450` passes. For the liar you still need the independent oracle.
+  2. **Blind to omission (§11):** it confirms the shown value; it cannot flag the
+     buried option. Nothing JSON-comparable can.
+  So scope it as **"constraint reconciliation: catches honest violations, NOT lies or
+  omissions"** — never as a "drift meter."
+- **Status: DEFERRED, trigger-gated.** This is the problem-space doc's "satisfaction
+  contract" (the novel IP). It needs a contract DSL and a real user to serve. Same
+  bar as everything else here: build when a person who isn't us reports the need.
+
+### Net
+No new bareguard primitive clears the bar today. One design note (12.1), one
+importance-confirmation (12.2), one dropped idea (12.3), one deferred candidate
+(12.4). The line holds: docs/recipes now; primitives only on a real external signal.
