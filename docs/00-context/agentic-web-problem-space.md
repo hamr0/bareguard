@@ -2,6 +2,11 @@
 
 > Working note. Where A2A is going, which problems are real vs. solved vs. neglected,
 > and where your existing assets (mailproof/DKIM) actually fit.
+>
+> **Bench findings:** the measurement this doc argues for has been run — see
+> [`a2a-intent-drift-prd.md`](a2a-intent-drift-prd.md) for what it observed
+> (structural drift is real; a competent LLM self-recovers on the happy path;
+> the gate's lane narrows to where it can't).
 
 ---
 

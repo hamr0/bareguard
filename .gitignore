@@ -10,3 +10,6 @@ src/**/*.d.ts
 .env.*
 !.env.example
 .claude/settings.local.json
+
+# Throwaway A2A intent-drift bench (Phase-0 PoC). Never committed, never shipped.
+experiments/
