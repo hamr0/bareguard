@@ -27,9 +27,14 @@ We built a spec-shaped A2A flight-agent stub + an orchestrating client to measur
    them does, and you don't control the receiver.
 
 **Net so far:** the case for an external intent gate is *narrower* than the
-problem-space doc assumed. On the single-hop happy path with a competent model,
-the LLM is its own faithful local-hold. The gate's value concentrates where the
-LLM **cannot** self-recover. Testing that frontier is the active work (§6).
+problem-space doc assumed — but it is real and now located. On the single-hop
+happy path *with the full option list returned*, the LLM is its own faithful
+local-hold (drift 0/10, both models). The moment the agent returns **only its own
+pick** — the shipping "agents-as-tools" reality — self-recovery collapses (drift
+6/10, both models) **and the loss is invisible to the client** (it reads as "no
+match"). That is the gate's lane, and model strength does not close it: the small
+model fails identically because the deciding variable is *information
+availability, not capability* (§6, F5–F7).
 
 ---
 
@@ -167,16 +172,55 @@ wire you control.
 
 ---
 
-## 6. Next experiments (active)
+## 6. Phase-1(b) findings — the drift frontier (OBSERVED)
 
-### E-B1 · NEXT · No-full-list return (highest signal)
-Add a server mode where the agent returns **only its own pick** (cheapest), not
-the full list. Re-run Phase 1. **Hypothesis:** intent-held collapses — the LLM
-can't recover what it never sees. If true, this is the gate's clearest lane.
+2×2 sweep: {gpt-4o, gpt-4o-mini} × {full-list return, pick-only return}, 10
+intents/cell. Verdicts recomputed against **full-catalog ground truth** via
+`analyze.mjs` (independent of what the agent returned — see F7, that gap is the
+point). Numbers reproduced identically across two runs.
 
-### E-B2 · NEXT · Weaker model
-Re-run Phase 1 on `gpt-4o-mini`. **Hypothesis:** some drift-miss reappears even
-with the full list returned.
+| cell | intent-held | drift-miss | true-no-match | drift invisible to client |
+|---|---|---|---|---|
+| gpt-4o / full | 9 | 0 | 1 | 0 |
+| **gpt-4o / pick** | **3** | **6** | 1 | **6** |
+| gpt-4o-mini / full | 9 | 0 | 1 | 0 |
+| **gpt-4o-mini / pick** | **3** | **6** | 1 | **6** |
+
+### F5 · OBSERVED · No-full-list return is the gate's lane (E-B1 confirmed)
+When the agent returns **only its own pick** (cheapest) instead of the option
+list, intent-held drops **9 → 3** and drift-miss rises **0 → 6** — for *both*
+models. The LLM cannot recover constraints when it never sees the alternatives.
+This is the shipping "agents-as-tools" reality (problem-space §249), and it is
+exactly where an external intent gate has value: the self-recovery that saved the
+happy path (F3) is structurally unavailable here.
+
+### F6 · OBSERVED · Model strength does NOT help when the list is withheld (E-B2)
+gpt-4o-mini matched gpt-4o **cell-for-cell** (9/0/1 full; 3/6/1 pick). On the
+full-list happy path the small model self-recovers just as well; in pick mode it
+fails just as hard. **The deciding variable is information availability, not model
+capability** — a better model doesn't see what it isn't shown, so it is not a
+substitute for the gate. (Cost aside: mini ran each cell for ~$0.001 vs gpt-4o's
+~$0.015.)
+
+### F7 · OBSERVED · In the shipping pattern, drift is INVISIBLE to the client
+The sharpest result. The client computes "did a match exist?" from **what the
+agent returned**. In pick-mode the agent returns one (constraint-violating)
+option, so the client logs those 6 real drift-misses as **`true-no-match`** — it
+cannot tell "no flight matched" from "a match existed but was withheld." Only the
+ground-truth recompute (which knows the whole catalog) recovers the true 6. **The
+orchestrator has no local signal that intent was lost.** This is the strongest
+argument yet for holding intent on *your* side and checking at the return
+boundary: the wire hands you nothing to catch it with (problem-space §272,
+"valid ≠ faithful," now measured).
+
+> **Process note:** an earlier draft of F5–F7 stated 2/8 from a recompute script
+> that had crashed mid-run; the numbers were not real and were not committed. The
+> table above is from `analyze.mjs`, which completes cleanly and reproduces. Flag
+> kept as a reminder: never quote a number a script didn't actually print.
+
+---
+
+## 8. Remaining experiments
 
 ### E-B3 · LATER · Multi-hop
 Add a second sub-agent (hotel) and chain. Measure intent degradation per hop.
