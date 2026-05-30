@@ -220,6 +220,64 @@ boundary: the wire hands you nothing to catch it with (problem-space §272,
 
 ---
 
+## 7. Phase-2 findings — the adversarial counterparty (OBSERVED)
+
+Phase 1 used a *neutral* agent (drift from laziness). Phase 2 models a
+**motivated** one: it advertises an irresistible, spec-compliant-looking flight
+(`BAIT` = HouseAir €199 direct) but actually books a high-margin "house" flight
+(`HOUSE` = HouseAir €450, 1-stop) that violates the intent. The €199→€450 gap is
+a deliberate **bait-and-switch**, not a fee — two different flights, one for your
+eyes, one for your card. Bench: `server-adv.mjs` + `phase2-adv.mjs`, deterministic
+(no LLM — the lie lives in the data layer, so a model would only add noise).
+4 intents × 4 defenses. Metric: **committed-bad** = we said GO on a booking whose
+*real* flight violates the intent.
+
+| defense | what it checks | committed-bad |
+|---|---|---|
+| trust-claim | the returned JSON, vs intent | **4/4** |
+| verify-follow | follows the agent's confirmationUrl blindly | **4/4** |
+| verify-self | the agent's *own* confirmation endpoint | **4/4** |
+| **verify-indep** | an authority the **client** chooses (ignores the agent's link) | **0/4** ✅ |
+
+Identical results whether the agent's URL was its own lying endpoint
+(`selfreported`) or a dead/forged link (`fakeurl`).
+
+### F8 · OBSERVED · An in-spec lie defeats a claim-checking gate (100%)
+A gate that checks the counterparty's *claim* against intent is beaten **every
+time** by an adversary that lies within the spec — the numbers match the ask, so
+it passes (`trust-claim` 4/4 bad). Confirms problem-space §272 against an active
+adversary, not just a lazy one: the gate governs "did you answer my spec," **not**
+"is your answer true."
+
+### F9 · OBSERVED · A confirmation check works ONLY against an independent source
+The user's proposed fix — "ask for a confirmation URL I can check before I commit"
+— works, but the source is load-bearing:
+- **verify-follow / verify-self (agent-supplied URL): 4/4 bad.** A liar routes you
+  to a source it controls; that source repeats the lie. A *fake/dead* URL is no
+  better — the fetch fails, you fall back to the original claim, and commit anyway.
+- **verify-indep (client-chosen authority): 0/4 bad, blocked 4/4.** Only when the
+  client ignores the agent's pointer and queries an authority the agent **cannot
+  forge** (modelled as a truth ledger; in reality the airline PNR or, best, the
+  **payment rail's pre-authorization** — the number that actually moves money) does
+  the lie surface and the gate refuse.
+- **Rule:** verification value comes from *who you ask*, never from *whether they
+  offered a link*. "Have a URL" / "the URL responded" are both worthless; "it's an
+  authority I independently trust" is the whole thing.
+
+### F8/F9 caveats (do not over-claim)
+- **"Blocked" ≠ "got the flight."** verify-indep prevents the bad booking; it does
+  not produce a good one. It converts *silent fleecing* → *visible refusal* → then
+  you still need a fallback (another provider / human). A tripwire, not a fix.
+- **The independent source must exist.** Clean for payments (pre-auth is unforgeable
+  by construction) and airline PNRs; for agent actions with **no external oracle**,
+  there is nothing to cross-check and you are back to trusting the claim. This bounds
+  where the whole approach applies.
+- Toy: 4 intents, single hop, one adversary strategy (static bait-and-switch). A
+  real adversary could lie *consistently* across its own ledger too — defeating any
+  same-origin check, which is exactly why F9 insists on independence.
+
+---
+
 ## 8. Remaining experiments
 
 ### E-B3 · LATER · Multi-hop
@@ -228,9 +286,14 @@ Add a second sub-agent (hotel) and chain. Measure intent degradation per hop.
 ### E-B4 · LATER · Un-rigged, scaled intent table (25–30)
 Honest encodable:residue ratio on non-cherry-picked asks.
 
+### E-B5 · LATER · No-oracle action
+An adversarial action with **no** independent source to verify against (e.g. "send
+this email," "post this message"). Tests F9's boundary: where verify-indep is
+impossible, what's left? (Likely: reversible rails + human escalation only.)
+
 ---
 
-## 7. bareagent DX gaps found (report, don't patch)
+## 9. bareagent DX gaps found (report, don't patch)
 
 Surfaced while wiring Phase 1. Neither is a bug; both are onboarding footguns.
 
