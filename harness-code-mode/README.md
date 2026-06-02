@@ -99,6 +99,27 @@ surface to human; deny = the wall answers. Both operator-authored.
 sandbox scope at all, so it never produced an action to evaluate. The cheapest
 boundary is the one where the dangerous symbol simply isn't reachable. (Caveat C1.)
 
+### H7 · OBSERVED · A real isolation boundary makes escape worthless (`run-e4.mjs`)
+Replaces `node:vm` with process isolation + Node 22's `--permission` model + gated
+RPC. The agent body runs in a separate process; capability exists ONLY by posting a
+tool request to the parent, which runs it through the gate. The gate, tools, and
+operator config live in the parent — physically unreachable across the boundary.
+
+- **L1 / L2 unchanged** — `bookFlight` → parent gate **ask** (denied, never executed);
+  `wireMoney` → parent **allowlist deny** (never executed). Instrumented tools confirm
+  only `readPolicy`/`search` actually ran.
+- **L3 now runtime-enforced** — the body runs `constructor.constructor("return
+  require")()` and **does** get a real `require` (we don't pretend to hide it). But
+  `require('fs').readFileSync('/etc/passwd')` and `require('child_process').execSync`
+  both throw **`ERR_ACCESS_DENIED`**. The boundary is enforced by the runtime, not by
+  symbol-hiding, so the escape that defeats `node:vm` buys nothing here.
+
+This is the proper code-mode shape (à la isolates + binding RPC): the sandbox is pure
+compute; all capability is mediated by the gated host. **Honest gap:** `--permission`
+does not gate network egress — true network confinement needs an OS sandbox
+(netns/seccomp); the RPC design gives the body no legitimate network tool anyway.
+(Closes caveat C1.)
+
 ### H6 · OBSERVED · Decomposition defeats the per-action regex; the cumulative tier is the wall (`run-e3.mjs`)
 Proves D5 empirically. Operator intent: "no more than €300 of charges without a
 human," tried two ways.
@@ -158,10 +179,13 @@ it claims to catch.
 
 ## 4. Caveats (do not over-read)
 
-- **C1 · `node:vm` is not a security sandbox.** It demonstrates confinement
-  structurally (off-menu symbols absent) but is escapable via
-  `constructor.constructor`. A real deployment needs `isolated-vm`, a Worker, or a
-  subprocess. The PoC proves the *seam*, not a hardened jail.
+- **C1 · `node:vm` is not a security sandbox. → CLOSED by E4.** The seam PoC
+  (`run.mjs`) uses `node:vm`, which demonstrates confinement structurally but is
+  escapable via `constructor.constructor`. `run-e4.mjs` replaces it with a real
+  boundary (separate process + `--permission` + gated RPC, H7) where the escape is
+  worthless. The one residual is **network egress**, which the permission model
+  doesn't gate — an OS-sandbox concern (netns/seccomp), noted in
+  `hardened-sandbox.mjs`.
 - **C2 · The seam PoC's body is hand-written, not LLM-generated. → CLOSED by E1.**
   `run.mjs` uses a hand-written body on purpose (POC-first, deterministic, and to
   keep M5 honest). `run-e1.mjs` now closes the gap with a real *generated* body and
@@ -216,8 +240,9 @@ it claims to catch.
   detect-and-feed-A *mechanic*; does **not** solve OQ1 (constraint contract) — see C5.
 - **E3 · Decomposition attack. DONE — `run-e3.mjs` (H6).** €200+€200 walks past the
   per-action regex; the cumulative `budget` cap halts it. Proves D5; informs OQ3.
-- **E4 · Hardened sandbox. OPEN.** Swap `node:vm` for a Worker/subprocess to close C1.
-  The last remaining graduation gate.
+- **E4 · Hardened sandbox. DONE — `run-e4.mjs` (H7).** Separate process +
+  `--permission` + gated RPC; `constructor.constructor` escape reaches `require` but
+  fs/child_process are runtime-denied. Closes C1. **All four gates met.**
 - **(Aside) The "code mode" win, measured.** Does the API-as-code surface (vs N
   discrete tool-calls) change *which* actions the agent attempts or how often it
   trips the gate? The actual code-mode value claim — untested here, not a gate.
