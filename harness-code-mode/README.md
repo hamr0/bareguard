@@ -99,6 +99,25 @@ surface to human; deny = the wall answers. Both operator-authored.
 sandbox scope at all, so it never produced an action to evaluate. The cheapest
 boundary is the one where the dangerous symbol simply isn't reachable. (Caveat C1.)
 
+### H8 · OBSERVED · Harness selection is tighten-only; a wrong pick never weakens the floor (`run-e5.mjs`)
+Validates D8 (the one spine element the other gates didn't touch). The agent
+PROPOSES which operator-vetted capability *bundle* governs it; the floor is applied
+regardless.
+
+- **Floor is selection-independent** — under any bundle, irreversible→ask
+  (`sendEmail`, `bookFlight`) and the universal hard-deny (`wireMoney`) fire.
+- **Tighten-only** — a bundle only scopes capability *down* (T1: `search` denied
+  because it's off-bundle); it's intersected with the floor set, so it can never
+  widen past it.
+- **Wrong pick ≠ unsafe (D2)** — T2's too-narrow "research" bundle on a booking task
+  didn't let the booking slip; the floor's irreversible→ask stopped it anyway.
+- **No ungoverned path** — T3a's off-catalog / self-authored bundle *refuses to run*
+  (fail closed). NB: an *empty* allowlist would fail OPEN in bareguard, so selection
+  is gated at resolve-time, not by handing the agent an empty scope.
+- **Advisory validator earned nothing** — it flagged T2's mismatch but changed no
+  decision; the deterministic floor did all the safety work (OQ2 leans "floor is
+  enough"). Selection is ergonomics, not a guard.
+
 ### H7 · OBSERVED · A real isolation boundary makes escape worthless (`run-e4.mjs`)
 Replaces `node:vm` with process isolation + Node 22's `--permission` model + gated
 RPC. The agent body runs in a separate process; capability exists ONLY by posting a
@@ -242,7 +261,11 @@ it claims to catch.
   per-action regex; the cumulative `budget` cap halts it. Proves D5; informs OQ3.
 - **E4 · Hardened sandbox. DONE — `run-e4.mjs` (H7).** Separate process +
   `--permission` + gated RPC; `constructor.constructor` escape reaches `require` but
-  fs/child_process are runtime-denied. Closes C1. **All four gates met.**
+  fs/child_process are runtime-denied. Closes C1.
+- **E5 · Harness selection / D8. DONE — `run-e5.mjs` (H8).** Agent proposes the
+  capability bundle; floor is selection-independent, tighten-only, no ungoverned path;
+  the advisory validator earned nothing (OQ2). **The full spine D1–D8 is now
+  exercised.**
 - **(Aside) The "code mode" win, measured.** Does the API-as-code surface (vs N
   discrete tool-calls) change *which* actions the agent attempts or how often it
   trips the gate? The actual code-mode value claim — untested here, not a gate.

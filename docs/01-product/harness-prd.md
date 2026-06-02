@@ -72,7 +72,7 @@ re-author, plus a return-boundary detector that makes F7's invisible loss visibl
 | D5 | **Two-tier floor.** Aggregate/closed (cumulative limits + closed allowlist) = the real wall. Per-action regex = HITL *trigger* only (decomposable → never a security boundary alone). Quantitative things go cumulative. | **LOCKED** |
 | D6 | **Closed allowlist:** deny-by-default, tuneable-to-loosen (never the reverse), fail-closed, safe defaults. | **LOCKED** |
 | D7 | **Axis B = detect-and-feed-A, never blocks alone.** Annotates A's stop with independent facts; B changes *what the human sees*, not *whether* you stop. Reversible-path violation → feedback + audit (B always surfaces; only A halts). | **LOCKED** |
-| D8 | **Harness selection** is the agent's *proposal*, made at runtime, always (no ungoverned path). A probabilistic match-validator may *advise*; it is never the floor. | **PROPOSED** |
+| D8 | **Harness selection** is the agent's *proposal*, made at runtime, always (no ungoverned path). A probabilistic match-validator may *advise*; it is never the floor. | **PoC-VALIDATED (E5)** — mechanism shown; the *advisory* layer earns nothing yet (OQ2). Lives in the runner, not bareguard. |
 
 ---
 
@@ -274,10 +274,13 @@ Validates the *plumbing*: an agent-written code body in a sandbox, every tool ca
 routed through `gate.run()`, against an operator-authored gate. Demonstrated L1 ask
 (→ humanChannel), L2 deny (off-allowlist), L3 confinement (`fetch` absent).
 
-**Honest accounting (what it did NOT prove):** one party wrote the agent body, the
-gate, *and* the deny — M5. It is a **plumbing smoke test of existing primitives**, not
-validation of harness *selection* (D8) or Axis B (§8). `node:vm` is not a hardened
-sandbox. No LLM.
+**Honest accounting (what the *seam* alone did NOT prove, and where each gap was
+since closed):** one party wrote the agent body, the gate, *and* the deny — M5.
+Taken alone it is a **plumbing smoke test of existing primitives**. The follow-on
+gates close the gaps: real LLM generation → **E1**; `node:vm` is not a hardened
+sandbox → **E4**; harness *selection* (D8) → **E5**; Axis-B reconciliation (§8) →
+**E2** (mechanic only; the `src/` surface stays DEFERRED). All gates E1–E5 are now
+**DONE** (§9.2); the full locked spine D1–D8 is exercised.
 
 ### 9.2 POC graduation gates (before ANY primitive change)
 1. **E1 · real generation** — **DONE** (`harness-code-mode/run-e1.mjs`). A real LLM
@@ -299,7 +302,7 @@ sandbox. No LLM.
    D2/M1 split made literal), while the fences stay byte-identical.** This validates
    "agent writes the body, operator owns the chokepoint" — it does **NOT** validate
    **D8 (harness *selection*)**: the capability menu + gate config were operator-fixed,
-   not agent-proposed. *No E-gate (E1–E4) exercised D8; it remains PROPOSED — see OQ2.*
+   not agent-proposed. *D8 is exercised separately by E5 (§9.2.5).*
    *Caveat C2 (hand-written body) closed; C1 closed by E4.*
 2. **E2 · Axis-B reconcile, end-to-end** — **DONE** (`harness-code-mode/run-e2.mjs`).
    The €300→€410 drift trace (§6.2) runs for real: same Axis-A stop in both runs,
@@ -331,6 +334,21 @@ sandbox. No LLM.
    **Closes §9.1 caveat C1.** Honest remaining gap: `--permission` does not gate
    network egress (separate OS-sandbox concern: netns/seccomp); the RPC design gives
    the body no legitimate network tool regardless. `src/` untouched.
+5. **E5 · harness selection (D8)** — **DONE** (`harness-code-mode/run-e5.mjs`). The
+   agent PROPOSES which operator-vetted capability *bundle* governs it; we check the
+   D2 safety claim that selection is tighten-only ergonomics. Results: (a) the FLOOR
+   is selection-independent — under any bundle, irreversible→ask (`sendEmail`,
+   `bookFlight`) and the universal hard-deny (`wireMoney`) fire regardless; (b)
+   **tighten-only** — a bundle only scopes capability DOWN (an off-bundle reversible
+   tool is allowlist-denied), never up (intersected with the floor set); (c) **wrong
+   pick ≠ unsafe (D2)** — a too-narrow "research" bundle on a booking task did NOT let
+   the booking slip; the floor stopped it anyway; (d) **no ungoverned path** — an
+   off-catalog / self-authored bundle proposal *refuses to run* (fail closed; note an
+   *empty* allowlist would fail OPEN in bareguard, so selection is gated at resolve
+   time, not by an empty scope); (e) the **match-validator advised only** (flagged the
+   T2 mismatch) and changed no decision — **OQ2 evidence that the deterministic floor
+   does all the safety work and the advisory layer is, so far, unearned.** Runner-layer;
+   reuses the seam `node:vm` sandbox (confinement is E4's concern); `src/` untouched.
 
 POC validates → design properly → only then propose concrete primitive reshapes (§7
 "extend" rows) back into `bareguard-prd.md`. **Never ship the POC** (AGENT_RULES).
@@ -342,12 +360,12 @@ POC validates → design properly → only then propose concrete primitive resha
 - **OQ1** — Constraint contract format (§8). The §12.4 "satisfaction contract." Must
   fit §6 + ≤150 LOC, and accept *only* user/request-authored constraints.
 - **OQ2** — Does the match-validator (D8) earn its keep, or is the deterministic floor
-  enough on its own? (Advisory-only either way.) *Status: **D8 is the one spine element
-  no E-gate exercised.** E1 validated the agent authoring the harness *body* (varies
-  run-to-run, fences invariant); selection (the agent *proposing which capability
-  bundle/gate config* governs it) was operator-fixed throughout. Per the pushback
-  discipline, build a selection gate (E5) only on a real need — not speculatively;
-  the floor holds regardless of which bundle is picked (D2), so D8 is ergonomics.*
+  enough on its own? (Advisory-only either way.) *Status: **E5 (§9.2.5) exercised D8.**
+  The mechanism holds — agent proposes, floor is selection-independent, tighten-only,
+  no ungoverned path. The match-validator **advised but changed no decision**: the
+  deterministic floor did all the safety work. **Leaning answer: the floor is enough;
+  the advisory layer has not yet earned its keep.** Keep it advisory-only and build a
+  real validator only on a concrete need — not speculatively. D8 is ergonomics (D2).*
 - **OQ3** — Generalize `budget`'s cumulative model to arbitrary countable resources
   (sends, rows, bytes) — extend the primitive, or a new `limits.cumulative`? (Appendix
   E bar applies — prefer extend.) *E3 evidence:* the cumulative tier already enforces
@@ -383,14 +401,15 @@ POC validates → design properly → only then propose concrete primitive resha
 
 ### Status: design grounded, build DEFERRED
 The spine is LOCKED (§2); the only net-new surface (Axis B, §8) is DEFERRED on a real
-external signal, consistent with the a2a close and Appendix E. **All four POC
-graduation gates (E1–E4) are DONE** (§9.2): E1 — the externally-authored gate holds
-against a real *generated* body (L1 + L2, benign drift); E2 — the Axis-B
-detect-and-feed-A mechanic; E3 — D5 (per-action regex = trigger, defeated by
-decomposition; cumulative `budget` = the real wall); E4 — the hardened sandbox
-(process isolation + `--permission` + gated RPC), closing caveat C1. Every gate is a
-runner-layer POC; **`src/` is untouched and no bareguard primitive changed.** Per
-§9.2, the POC is now validated → the §7 "extend" rows (cumulative generalization for
-OQ3, audit shape for OQ4) become fair to *propose* back into `bareguard-prd.md`, but
-the `src/` Axis-B surface stays DEFERRED behind OQ1 + a real external user, and the
-POC itself is never shipped (AGENT_RULES).
+external signal, consistent with the a2a close and Appendix E. **All five POC gates
+(E1–E5) are DONE** (§9.2): E1 — the externally-authored gate holds against a real
+*generated* body (L1 + L2, benign drift); E2 — the Axis-B detect-and-feed-A mechanic;
+E3 — D5 (per-action regex = trigger, defeated by decomposition; cumulative `budget` =
+the real wall); E4 — the hardened sandbox (process isolation + `--permission` + gated
+RPC), closing caveat C1; E5 — D8 harness selection (tighten-only; floor
+selection-independent; no ungoverned path; the match-validator earned nothing — OQ2).
+Every gate is a runner-layer POC; **`src/` is untouched and no bareguard primitive
+changed.** The whole locked spine (D1–D8) is now exercised. Per §9.2, the §7 "extend"
+rows (cumulative generalization for OQ3, audit shape for OQ4) become fair to *propose*
+back into `bareguard-prd.md`, but the `src/` Axis-B surface stays DEFERRED behind OQ1 +
+a real external user, and the POC itself is never shipped (AGENT_RULES).
