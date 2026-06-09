@@ -39,6 +39,51 @@ This maps cleanly onto bareguard's existing thesis (§6: "what the agent is allo
 to *do*"). **Axis A is bareguard, sharpened. Axis B is the only genuinely new
 surface — and it is the a2a §12.4 deferred candidate, gated on a real user.**
 
+> **Status pointer (reconciled 2026-06-09).** **Axis A is built and released** (bareguard
+> 0.5.2 on npm); **Axis B is the one deferred new surface (= OQ1).** The intended first
+> external user is `litectx` via the **Software Factory**, but the seam is **specced, not
+> wired** (litectx has no bareguard dep yet) — §9.3 is authoritative and supersedes any
+> "litectx actively consumes bareguard" wording. See **§0.1** for the at-a-glance build state
+> (and what is buildable without litectx), and **§9.3.0** for the bench taxonomy + what is /
+> isn't gated on the Factory. Nothing in bareguard `src/` builds ahead of proven need.
+
+---
+
+## 0.1 Where we are now (build/release state) — read this first
+
+The PRD describes a design; most of it already ships. Map of every surface to its real state:
+
+| Surface | What it is | State |
+|---|---|---|
+| **Axis A** | gate the action by shape — the floor: `Gate` (deny/ask + closed allowlist), cumulative `Budget`, `audit`, `redact` | **BUILT & RELEASED — bareguard 0.5.2 (npm).** Axis A is not a thing to build; it *is* the shipped library. The harness POC (E1/E3/E4/E5, §9.2) proved these existing primitives *compose* into the harness pattern with `src/` untouched. |
+| **Axis B** | reconcile the return vs a per-request declared constraint | **DEFERRED — the only genuinely-new bareguard surface (§8). = OQ1** (the constraint-contract format, §10). E2 proved the *mechanic* in the runner only; the `src/` surface is unbuilt. |
+| **OQ3** | generalize `Budget`'s cumulative count to sends/rows/bytes + soft/hard tiers | **EXTENSION to an Axis-A primitive, not a new axis.** Hard cap already ships; tiering is additive, demand-gated (§10). |
+| **OQ4** | audit shape: log request + return together | **EXTENSION, demand-gated (§10).** |
+| **SF-9** | destructive-action classifier for the Software Factory's Ship gate | **A Factory-driven Axis-A *config* (a `shape → ask` rule), not a new axis.** Built when the Factory needs it (§9.3.0). |
+
+**So, plainly: Axis A is built and shipped; Axis B is what's missing.** Everything else is
+either an extension to Axis A (OQ3/OQ4) or a Factory config (SF-9). The OQ definitions live in
+**§10**; this table is the index to them.
+
+### 0.1.1 What is buildable WITHOUT litectx (the litectx-independent workstream)
+
+litectx is not yet runnable, but bareguard is not blocked on it for everything. Ordered by
+discipline-fit:
+
+1. **Gate-zero as a *synthetic* contract test** — feed a hand-written
+   `{type:"memory.write", text, provenance}` action through a real `Gate` and assert
+   deny/allow. **No litectx import** (the action is just JSON). Closes the one ⚠️ *untested*
+   claim in §9.3.1 (does write-text gating actually fire, or is there a silent hole?) and
+   becomes the standing seam regression test. *In-discipline, high-value, buildable now.*
+2. **Axis B (OQ1) itself** — litectx-independent by nature (the Factory likely never exercises
+   it, §9.3.0). To advance the *new surface* without waiting on litectx: needs (a) a real
+   constraint-**authoring** use-case (need not be litectx) and (b) a contract format that fits
+   §6 + the ≤150-LOC budget (§8 tests 1/2/4). Pick a non-litectx driver, or it is a speculative
+   build.
+3. **OQ3/OQ4 extensions** — pure bareguard, litectx-independent, but **currently speculative**
+   (no proven need). Buildable only if you accept a non-litectx justification; the hold-the-line
+   bar otherwise says wait.
+
 ---
 
 ## 1. Why this exists
@@ -355,10 +400,138 @@ POC validates → design properly → only then propose concrete primitive resha
 
 ---
 
+## 9.3 Real-flow validation — `litectx` as first external user (the integration bench)
+
+E1–E5 ran on a synthetic travel-booking demo. **`litectx` is the intended first real
+external consumer** — a code-aware memory engine *designed to* emit `memory.write`/`inject`
+actions and accrue spend through bareguard. Its CE-PRD §10 specs the seam, but **the seam is
+specced, not wired** (litectx's `package.json` has no bareguard dependency yet), so
+"bareguard covers litectx" is currently a *paper* claim. This section records the
+coverage verdict and the bench that turns paper into proof.
+
+### 9.3.0 Bench taxonomy, the Software Factory, and build order
+
+**Two kinds of bench — don't conflate them:**
+- **Proving bench** — "does the design *buy* anything / is coverage real?" Expensive, rare,
+  non-deterministic (real LLM + real repo + A/B), human-judged. §9.3.2 below is a *slice* of one.
+- **Regression bench** — "did a release *break* what worked?" Cheap, every release, hermetic,
+  deterministic, machine-gated. **Distinct artifact, distinct cadence.**
+
+**The proving bench is the Software Factory, not §9.3 alone.** litectx's first adopter is the
+*Software Factory* (`litectx/docs/01-product/software-factory-prd.md`) — an autonomous repo-
+maintainer agent whose #1 job is to validate litectx via a measured litectx-ON vs -OFF A/B. It
+composes litectx + baresuite (bareagent + bareguard) + Pi. The §9.3.2 integration loop is the
+**bareguard-coverage slice** of that larger system bench: the Factory is where the seam runs
+end-to-end on real work, and it is the vehicle that *surfaces* the demand-gated bareguard
+extensions (OQ1, OQ3, and the Software-Factory ship-gate classifier, SF-9).
+
+**Per-release regression stays cheap and layer-local — the bench pyramid:**
+- bareguard: `harness-code-mode/` E1–E5 + primitive unit tests (deterministic, no LLM) — *exists*.
+- litectx: its `poc/` bench-gates (recall, impact) — *exists*.
+- **the seam:** a small, committed **contract test** — feed the action shapes litectx emits
+  (`{type:"memory.write", provenance, text}`, the ship-gate action) through a real bareguard
+  `Gate`, assert deny/allow. This is **gate-zero (§9.3.2 scenario 1) *promoted* to a standing
+  regression gate** — fast, no LLM, runs every release on either side. It guards seam drift;
+  the Software Factory only re-proves the *thesis*.
+- The Software Factory runs at **milestones**, never per-commit (slow, non-deterministic, HITL,
+  and would couple two independently-versioned libraries to one harness).
+
+**Build order & what waits — see §0.1 (the single source of truth).** In short: Axis A is
+built/released; the seam contract test (gate-zero, synthetic) is **done** (`test/seam-contract.
+test.js`); only the Factory's own needs (SF-8/SF-9) sit on the order `litectx memory → CE
+primitives → Software Factory → build`; and OQ1/OQ3 are off the Factory's path entirely
+(demand-gated independently). The Factory is **not a universal validator** — it validates
+litectx, surfaces SF-8/SF-9, and exercises only whatever bareguard surface its flows touch. For
+anything deferred, build + integrate + validate are **one motion** — never build-ahead. **What
+genuinely waits on litectx is the short list in §9.3.4.**
+
+### 9.3.1 Coverage verdict (litectx need → bareguard surface)
+
+| litectx need (CE-PRD §10 / ledger §13.4) | bareguard today | verdict |
+|---|---|---|
+| Floor supremacy (deny/ask before allowlist) | `gate.js` 6-step eval order | ✅ covered, zero change |
+| Audit + redact paper-trail | `Audit` + `redact`/`secrets.js` | ✅ covered |
+| Compose seam (`.check/.record/.allows`) | `wireGate` (bareagent's adapter) | ✅ exists (in bareagent) |
+| Content-verdict stays OUT (§6 line) | excluded by design | ✅ correctly excluded |
+| **`memory.write` gating by shape** (R-G3/R-X2) | `Gate#check` allowlist/denylist (shape) + `content.denyPatterns` (content) | ✅ **SHAPE proven** (`test/seam-contract.test.js`, gate-zero, synthetic — litectx-independent); ⚠️ **CONTENT by design out:** a secret/injection in the write `text` is **not** caught by default (safe-default denyPatterns are SQL/shell only) and closes only with an explicit `content.denyPattern`; `secrets` config redacts the audit but does **not** deny. This is the §6 line, confirmed — not a hole, a boundary. |
+| **Cost-budget gate** (per-tier + soft/hard) | `Budget` = single hard cap, `costUsd`/`tokens` only | ❌ **gap = OQ3** (decision below) |
+
+**Bottom line:** the bareguard *spine* covers litectx's write **shape** with **zero change**
+(floor, audit, redact, compose, §6 exclusion), now **proven** by the synthetic gate-zero test —
+secret/injection *content* stays the adopter's provenance tier by design. One real gap remains —
+the budget cost-gate (OQ3). What still waits on litectx: confirming the verdict against its
+*real* emitted shapes (swap the test's `memoryWrite()` for litectx's emitter) and the end-to-end
+bench (§9.3.2).
+
+### 9.3.2 The bench (the loop that ties A, B, floor, and budget together)
+
+```
+litectx.assemble({intent, budget})  →  context payload        (litectx token-budgeted assembly)
+   → bareagent turn (real LLM)        →  proposed actions       (writes/injects + external tools)
+   → bareguard.check(action)          →  allow / ask / deny     (floor · allowlist · budget)
+   → bareguard.record(result)         →  budget accrues, audit logs
+   → litectx.recordUseful(ids)        →  success boost on what helped
+   → Axis-B: declared assembly contract  reconciled vs the actual return
+```
+
+Scenarios (map to E1–E5 + the two open risks), run over real corpora litectx already
+benches (aurora, gitdone):
+1. **Write-gating (gate-zero)** — **DONE (synthetic, litectx-independent):**
+   `test/seam-contract.test.js` proves the write is gated by *shape* (allowlist/denylist) with
+   zero change, and that secret/injection *content* is out by §6 design (closes only with an
+   explicit `content.denyPattern`; `secrets` redacts audit, does not deny). *Remaining on
+   litectx:* swap the test's synthetic `memoryWrite()` for litectx's real emitter to confirm
+   the verdict against actual shapes.
+2. **Axis-B / E2** — declare a real assembly constraint (e.g. payload ≤ N tokens; all
+   sources `trust ≥ X`) and reconcile against `assemble()`'s return. **First real stress of
+   OQ1's contract format** by an actual consumer.
+3. **Budget / E3** — repeated `memory.write`/`inject` (decomposition-style); does a
+   cumulative tier bound total writes? **This is where the OQ3 need shows up with evidence.**
+4. **Selection / E5** — a bundle including vs excluding `memory.write`; tighten-only holds.
+5. **Trust boundary / E4** — **litectx is parent-side trusted infra** (like the gate and
+   tools), NOT the sandboxed agent body. The body bareagent generates runs under
+   `--permission`; litectx is imported by the trusted runner. The bench must make this
+   boundary explicit so litectx is never run inside the jail by mistake.
+
+### 9.3.3 Discipline (what the bench must NOT do)
+- **Don't trust the spec — prove the gate.** The `memory.write` zero-change claim is the
+  highest-risk assumption in the seam; scenario 1 settles it before anything else.
+- **Don't extend `Budget` speculatively.** Only scenario 3's evidence justifies OQ3 work.
+  (NB ledger §13.4: aurora's tiered cost model was *design-only, never built* — so the
+  tiers themselves are an unvalidated prior.)
+- **Hold the §6 line under pressure.** A real flow will tempt "just let bareguard scan the
+  write for secrets." No — litectx carries the provenance label; bareguard renders the
+  *shape* verdict; content-judgment stays in the guardrails tier. *(gate-zero confirmed this:
+  secret content is out by design, §9.3.1.)*
+
+### 9.3.4 What genuinely waits on litectx (the short list)
+
+Most of the harness does **not** wait on litectx (§0.1.1). Only these do — and each needs
+litectx *runnable* (memory engine + the CE slice that emits actions), not merely existing:
+
+1. **Confirming the coverage verdict against litectx's *real* shapes** — gate-zero is proven
+   synthetically; swapping `memoryWrite()` for litectx's actual emitter is the only thing that
+   turns "shape covered" from synthetic to real. *(Small: one swap at the marked point.)*
+2. **The end-to-end integration bench (§9.3.2)** — the full `assemble → turn → check → record →
+   recordUseful` loop needs litectx's `assemble()`/`recordUseful()` to exist.
+3. **The Software Factory proving bench** — its *subject* is litectx (the ON/OFF A/B); it cannot
+   run without litectx's memory + CE primitives.
+4. **SF-9 (ship-gate classifier)** and any other extension the Factory *surfaces because it ran
+   on litectx* — transitively gated on 3.
+
+Explicitly **NOT** waiting on litectx: Axis A (shipped), the gate-zero contract test (done),
+Axis B/OQ1 (needs *a* constraint-authoring user — likely not litectx), OQ3/OQ4 (demand-gated by
+any driver). See §0.1.1.
+
+---
+
 ## 10. Open questions
 
 - **OQ1** — Constraint contract format (§8). The §12.4 "satisfaction contract." Must
-  fit §6 + ≤150 LOC, and accept *only* user/request-authored constraints.
+  fit §6 + ≤150 LOC, and accept *only* user/request-authored constraints. *Status: a real
+  shape to stress it now exists — litectx's `assemble()` declared constraint (e.g. payload
+  ≤ N tokens / source `trust ≥ X`), exercised by §9.3.2 scenario 2. Don't design the DSL
+  speculatively; let the bench show what shape a real consumer actually needs.*
 - **OQ2** — Does the match-validator (D8) earn its keep, or is the deterministic floor
   enough on its own? (Advisory-only either way.) *Status: **E5 (§9.2.5) exercised D8.**
   The mechanism holds — agent proposes, floor is selection-independent, tighten-only,
@@ -374,8 +547,32 @@ POC validates → design properly → only then propose concrete primitive resha
   would need this generalization. Also surfaced: the POST-FACT halt semantics (cap +
   one action overshoot) — decide whether `strict` projection should be the default for
   hard-money caps.
+  - **DECISION (2026-06-04, litectx as trigger): hard-cap-first; tiered is an *extension*,
+    not a different build.** bareguard's `Budget` already ships the single hard cap
+    (`spent ≥ cap → halt` + optional `strict` pre-flight). litectx's cost-gate (ledger
+    §13.4) wants per-class caps + a soft(80%)/hard(100%) split — but both are *additive
+    deltas on `check()`* (a `warn` decision at `ratio ≥ soft`; a cap-map over the same
+    cumulative mechanism), **not** a rewrite. So: **start on the shipped hard cap (zero new
+    code); extend the same primitive only when §9.3.2 scenario 3 proves the need.** The one
+    variant that *could* be a separate `limits.cumulative` is arbitrary-resource dimensions
+    (sends/rows/bytes) — and even there the bar says *prefer extend*; a new primitive only
+    if the data model genuinely diverges. **Scope note:** this is bareguard's *enforcement*
+    budget; litectx's `assemble({budget})` is *token-budgeted assembly* — a different,
+    litectx-owned budget, out of OQ3's scope.
 - **OQ4** — Audit shape for reconciliation: log request + return together so
   ask-vs-response is reconstructable (a2a §12.2) without bloating the JSONL line.
+
+### 10.1 Future sibling — `barecontext` (the context-economy axis, NOT now)
+
+Talks on *context engineering* / *context graphs* describe a **different axis** from
+this harness: not *what an action may do* (the boundary — bareguard) but *what the
+agent holds in context* (the **economy** — short/long-term memory, freshness, keeping a
+turn's context clean so pollution/hallucination doesn't carry forward and impair the
+decision). That axis is a **future bare-suite sibling, `barecontext`** — **not now** (no
+need yet). The sorting rule — **boundary/trust → bareguard; economy/freshness →
+barecontext** — plus the full concept/primitive material and the borrowable-vs-bloat
+analysis now live in [`barecontext-prd.md`](barecontext-prd.md) §5. Only that doc's
+**bareguard-edge** rows are ever this PRD's business, and only on a real user.
 
 ---
 
@@ -388,6 +585,8 @@ POC validates → design properly → only then propose concrete primitive resha
 - **Making a probabilistic agent deterministic** — out of scope by thesis. The harness
   bounds blast radius; it does not remove variance.
 - **Completeness of the floor** (M3/M4) — it raises evasion cost; it is not a proof.
+- **Context economy** (pollution, staleness, memory hygiene) — a *different axis*; a
+  future `barecontext` concern (§10.1), not the floor's job.
 
 ---
 
@@ -398,18 +597,30 @@ POC validates → design properly → only then propose concrete primitive resha
 - **`a2a-intent-drift-prd.md`** — the experiment that produced F7, F8, §11, M1, §12.4
   — the evidentiary base for every "ceiling" claim here.
 - **`harness-code-mode/`** — the seam PoC (§9.1) and home for E1–E4.
+- **`litectx`** (`~/PycharmProjects/litectx`) — the intended first real external consumer
+  (§9.3); its CE-PRD §10 specs the bareguard seam. Wired via the Software Factory, not directly.
+- **`software-factory-prd.md`** (in litectx's repo) — litectx's first adopter and the
+  *system-level proving bench* (§9.3.0); §9.3.2 is its bareguard-coverage slice. It surfaces
+  the demand-gated bareguard extensions (OQ1, OQ3, SF-9 ship-gate classifier).
 
-### Status: design grounded, build DEFERRED
-The spine is LOCKED (§2); the only net-new surface (Axis B, §8) is DEFERRED on a real
-external signal, consistent with the a2a close and Appendix E. **All five POC gates
-(E1–E5) are DONE** (§9.2): E1 — the externally-authored gate holds against a real
-*generated* body (L1 + L2, benign drift); E2 — the Axis-B detect-and-feed-A mechanic;
-E3 — D5 (per-action regex = trigger, defeated by decomposition; cumulative `budget` =
-the real wall); E4 — the hardened sandbox (process isolation + `--permission` + gated
-RPC), closing caveat C1; E5 — D8 harness selection (tighten-only; floor
-selection-independent; no ungoverned path; the match-validator earned nothing — OQ2).
-Every gate is a runner-layer POC; **`src/` is untouched and no bareguard primitive
-changed.** The whole locked spine (D1–D8) is now exercised. Per §9.2, the §7 "extend"
-rows (cumulative generalization for OQ3, audit shape for OQ4) become fair to *propose*
-back into `bareguard-prd.md`, but the `src/` Axis-B surface stays DEFERRED behind OQ1 +
-a real external user, and the POC itself is never shipped (AGENT_RULES).
+### Status: spine validated & shipped (waits on nothing); only un-agreed deltas wait — and not all on the Factory
+The spine is LOCKED (§2) and the synthetic POC is COMPLETE — **all five gates E1–E5 DONE**
+(§9.2): E1 generated-body gate holds (L1+L2); E2 Axis-B detect-and-feed-A; E3 D5
+(regex=trigger, cumulative `budget`=wall); E4 hardened sandbox (closes C1); E5 D8 selection
+(tighten-only; validator earned nothing — OQ2). Every gate is runner-layer; **`src/`
+untouched, no bareguard primitive changed.**
+
+**What changed (2026-06-04):** `litectx` is the first **real external user** the deferrals
+were waiting for (§9.3). The coverage verdict: the bareguard **spine covers litectx with
+zero change** (floor, audit, redact, compose, §6 exclusion); two items remain — the
+**untested `memory.write` gating claim** (a possible silent hole, bench gate-zero) and the
+**budget cost-gate** (OQ3, now decided **hard-cap-first / extend-not-rebuild**).
+
+**What's next (reconciled 2026-06-09).** The at-a-glance build state and what's buildable
+without litectx live in **§0.1 / §0.1.1**; what genuinely waits on litectx is the short list in
+**§9.3.4**. Net: Axis A is built & released (0.5.2); the gate-zero seam contract test is **done**
+(`test/seam-contract.test.js`, synthetic, +6 tests, suite green) — it proves write *shape* is
+gated with zero change and that secret/injection *content* is out by §6 design. Only the
+Factory's own needs (SF-8/SF-9) sit on the build order; OQ1/OQ3 are demand-gated off the
+Factory's path. No `src/` change, no build-ahead; build + integrate + validate are one motion.
+POC is never shipped (AGENT_RULES).
