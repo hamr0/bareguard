@@ -887,7 +887,47 @@ sibling library").
 - *Origin / relation:* prompted by [bindu](https://github.com/GetBindu/bindu)'s
   Ed25519-signed A2A records, but this is integrity of bareguard's **own log**, not
   agent authentication — bareguard authorizes the action, not the actor. See
-  [identity-and-the-gate.md](../identity-and-the-gate.md).
+  [identity-and-the-gate.md](../02-features/identity-and-the-gate.md).
+
+**Budget: generalized cumulative dimensions + soft/hard split (PROPOSED 2026-06-09;
+harness-prd OQ3).** Two additive extensions to the shipped `Budget`, *not* a rewrite:
+(1) generalize the cumulative counter beyond `costUsd`/`tokens` to arbitrary countable
+resources (sends, rows, bytes) via a cap-map over the same mechanism; (2) a
+soft-threshold `warn` decision (e.g. at 80% of cap) ahead of the existing hard halt.
+
+- *Status:* **PROPOSED — earned by POC evidence, gated on a real driver.** The harness
+  POC gate E3 (`harness-code-mode/run-e3.mjs`) proved empirically that the cumulative
+  tier is the real wall (a per-action regex is decomposable: €200+€200 walked past a
+  `>€300` ask; `budget.maxCostUsd: 300` halted the same split) — but E3 had to model €
+  charges *as* `costUsd` because no other dimension exists. A real non-money resource
+  (sends, rows) needs the generalization. E3 also surfaced a semantics question to
+  settle at build time: `check()` halts POST-FACT (`spent ≥ cap` — exposure bounds to
+  cap + one action); decide whether `strict` projection becomes the default for
+  hard-money caps.
+- *Why parked:* no adopter counts a non-money resource yet, and the soft/hard tier
+  prior comes from a design that was never built (aurora's tiered cost model —
+  design-only, an unvalidated prior). Appendix E says prefer-extend over new primitive;
+  a separate `limits.cumulative` is justified only if the data model genuinely
+  diverges. Build + integrate + validate in one motion when a driver appears.
+- *Origin / relation:* harness-prd §10 **OQ3** (decision recorded there 2026-06-04:
+  hard-cap-first; tiered is an extension). Candidate first user: a memory-engine
+  adopter bounding `memory.write` counts per run (harness-prd §9.3.2 scenario 3).
+
+**Audit: request + return on one line (PROPOSED 2026-06-09; harness-prd OQ4).** Log
+the gated request and its result together (or deterministically joinable) so
+ask-vs-outcome reconciliation is reconstructable from the log without re-stitching
+JSONL phases.
+
+- *Status:* **PROPOSED — mechanic shown, shape undecided.** The harness POC gate E2
+  proved the value of an independent return-side fact at the approval moment
+  (detect-and-feed-A); a2a §12.2 is the evidentiary base ("log request + return so
+  reconcile is reconstructable"). Today `phase:"gate"` and `phase:"record"` lines are
+  joinable only by proximity/order, not by an explicit id.
+- *Why parked:* the cheap version (echo an action id on the `record` line) is small,
+  but the line-bloat and truncation interaction (`_truncated`) need a look, and no
+  consumer reconciles today. If Axis-B reconciliation (harness-prd §8) ever builds,
+  this is the audit shape it feeds — but it must not wait for, or assume, Axis B.
+- *Origin / relation:* harness-prd §10 **OQ4**; a2a-intent-drift §12.2.
 
 ## 20. POC retrospective (what we built, why)
 

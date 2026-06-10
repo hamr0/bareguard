@@ -564,8 +564,14 @@ any driver). See §0.1.1.
     if the data model genuinely diverges. **Scope note:** this is bareguard's *enforcement*
     budget; litectx's `assemble({budget})` is *token-budgeted assembly* — a different,
     litectx-owned budget, out of OQ3's scope.
+  - **PROPOSED into the stable spec (2026-06-09):** recorded as a future-feature
+    candidate in `bareguard-prd.md` §19 with the E3 evidence. Still demand-gated —
+    proposing ≠ building.
 - **OQ4** — Audit shape for reconciliation: log request + return together so
   ask-vs-response is reconstructable (a2a §12.2) without bloating the JSONL line.
+  - **PROPOSED into the stable spec (2026-06-09):** recorded as a future-feature
+    candidate in `bareguard-prd.md` §19. Still demand-gated; must not wait for or
+    assume Axis B.
 
 ### 10.1 Future sibling — `barecontext` (the context-economy axis, NOT now)
 
