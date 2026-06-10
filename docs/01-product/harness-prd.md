@@ -273,6 +273,48 @@ B checks the **returned value** against a **stated** constraint. Therefore it
 > omissions."** Calling it "validate everything that comes back" would be F7
 > repackaged (§12.3 already killed the "drift meter" for the same reason).
 
+### 6.5 What B is made of — the variable part vs the fixed part (clarifies OQ1)
+
+"B" names two very different things; conflating them makes OQ1 look bigger than it is:
+
+**The CHECK — variable, customer-owned, cannot be generic.** Which field, what
+comparison. It differs per consumer and always will:
+
+| Consumer | Tool return | Their constraint | The check |
+|---|---|---|---|
+| travel agent | `{id, price: 400, stops: 1}` | `{maxPrice: 300}` | `price > maxPrice` |
+| memory engine | `{payload, tokens: 12000}` | `{maxTokens: 8000}` | `tokens > maxTokens` |
+| data export | `{rows: 50000}` | `{maxRows: 1000}` | `rows > maxRows` |
+
+Three consumers, three fields, zero shared check logic — each check is ~1 line of the
+*caller's* code. This is exactly why OQ1 (the public constraint format) is deferred:
+shipping "the check" generically means freezing a mini-language before any real
+consumer has shown which 10% of it they need.
+
+**The SKELETON — fixed, identical for every consumer; the only thing an Axis-B
+surface would ever ship:**
+1. **Tap point** — reads the *authoritative tool return*, never the agent's claim.
+2. **Timing** — after the return, before the next action.
+3. **Fact envelope** — one output shape regardless of domain:
+   `{field, stated, returned, text}` (e.g. `{field:"price", stated:300, returned:400,
+   text:"€400, exceeds your stated max of €300"}`).
+4. **Routing** — facts go to the three §6.3 sinks: the human-ask annotation, agent
+   feedback (in-band context), and the audit line.
+5. **The prohibition** — never blocks, never modifies, never decides (D7).
+
+Same pattern as `humanChannel`: bareguard doesn't know whether the human UI is Slack
+or a terminal — it ships the *slot and the event shape*, the caller plugs in the rest.
+An Axis-B surface ships the slot, the envelope, and the sink wiring; the checks stay
+the caller's.
+
+**Common misreading, corrected:** B does not "pass the result to A" — **A never sees
+results at all.** A gates the *next action*, and stops with or without B (an
+irreversible booking asks regardless). B passes only its *note*, so a stop that was
+already happening shows independent facts instead of the agent's framing. B changes
+what the human *knows*, never what the system *does*. The E2 PoC (`harness-code-mode/
+axis-b.mjs`) implements exactly this split: a domain-specific `reconcile()` (the
+variable part, 2 hardcoded fields) emitting the fixed envelope into the fixed sinks.
+
 ---
 
 ## 7. Mapping onto existing bareguard primitives
@@ -538,7 +580,10 @@ any driver). See §0.1.1.
 ## 10. Open questions
 
 - **OQ1** — Constraint contract format (§8). The §12.4 "satisfaction contract." Must
-  fit §6 + ≤150 LOC, and accept *only* user/request-authored constraints. *Status: a real
+  fit §6 + ≤150 LOC, and accept *only* user/request-authored constraints. **Scope
+  narrowed by §6.5:** the check is the caller's (~1 line, can't be generic) and the
+  skeleton (tap point, fact envelope, sinks, never-block) is already settled — OQ1 is
+  *only* the question of freezing a public *declaration format*, nothing more. *Status: a real
   shape to stress it now exists — litectx's `assemble()` declared constraint (e.g. payload
   ≤ N tokens / source `trust ≥ X`), exercised by §9.3.2 scenario 2. Don't design the DSL
   speculatively; let the bench show what shape a real consumer actually needs.*
