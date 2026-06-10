@@ -78,8 +78,9 @@ discipline-fit:
    it, §9.3.0). To advance the *new surface* without waiting on litectx: needs (a) a real
    constraint-**authoring** use-case (need not be litectx) and (b) a contract format that fits
    §6 + the ≤150-LOC budget (§8 tests 1/2/4). Pick a non-litectx driver, or it is a speculative
-   build. *The E2 detect-and-feed-A mechanic can ship as a runner-layer recipe without touching
-   OQ1 — recipes are the demand sensor, per the cookbook pattern.*
+   build. *The E2 detect-and-feed-A mechanic ✅ **SHIPPED as cookbook sample 8
+   (2026-06-09)** — runner-layer, no OQ1 touched; the recipe is now the live demand
+   sensor for the declaration format.*
 3. **OQ3/OQ4 extensions** — ✅ **PROPOSED into `bareguard-prd.md` §19 (2026-06-09)** as
    future-feature candidates with the POC evidence attached. Proposing ≠ building: both stay
    demand-gated; implementation still waits on a real driver.
@@ -219,8 +220,11 @@ for safety.** This is what keeps agent self-selection safe despite M1: selecting
   e.g. `read-only-research`, `book-with-approval`, `send-comms-HITL`, plus a
   "roll-your-own" skeleton. This is the Appendix-E **(b)-tier (recipe)** — encouraged.
   **SHIPPED (2026-06-09): [`docs/02-features/harness-cookbook.md`](../02-features/harness-cookbook.md)**
-  — the E5-validated floor+catalog+resolver pattern, 4 bundles (incl. the
-  contract-tested `memory-adopter`), the roll-your-own skeleton, and the
+  — the E5-validated floor+catalog+resolver pattern, **8 samples**: research /
+  book-with-approval / comms-HITL / contract-tested `memory-adopter` /
+  `code-mode-sandbox` (E1+E4) / `repo-maintainer` (the SF-9 ship-gate as a recipe) /
+  `delegation` (spawn/defer containment) / **`detect-and-feed-A` (Axis B as a recipe —
+  the OQ1 demand sensor)** — plus the roll-your-own skeleton and the
   empty-allowlist-fails-OPEN foot-gun (verified) that makes off-catalog refusal a
   resolver concern, not a scope trick.
 - ❌ A library of **agent-authored harnesses promoted to reusable** without a vetting
