@@ -209,10 +209,15 @@ for safety.** This is what keeps agent self-selection safe despite M1: selecting
   The **floor stays deterministic** (a2a §11: you can't verify your way out of a
   probabilistic agent, so the binding layer must not depend on one).
 
-### 5.2 Library of harnesses (DEFERRED — only the safe shape)
+### 5.2 Library of harnesses (cookbook SHIPPED as recipe; agent-authored library still never)
 - ✅ A **cookbook** of operator-vetted capability bundles (tools + gate config),
   e.g. `read-only-research`, `book-with-approval`, `send-comms-HITL`, plus a
   "roll-your-own" skeleton. This is the Appendix-E **(b)-tier (recipe)** — encouraged.
+  **SHIPPED (2026-06-09): [`docs/02-features/harness-cookbook.md`](../02-features/harness-cookbook.md)**
+  — the E5-validated floor+catalog+resolver pattern, 4 bundles (incl. the
+  contract-tested `memory-adopter`), the roll-your-own skeleton, and the
+  empty-allowlist-fails-OPEN foot-gun (verified) that makes off-catalog refusal a
+  resolver concern, not a scope trick.
 - ❌ A library of **agent-authored harnesses promoted to reusable** without a vetting
   step. That's M1 with extra steps — a fence no operator vetted. Never.
 

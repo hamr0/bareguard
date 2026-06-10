@@ -106,6 +106,7 @@ Every primitive is one file (~30–180 LOC). The gate evaluates them in a fixed 
 |---|---|
 | **[Integration Guide](bareguard.context.md)** | LLM-optimized wiring — hand it to your AI assistant. |
 | **[Usage Guide](docs/02-features/usage-guide.md)** | Eval order, common gotchas, and 8 deployment recipes. |
+| **[Harness cookbook](docs/02-features/harness-cookbook.md)** | Vetted capability bundles — tighten-only presets over one floor. |
 | **[PRD](docs/01-product/bareguard-prd.md)** | Unified design spec + future-feature candidates. |
 | **[Identity and the gate](docs/02-features/identity-and-the-gate.md)** | Why auth is upstream; per-principal policy via `_ctx`. |
 | **[NO-GO list](docs/04-process/non-roadmap.md)** | What bareguard deliberately won't do. |
