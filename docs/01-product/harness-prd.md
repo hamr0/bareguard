@@ -226,7 +226,9 @@ for safety.** This is what keeps agent self-selection safe despite M1: selecting
   `delegation` (spawn/defer containment) / **`detect-and-feed-A` (Axis B as a recipe —
   the OQ1 demand sensor)** — plus the roll-your-own skeleton and the
   empty-allowlist-fails-OPEN foot-gun (verified) that makes off-catalog refusal a
-  resolver concern, not a scope trick.
+  resolver concern, not a scope trick. **All samples verified by execution** against
+  the shipped `Gate` (2026-06-09: E4 re-run + 9 assertions — rules fire exactly as
+  documented; the Axis-B fact reaches the human event verbatim).
 - ❌ A library of **agent-authored harnesses promoted to reusable** without a vetting
   step. That's M1 with extra steps — a fence no operator vetted. Never.
 

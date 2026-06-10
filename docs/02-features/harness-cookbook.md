@@ -134,8 +134,11 @@ read/diff/test freely; anything that *publishes* (push, merge, deploy) asks a hu
 }
 ```
 The safe defaults already ask on `force-push` and deny `--force` — these patterns
-*add* the publish verbs. When the Software Factory arrives, its Ship gate (SF-9)
-starts life as exactly this bundle.
+*add* the publish verbs. Layering, verified by execution: `--force` is denied at
+**step 2** (safe-default `content.denyPatterns`) before the bundle's `bash.denyPatterns`
+even runs; the bundle pattern earns its keep on `reset --hard`, which the defaults
+don't cover. When the Software Factory arrives, its Ship gate (SF-9) starts life as
+exactly this bundle.
 
 ### 7. `delegation` — sub-agents without fork bombs
 The only shipped primitives no other recipe covers: spawn/defer containment.
