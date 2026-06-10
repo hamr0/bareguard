@@ -858,6 +858,44 @@ boundary, and shared-budget lock hardening (fail-loud on corrupt read).
 - Lock the API. SemVer commitments.
 - Walk-away: maintenance only after this point.
 
+**DECISION (2026-06-09): HOLD at 0.5.x.** Version numbers are decisions, not counters —
+1.0 can cut from 0.5.x any day; the question is only readiness to make the promise.
+Holding because the first real external consumer (litectx via the Software Factory —
+harness-prd §9.3.4) has not yet exercised the seam: locking before the swap-point test
+and integration bench run is the one scenario that risks an early 2.0.
+
+**Gate to cut 1.0 (all three):**
+1. The seam exercised by a real consumer (harness-prd §9.3.4 items 1–2: swap-point
+   confirmation + integration bench) with no API regret surfaced.
+2. The **last-call breaking-change review** below resolved (each item changed or
+   explicitly kept — breaking changes are cheap at 0.x, expensive forever after).
+3. The §21 unchecked box decided: do the bareagent deprecation re-exports first, or
+   amend the criterion and ship without (defensible — it gates bareagent's cleanliness,
+   not this API).
+
+**Last-call breaking-change review (open items, decide before lock):**
+- **Empty `tools.allowlist` fails OPEN** — `[]` is treated as not-configured → step 5
+  skipped → default allow (verified vs `src/primitives/tools.js`; documented as the
+  cookbook's headline foot-gun). Flip to fail-closed / throw-on-construct, or keep and
+  lock the documented behavior?
+- **`budget.strict` default for money caps** — `check()` halts post-fact (`spent ≥ cap`
+  = cap + one action overshoot); decide if `strict` projection becomes the default for
+  `maxCostUsd` (the §19 Budget candidate's semantics flag).
+- **Confirm-and-lock** (intentional, just ratify): `allows()` returns true for
+  ask-gated tools; no-`humanChannel` ask/halt → deny with severity halt; topup-on-ask
+  treated as allow.
+
+**What the 1.0 promise covers when cut** (the SemVer surface): exports (`Gate`,
+`redact`, `Budget` errors, `defaultAuditPath`, `globToRegex`/`matchAny`), config keys,
+**rule strings** (adopters and the seam contract test match on them), the audit JSONL
+line format, the budget file format, and the `humanChannel` event/decision contract.
+
+**Pending/future work index while holding** (so nothing lives only in chat): this
+section (1.0 gate) · §19 future candidates above (Budget, Audit, tamper-evident — all
+demand-gated) · harness-prd §0.1.1 (pre-litectx backlog: EMPTY except the optional
+Axis-B detect-and-feed-A recipe) · harness-prd §9.3.4 (waits-on-litectx) · harness-prd
+§10 OQ1 (declaration format only; skeleton settled per §6.5) / OQ2 (likely never).
+
 ### Future features (candidates — not committed)
 
 Ideas that cleared "interesting" but not the §17 / Appendix C bar yet. Parked here
