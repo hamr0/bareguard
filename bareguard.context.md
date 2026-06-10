@@ -555,6 +555,7 @@ The wrapper caches `allow` returns (deny / halt / topup / terminate always bypas
 ## See also
 
 - [`docs/01-product/bareguard-prd.md`](docs/01-product/bareguard-prd.md) — unified PRD (v0.7).
+- [`docs/02-features/harness-cookbook.md`](docs/02-features/harness-cookbook.md) — operator-vetted capability bundles: tighten-only presets over one floor (incl. the empty-allowlist-fails-OPEN foot-gun).
 - [`docs/04-process/non-roadmap.md`](docs/04-process/non-roadmap.md) — the NO-GO list.
 - [`docs/04-process/decisions-log.md`](docs/04-process/decisions-log.md) — decisions resolved across versions.
 - [`CHANGELOG.md`](CHANGELOG.md) — release-by-release diff.

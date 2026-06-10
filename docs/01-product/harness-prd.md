@@ -57,8 +57,8 @@ The PRD describes a design; most of it already ships. Map of every surface to it
 |---|---|---|
 | **Axis A** | gate the action by shape — the floor: `Gate` (deny/ask + closed allowlist), cumulative `Budget`, `audit`, `redact` | **BUILT & RELEASED — bareguard 0.5.2 (npm).** Axis A is not a thing to build; it *is* the shipped library. The harness POC (E1/E3/E4/E5, §9.2) proved these existing primitives *compose* into the harness pattern with `src/` untouched. |
 | **Axis B** | reconcile the return vs a per-request declared constraint | **DEFERRED — the only genuinely-new bareguard surface (§8). = OQ1** (the constraint-contract format, §10). E2 proved the *mechanic* in the runner only; the `src/` surface is unbuilt. |
-| **OQ3** | generalize `Budget`'s cumulative count to sends/rows/bytes + soft/hard tiers | **EXTENSION to an Axis-A primitive, not a new axis.** Hard cap already ships; tiering is additive, demand-gated (§10). |
-| **OQ4** | audit shape: log request + return together | **EXTENSION, demand-gated (§10).** |
+| **OQ3** | generalize `Budget`'s cumulative count to sends/rows/bytes + soft/hard tiers | **EXTENSION to an Axis-A primitive, not a new axis.** Hard cap already ships; tiering is additive, demand-gated (§10). **PROPOSED into `bareguard-prd.md` §19 (2026-06-09)** with the E3 evidence. |
+| **OQ4** | audit shape: log request + return together | **EXTENSION, demand-gated (§10). PROPOSED into `bareguard-prd.md` §19 (2026-06-09)** — gate/record lines share no per-action id; content-join goes ambiguous under repetition. |
 | **SF-9** | destructive-action classifier for the Software Factory's Ship gate | **A Factory-driven Axis-A *config* (a `shape → ask` rule), not a new axis.** Built when the Factory needs it (§9.3.0). |
 
 **So, plainly: Axis A is built and shipped; Axis B is what's missing.** Everything else is
@@ -70,19 +70,24 @@ either an extension to Axis A (OQ3/OQ4) or a Factory config (SF-9). The OQ defin
 litectx is not yet runnable, but bareguard is not blocked on it for everything. Ordered by
 discipline-fit:
 
-1. **Gate-zero as a *synthetic* contract test** — feed a hand-written
-   `{type:"memory.write", text, provenance}` action through a real `Gate` and assert
-   deny/allow. **No litectx import** (the action is just JSON). Closes the one ⚠️ *untested*
-   claim in §9.3.1 (does write-text gating actually fire, or is there a silent hole?) and
-   becomes the standing seam regression test. *In-discipline, high-value, buildable now.*
+1. **Gate-zero as a *synthetic* contract test** — ✅ **DONE (2026-06-09):**
+   `test/seam-contract.test.js` (7 tests, adversarially reviewed). Closed the §9.3.1 ⚠️ row:
+   write **shape** gated zero-change; secret/injection **content** out by §6 design; redact ≠
+   gate. Standing seam regression test with a marked SWAP POINT for litectx's real emitter.
 2. **Axis B (OQ1) itself** — litectx-independent by nature (the Factory likely never exercises
    it, §9.3.0). To advance the *new surface* without waiting on litectx: needs (a) a real
    constraint-**authoring** use-case (need not be litectx) and (b) a contract format that fits
    §6 + the ≤150-LOC budget (§8 tests 1/2/4). Pick a non-litectx driver, or it is a speculative
-   build.
-3. **OQ3/OQ4 extensions** — pure bareguard, litectx-independent, but **currently speculative**
-   (no proven need). Buildable only if you accept a non-litectx justification; the hold-the-line
-   bar otherwise says wait.
+   build. *The E2 detect-and-feed-A mechanic can ship as a runner-layer recipe without touching
+   OQ1 — recipes are the demand sensor, per the cookbook pattern.*
+3. **OQ3/OQ4 extensions** — ✅ **PROPOSED into `bareguard-prd.md` §19 (2026-06-09)** as
+   future-feature candidates with the POC evidence attached. Proposing ≠ building: both stay
+   demand-gated; implementation still waits on a real driver.
+4. **The harness cookbook (§5.2)** — ✅ **DONE (2026-06-09):**
+   [`docs/02-features/harness-cookbook.md`](../02-features/harness-cookbook.md).
+
+With 1, 3, and 4 delivered, **the pre-litectx sanctioned backlog is empty** — what remains
+either waits on litectx (§9.3.4) or on its own demand trigger (Axis B / OQ1, item 2).
 
 ---
 
