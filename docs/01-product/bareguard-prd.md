@@ -920,9 +920,11 @@ JSONL phases.
 
 - *Status:* **PROPOSED — mechanic shown, shape undecided.** The harness POC gate E2
   proved the value of an independent return-side fact at the approval moment
-  (detect-and-feed-A); a2a §12.2 is the evidentiary base ("log request + return so
-  reconcile is reconstructable"). Today `phase:"gate"` and `phase:"record"` lines are
-  joinable only by proximity/order, not by an explicit id.
+  (detect-and-feed-A); a2a §12.2 is the evidentiary base ("log the request alongside
+  the response so ask-vs-response is reconstructable"). Today `phase:"gate"` and
+  `phase:"record"` lines both carry the full `action` but share **no per-action id** —
+  joinable by content match or proximity, which goes **ambiguous exactly when the same
+  action repeats** (the E3 decomposition case: N identical `pay €200` lines).
 - *Why parked:* the cheap version (echo an action id on the `record` line) is small,
   but the line-bloat and truncation interaction (`_truncated`) need a look, and no
   consumer reconciles today. If Axis-B reconciliation (harness-prd §8) ever builds,
