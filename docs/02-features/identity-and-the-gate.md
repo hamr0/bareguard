@@ -37,7 +37,7 @@ bareguard deliberately owns the half that **doesn't require knowing who you are*
 Its contract is: by the time an action reaches the gate, identity is already
 settled upstream (the OS, the messaging platform, an A2A peer's signature,
 whatever); the gate's only job is whether the action *itself* is permitted. That
-is why the [NO-GO list](non-roadmap.md) says "Identity / authn / authz — caller's
+is why the [NO-GO list](../04-process/non-roadmap.md) says "Identity / authn / authz — caller's
 concern. bareguard sees actions, not principals."
 
 ## You can still policy per-principal — no auth code in the gate
@@ -91,4 +91,4 @@ mutation / deletion / reorder, but it is **not** a signature (no authorship proo
 and a *global* chain is impossible without a per-emit lock — bareguard's audit is
 multi-writer and lock-free. A per-`run_id` chain is feasible but only protects
 within a run. This is a **parked future-feature candidate**, not shipped: see PRD
-§19 "Future features" and [non-roadmap.md](non-roadmap.md).
+§19 "Future features" and [non-roadmap.md](../04-process/non-roadmap.md).

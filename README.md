@@ -30,7 +30,7 @@ bareguard is a runtime policy library every agent action passes through. One `Ga
 
 Same patterns as [bareagent](https://www.npmjs.com/package/bare-agent), [barebrowse](https://www.npmjs.com/package/barebrowse), and [baremobile](https://www.npmjs.com/package/baremobile) — embed it, don't run it. No daemon, no SaaS, no telemetry.
 
-It owns exactly one layer. Not a content guardrail (use `guardrails-ai` for toxicity / PII / schema). Not a sandbox (Docker / gVisor for containment). Not authn (caller's concern — see [Identity and the gate](docs/identity-and-the-gate.md)). The five-layer split: system prompt → guardrails-ai → **bareguard** → sandbox → OS perms.
+It owns exactly one layer. Not a content guardrail (use `guardrails-ai` for toxicity / PII / schema). Not a sandbox (Docker / gVisor for containment). Not authn (caller's concern — see [Identity and the gate](docs/02-features/identity-and-the-gate.md)). The five-layer split: system prompt → guardrails-ai → **bareguard** → sandbox → OS perms.
 
 ## Install
 
@@ -98,7 +98,7 @@ Every primitive is one file (~30–180 LOC). The gate evaluates them in a fixed 
 
 **Safe defaults** ship in `content`: `rm -rf /`, `DROP TABLE`, `TRUNCATE` denied outright; destructive verbs (`delete`, `revoke`, `force-push`, destructive HTTP methods) escalate to the human. Override with empty arrays for pure-allow.
 
-124 tests pass on the CI matrix: **Linux + macOS + Windows × Node 20 + 22** — including real-subprocess shared-budget contention, halt cascades, single-file audit atomicity, and `parent_run_id` / `spawn_depth` stitching across a 3-deep tree.
+132 tests pass on the CI matrix: **Linux + macOS + Windows × Node 20 + 22** — including real-subprocess shared-budget contention, halt cascades, single-file audit atomicity, and `parent_run_id` / `spawn_depth` stitching across a 3-deep tree.
 
 ## Docs
 
@@ -107,9 +107,9 @@ Every primitive is one file (~30–180 LOC). The gate evaluates them in a fixed 
 | **[Integration Guide](bareguard.context.md)** | LLM-optimized wiring — hand it to your AI assistant. |
 | **[Usage Guide](docs/02-features/usage-guide.md)** | Eval order, common gotchas, and 8 deployment recipes. |
 | **[PRD](docs/01-product/bareguard-prd.md)** | Unified design spec + future-feature candidates. |
-| **[Identity and the gate](docs/identity-and-the-gate.md)** | Why auth is upstream; per-principal policy via `_ctx`. |
-| **[NO-GO list](docs/non-roadmap.md)** | What bareguard deliberately won't do. |
-| **[Decisions log](docs/decisions-log.md)** · **[CHANGELOG](CHANGELOG.md)** | Design calls and release history. |
+| **[Identity and the gate](docs/02-features/identity-and-the-gate.md)** | Why auth is upstream; per-principal policy via `_ctx`. |
+| **[NO-GO list](docs/04-process/non-roadmap.md)** | What bareguard deliberately won't do. |
+| **[Decisions log](docs/04-process/decisions-log.md)** · **[CHANGELOG](CHANGELOG.md)** | Design calls and release history. |
 
 ## The bare ecosystem
 

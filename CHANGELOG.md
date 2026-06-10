@@ -4,7 +4,15 @@ All notable changes to bareguard are documented here. Format: [Keep a Changelog]
 
 ## [Unreleased]
 
+No library change — everything below is tests, docs, and CI. No public-API or behavior change; `src/` untouched.
+
+### Added
+- **`test/seam-contract.test.js` — the gate-zero seam contract test** (7 tests). Proves, with synthetic actions (no external dep), that a memory-engine adopter's `memory.write` is gated by **shape** (allowlist/denylist) with zero config change — and pins the §6 boundary as tested fact: secret/injection **content** in the write `text` is *not* caught by default (safe-default denyPatterns are SQL/shell only), closes only with an explicit `content.denyPattern`, and `secrets` config **redacts the audit trail but does not deny** (redact ≠ gate; asserted against the audit file). Carries a marked SWAP POINT to substitute a real consumer's emitter (litectx) when one exists.
+- **`docs/01-product/harness-prd.md` — the harness PRD** (floor+harness / Axis-A-B design, living) plus **`harness-code-mode/`** — the POC gates E1–E5 (real-LLM generated body, Axis-B detect-and-feed-A mechanic, decomposition attack vs cumulative budget, hardened `--permission` sandbox, harness selection / tighten-only). All runner-layer; per the PRD's own discipline the POC is never shipped. §0.1 records the build state: **Axis A = the shipped library; Axis B (OQ1) = the one deferred new surface.**
+- **`docs/01-product/barecontext-prd.md`** (SEED / NOT-NOW — the context-economy axis + the bareguard↔barecontext sorting rule) and **`docs/01-product/litectx-prd.md`** (DRAFT — the lite code-aware memory engine; bareguard's intended first external consumer).
+
 ### Changed
+- **Docs reorganized into a numbered hierarchy** (`00-context` … `04-process`): `identity-and-the-gate.md` → `docs/02-features/`; `decisions-log.md` + `non-roadmap.md` → `docs/04-process/` (content unchanged — pure moves). Doc maps in both READMEs updated; root README test count refreshed (132).
 - **CI:** the publish workflow now polls the npm registry for ~2 min (was ~15s; `--prefer-online` skips npm's view cache) and accepts an `exit 0` publish even if the registry hasn't reflected it yet, so a successful-but-slow-to-reflect publish no longer reports a false failure.
 - **`publish.yml` is now manual-only (`workflow_dispatch`) — npm OIDC trusted publishing with provenance, idempotent, and verifies the registry end-state.**
 

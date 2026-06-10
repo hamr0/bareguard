@@ -555,8 +555,8 @@ The wrapper caches `allow` returns (deny / halt / topup / terminate always bypas
 ## See also
 
 - [`docs/01-product/bareguard-prd.md`](docs/01-product/bareguard-prd.md) — unified PRD (v0.7).
-- [`docs/non-roadmap.md`](docs/non-roadmap.md) — the NO-GO list.
-- [`docs/decisions-log.md`](docs/decisions-log.md) — decisions resolved across versions.
+- [`docs/04-process/non-roadmap.md`](docs/04-process/non-roadmap.md) — the NO-GO list.
+- [`docs/04-process/decisions-log.md`](docs/04-process/decisions-log.md) — decisions resolved across versions.
 - [`CHANGELOG.md`](CHANGELOG.md) — release-by-release diff.
 - [bareagent](https://github.com/hamr0/bareagent) — the loop runner that imports bareguard.
 - [beeperbox](https://github.com/hamr0/beeperbox) — 50+ messenger reach via MCP.
