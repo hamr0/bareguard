@@ -9,8 +9,8 @@
 
 bareguard is the action-side runtime policy library every agent uses (or
 should). One class (`Gate`), three call sites (`redact`, `check`, `record`),
-twelve primitives (bash, fs, net, budget, content, secrets, audit, limits,
-tools, defer-rate, spawn-rate, approval). Single audit log per
+thirteen primitives (bash, fs, net, budget, content, flags, secrets, audit,
+limits, tools, defer-rate, spawn-rate, approval). Single audit log per
 agent family. One `humanChannel` callback for all human escalations.
 
 ```
@@ -35,6 +35,7 @@ One entry point:
 | Reconstruct family tree from audit | one file at `$XDG_STATE_HOME/bareguard/<root-run-id>.jsonl`; grep `parent_run_id` |
 | Redact API keys from actions before audit | `secrets.envVars: ["ANTHROPIC_API_KEY"]`, `secrets.patterns: [/sk-[A-Za-z0-9]{40,}/]` |
 | Ask the human before destructive verbs | safe-default `content.askPatterns` ship; provide `humanChannel` callback |
+| Deny/ask on a structured field (e.g. a memory adopter's verdict) | `flags: { provenance: { web: "ask" }, injectionRisk: { high: "deny" } }` — reads `action[field]` directly, before the allowlist |
 | Pre-filter MCP catalog by what the agent CAN call | `await gate.allows(action)` — pure boolean, no audit, no budget delta |
 | One-shot wrapper: check + execute + record | `await gate.run(action, executor)` |
 | Stop the run cleanly with a paper trail | `await gate.terminate(reason)` |
@@ -202,6 +203,7 @@ PRE-EVAL (cross-cutting, all halt severity)
 THE 6 STEPS (first match wins; all action severity unless noted)
   1. tools.denylist                 → deny
   2. content.denyPatterns           → deny  (universal, e.g., DROP TABLE)
+  2b. flags deny                    → deny  (action[field] value maps to "deny", e.g. injectionRisk:"high")
   3. per-action-type deny rules     → deny
         bash.denyPatterns / bash.allow (when action.type === "bash")
         fs.deny / fs.readScope / fs.writeScope (when read/write/edit)
@@ -209,11 +211,12 @@ THE 6 STEPS (first match wins; all action severity unless noted)
         limits.maxChildren / limits.maxDepth (when spawn)
         tools.denyArgPatterns (any tool with matching args)
   4. content.askPatterns            → askHuman  (fires even on allowlisted tools)
+  4b. flags ask                     → askHuman  (action[field] value maps to "ask", e.g. provenance:"web")
   5. tools.allowlist enforcement    → set+match: allow; set+miss: deny (rule: tools.allowlist.exclusive)
   6. default                        → allow
 ```
 
-Universal denies first (1-2-3), universal asks second (4), capability scope third (5), default last (6). Allowlist is **scope-only** — does not silence asks (this is a v0.5 amendment to v0.4's original spec).
+Universal denies first (1-2b-3), universal asks second (4-4b), capability scope third (5), default last (6). Allowlist is **scope-only** — does not silence asks (this is a v0.5 amendment to v0.4's original spec). **`flags` reads a named field's value directly** (`action.provenance` / `action.injectionRisk`), never `JSON.stringify` — so an adopter passes a structured verdict, not text. Both arms sit before the allowlist, so a flagged action is gated even when its `type` is allowlisted (floor supremacy). Rule id is `flags.<field>` (e.g. `flags.injectionRisk`).
 
 ## Halt vs deny
 
@@ -221,6 +224,8 @@ Universal denies first (1-2-3), universal asks second (4), capability scope thir
 |---|---|---|
 | `tools.denylist` match | action | return error to LLM, continue loop |
 | `content.denyPatterns` match (e.g., `DROP TABLE`) | action | return error to LLM, continue loop |
+| `flags.<field>` deny (e.g., `injectionRisk: "high"`) | action | return error to LLM, continue loop |
+| `flags.<field>` ask (e.g., `provenance: "web"`, after humanChannel resolves) | action | terminal allow or deny |
 | `bash.denyPatterns` (e.g., `sudo`) | action | return error to LLM, continue loop |
 | `fs.deny`, `fs.readScope`, `fs.writeScope` | action | return error to LLM, continue loop |
 | `net.allowDomains`, `net.denyPrivateIps` | action | return error to LLM, continue loop |

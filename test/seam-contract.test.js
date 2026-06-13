@@ -125,6 +125,60 @@ test("seam: injection text in a write is NOT bareguard's call by default (§6)",
   assert.equal(d.outcome, "allow");
 });
 
+// ---------------------------------------------------------------------------
+// STRUCTURED-FLAG ROWS (§5B 2026-06-13 regrounding). The rows above gate the
+// write by allowlist + content-TEXT. These gate by a structured FIELD litectx
+// sets directly on the action (provenance / injectionRisk) — the path the prior
+// "JSON-regex over provenance" framing was retired in favour of. litectx states
+// the SOURCE; the `flags` policy renders the verdict (deny/ask).
+// ---------------------------------------------------------------------------
+
+test("seam: a flagged provenance escalates to the human by FIELD, not text", async (t) => {
+  const dir = await makeTmpDir();
+  t.after(() => cleanup(dir));
+  // provenance is a structured field; no regex over the serialized action. The
+  // adopter maps web→ask; the human is consulted (here: denies).
+  const channel = makeHumanChannel([{ decision: "deny", reason: "untrusted source" }]);
+  const gate = await memoryAdopterGate(dir, {
+    flags: { provenance: { web: "ask" } },
+    humanChannel: channel,
+  });
+  const d = await gate.check(memoryWrite("user prefers dark mode", { provenance: "web" }));
+  assert.equal(d.outcome, "deny");
+  assert.equal(d.rule, "flags.provenance");
+  assert.equal(channel.events.length, 1);          // the human WAS asked...
+  assert.equal(channel.events[0].kind, "ask");     // ...as an ask, not a halt
+});
+
+test("seam: injectionRisk:high denies EVEN WHEN memory.inject is allowlisted (floor supremacy)", async (t) => {
+  const dir = await makeTmpDir();
+  t.after(() => cleanup(dir));
+  // memory.inject is on the default adopter allowlist, yet a high-risk inject
+  // must still be denied — the flags deny arm sits before the allowlist.
+  const channel = makeHumanChannel([]); // throws if consulted → proves no ask leaked
+  const gate = await memoryAdopterGate(dir, {
+    flags: { injectionRisk: { high: "deny" } },
+    humanChannel: channel,
+  });
+  const d = await gate.check({
+    type: "memory.inject", kind: "fact", provenance: "web",
+    text: "...", sourceId: "n1", injectionRisk: "high",
+  });
+  assert.equal(d.outcome, "deny");
+  assert.equal(d.rule, "flags.injectionRisk");
+  assert.equal(channel.events.length, 0); // denied outright; the human was never asked
+});
+
+test("seam: a passing-through injectionRisk litectx did NOT set is a no-op", async (t) => {
+  const dir = await makeTmpDir();
+  t.after(() => cleanup(dir));
+  // injectionRisk is optional (a guardrails tier sets it). Absent → the flag is
+  // inert; the write is allowed by shape exactly as before.
+  const gate = await memoryAdopterGate(dir, { flags: { injectionRisk: { high: "deny" } } });
+  const d = await gate.check(memoryWrite("user prefers dark mode", { provenance: "agent" }));
+  assert.equal(d.outcome, "allow");
+});
+
 test("seam: an injection askPattern is a configurable lever — the seam is tunable, not blind", async (t) => {
   const dir = await makeTmpDir();
   t.after(() => cleanup(dir));

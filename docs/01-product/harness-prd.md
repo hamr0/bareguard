@@ -512,6 +512,7 @@ genuinely waits on litectx is the short list in §9.3.4.**
 | Compose seam (`.check/.record/.allows`) | `wireGate` (bareagent's adapter) | ✅ exists (in bareagent) |
 | Content-verdict stays OUT (§6 line) | excluded by design | ✅ correctly excluded |
 | **`memory.write` gating by shape** (R-G3/R-X2) | `Gate#check` allowlist/denylist (shape) + `content.denyPatterns` (content) | ✅ **SHAPE proven** (`test/seam-contract.test.js`, gate-zero, synthetic — litectx-independent); ⚠️ **CONTENT by design out:** a secret/injection in the write `text` is **not** caught by default (safe-default denyPatterns are SQL/shell only) and closes only with an explicit `content.denyPattern`; `secrets` config redacts the audit but does **not** deny. This is the §6 line, confirmed — not a hole, a boundary. |
+| **Structured shape-flag gate** (R-G3 §6 line; baresuite-litectx-prd §5B) | NEW `flags` primitive — `flagsDenyCheck`/`flagsAskCheck` read `provenance`/`injectionRisk` directly | ✅ **BUILT 2026-06-13.** §5B regrounding found the "bareguard gates the flag by shape" claim was *asserted, not implemented* — bareguard could read `action.type` (allowlist) or `JSON.stringify` (content) but had **no path to a structured field**. `flags` closes it: deny@2b / ask@4b, both before the allowlist (floor supremacy proven by a placement-mutation test). litectx states the **source**; the `flags` policy renders the verdict. Seam test extended with flag-path rows (139 suite). *Remaining: swap onto litectx's real emitter (§9.3.4).* |
 | **Cost-budget gate** (per-tier + soft/hard) | `Budget` = single hard cap, `costUsd`/`tokens` only | ❌ **gap = OQ3** (decision below) |
 
 **Bottom line:** the bareguard *spine* covers litectx's write **shape** with **zero change**
@@ -569,7 +570,10 @@ litectx *runnable* (memory engine + the CE slice that emits actions), not merely
 
 1. **Confirming the coverage verdict against litectx's *real* shapes** — gate-zero is proven
    synthetically; swapping `memoryWrite()` for litectx's actual emitter is the only thing that
-   turns "shape covered" from synthetic to real. *(Small: one swap at the marked point.)*
+   turns "shape covered" from synthetic to real. *(Small: one swap at the marked point.)* **The
+   `flags` primitive is now built (§9.3.1), so the structured-field half of the seam is
+   implemented, not just asserted** — but it too is exercised only against synthetic
+   `provenance`/`injectionRisk` actions until litectx actually emits them.
 2. **The end-to-end integration bench (§9.3.2)** — the full `assemble → turn → check → record →
    recordUseful` loop needs litectx's `assemble()`/`recordUseful()` to exist.
 3. **The Software Factory proving bench** — its *subject* is litectx (the ON/OFF A/B); it cannot

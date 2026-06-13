@@ -70,6 +70,61 @@ test("eval order — askPatterns fire even on allowlisted tools (v0.5 §4)", asy
   assert.equal(dec.rule, "content.askPatterns");
 });
 
+test("eval order — flags deny fires BEFORE the allowlist (floor supremacy)", async () => {
+  // memory.inject IS allowlisted, yet injectionRisk:high must deny — proving the
+  // flags deny arm (step 2b) sits before the allowlist (step 5). If it sat after,
+  // step 5 would allow first. This is "a memory may never relax the floor".
+  const gate = new Gate({
+    tools: { allowlist: ["memory.inject"] },
+    flags: { injectionRisk: { high: "deny" } },
+    humanChannel: async () => ({ decision: "allow" }), // must never be consulted
+  });
+  await gate.init();
+  const dec = await gate.check({ type: "memory.inject", injectionRisk: "high", text: "x" });
+  assert.equal(dec.outcome, "deny");
+  assert.equal(dec.rule, "flags.injectionRisk");
+});
+
+test("eval order — flags ask fires even on an allowlisted tool (step 4b)", async () => {
+  // provenance:web on an allowlisted write must escalate to the human (step 4b,
+  // before the allowlist). humanChannel denies → terminal deny, original rule.
+  const gate = new Gate({
+    tools: { allowlist: ["memory.write"] },
+    flags: { provenance: { web: "ask" } },
+    humanChannel: async () => ({ decision: "deny" }),
+  });
+  await gate.init();
+  const dec = await gate.check({ type: "memory.write", provenance: "web", text: "x" });
+  assert.equal(dec.outcome, "deny");
+  assert.equal(dec.rule, "flags.provenance");
+});
+
+test("eval order — an existing deny pattern still wins over a flag (no regression)", async () => {
+  // content.denyPatterns (step 2) precedes flags ask (step 4b): a DROP TABLE in a
+  // web-provenance write denies on content, not on the flag.
+  const gate = new Gate({
+    tools: { allowlist: ["memory.write"] },
+    flags: { provenance: { web: "ask" } },
+    humanChannel: async () => ({ decision: "allow" }),
+  });
+  await gate.init();
+  const dec = await gate.check({ type: "memory.write", provenance: "web", text: "DROP TABLE users" });
+  assert.equal(dec.outcome, "deny");
+  assert.equal(dec.rule, "content.denyPatterns");
+});
+
+test("eval order — an unmapped/absent flag value is a no-op", async () => {
+  const gate = new Gate({
+    tools: { allowlist: ["memory.write"] },
+    flags: { provenance: { web: "ask" }, injectionRisk: { high: "deny" } },
+  });
+  await gate.init();
+  // provenance:human is not in the map, injectionRisk absent → falls through to allow.
+  const dec = await gate.check({ type: "memory.write", provenance: "human", text: "x" });
+  assert.equal(dec.outcome, "allow");
+  assert.equal(dec.rule, "tools.allowlist");
+});
+
 test("eval order — default allow when allowlist unset and nothing else fires", async () => {
   const gate = new Gate({
     bash: { allow: ["git", "ls"] },

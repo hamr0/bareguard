@@ -29,8 +29,8 @@ agents. It bounds what the agent can *do*, not what it can *say*.
 bareguard is the policy layer that bareagent (and any other agent runner)
 imports. Every tool call traverses `gate.check(action)`; every result hits
 `gate.record(action, result)`. There is one gate, one audit log, one budget
-ledger, and twelve primitives — bash, budget, fs, net, limits, approval,
-tools, secrets, audit, defer-rate, spawn-rate, content. Each primitive is
+ledger, and thirteen primitives — bash, budget, fs, net, limits, approval,
+tools, secrets, audit, defer-rate, spawn-rate, content, flags. Each primitive is
 ~30–180 LOC, composable through the single gate. The library is small enough
 that you can read the whole thing in an afternoon and understand exactly what
 your agent is allowed to do.
@@ -144,7 +144,7 @@ library or somebody else's problem.
 `guardrails-ai`. A user building a coding agent uses bareguard. A user doing
 both imports both.
 
-## 8. The twelve primitives
+## 8. The thirteen primitives
 
 Each is one file, ~30–180 LOC, composes through the single gate. **Severity
 column** classifies what happens when the primitive fires (see §11 for the
@@ -164,6 +164,7 @@ halt-vs-action distinction).
 | 10 | **defer-rate**       | action   | _(v0.2)_ Caps `defer()` calls per minute. Re-validates the deferred action's gate decision on emit AND on fire (defense in depth). |
 | 11 | **spawn-rate**       | action   | _(v0.2)_ Caps `spawn()` calls per minute and per parent's lifetime. Composed with `limits.maxChildren` and `limits.maxDepth`. |
 | 12 | **content**          | mixed    | Pattern-matches over `JSON.stringify(action)`. `denyPatterns` block (action). `askPatterns` escalate to human (action). Generic mechanism that catches dangerous *shapes* across all tools. **Safe defaults shipped (§11).** |
+| 13 | **flags**            | mixed    | _(0.6 / litectx seam — baresuite-litectx-prd §5B)_ Gates on a named action **field's value** read directly (`action.provenance`, `action.injectionRisk`), never `JSON.stringify` — the structured complement to `content`. Config `{ <field>: { <value>: "deny" \| "ask" } }`. Deny arm at step 2b, ask arm at step 4b, **both before the allowlist** (floor supremacy). Restricts only (never grants); absent/unmapped field = no-op. Lets a memory adopter pass a structured verdict (source label + optional `injectionRisk`) without encoding it as matchable text; bareguard renders the deny/ask, the content judgment stays the adopter's (the §6 line). Generic — **no `memory.*` type recognition** (the floor is already type-generic). |
 
 **Why `content` makes MCP gov work without MCP-specific code:** content patterns
 run over the serialized action JSON, so the tool name AND every argument value
@@ -219,9 +220,10 @@ PRE-EVAL (cross-cutting, all halt severity if triggered):
   P2. limits.maxTurns               ← halt if exceeded
   P3. terminated check              ← halt if previously gate.terminate()'d
 
-THE 6 STEPS (first match wins):
+THE 6 STEPS (first match wins; 2b/4b are co-located arms of step 13 `flags`):
   1. tools.denylist                 → deny (action)
   2. content.denyPatterns           → deny (action)
+  2b. flags deny                    → deny (action; action[field] value maps to "deny")
   3. per-action-type deny rules     → deny (action)
         bash.denyPatterns / bash.allow / bash.invalidCmd (when action.type === "bash")
         fs.deny / fs.readScope / fs.writeScope / fs.invalidPath (when read/write/edit)
@@ -231,14 +233,19 @@ THE 6 STEPS (first match wins):
         (*.invalid* — present-but-non-string cmd/path/url is denied, not waved
          through; closes a type-confusion fail-open, v0.5)
   4. content.askPatterns            → askHuman (action; resolved via humanChannel)
+  4b. flags ask                     → askHuman (action; action[field] value maps to "ask")
   5. tools.allowlist enforcement    → set+match: allow; set+miss: deny (rule: tools.allowlist.exclusive)
   6. default                        → allow (rule: "default")
 ```
 
-**Order rationale:** universal denies (1-3) catch everything dangerous
-regardless of who allowed what. Universal asks (4) are the safety floor —
+**Order rationale:** universal denies (1-2b-3) catch everything dangerous
+regardless of who allowed what. Universal asks (4-4b) are the safety floor —
 they fire even on allowlisted tools. Capability scope (5) restricts which
-tools the agent can invoke at all. Default allow (6) is the bottom.
+tools the agent can invoke at all. Default allow (6) is the bottom. **`flags`
+(2b/4b) gates a structured field's value rather than a serialized-text match —
+it is the deny/ask floor's structured complement to `content`, and sits before
+the allowlist for the same reason `content` does: a flag may never be relaxed
+by allowlisting the action's `type`.** Rule id `flags.<field>`.
 
 ### 9.2 `tools.allowlist` is scope-only — NOT a trust shortcut
 

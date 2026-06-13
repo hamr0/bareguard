@@ -20,6 +20,7 @@
  * @typedef {import("./types.js").BudgetConfig} BudgetConfig
  * @typedef {import("./types.js").LimitsConfig} LimitsConfig
  * @typedef {import("./types.js").ContentConfig} ContentConfig
+ * @typedef {import("./types.js").FlagsConfig} FlagsConfig
  * @typedef {import("./types.js").SecretsConfig} SecretsConfig
  * @typedef {import("./types.js").RateConfig} RateConfig
  * @typedef {import("./types.js").AuditConfig} AuditConfig

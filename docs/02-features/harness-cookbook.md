@@ -104,6 +104,26 @@ shape is pinned by `test/seam-contract.test.js` (gate-zero):
 // action — redact ≠ gate. Use content.denyPatterns to actually block.
 ```
 
+**Structured verdict, not text — the `flags` lever.** The patterns above scan the
+serialized action. When the adopter already carries a *structured* label — litectx
+states the **source** (`provenance`), a guardrails tier may set `injectionRisk` —
+gate the **field**, not a regex over text. This is the path the seam test's
+structured-flag rows pin:
+```js
+new Gate({
+  ...FLOOR,
+  tools: { ...FLOOR.tools, allowlist: ["memory.write", "memory.inject", "recall"] },
+  flags: {
+    provenance:    { web: "ask", subagent: "ask" }, // untrusted source → human decides
+    injectionRisk: { high: "deny", medium: "ask" }, // guardrails verdict → gate by value
+  },
+});
+// Floor supremacy: a `high`-risk `memory.inject` is DENIED even though memory.inject
+// is allowlisted — flags' deny arm (step 2b) and ask arm (4b) both run BEFORE the
+// allowlist (5). Outcomes restrict only (deny/ask); an absent/unmapped field is a
+// no-op. litectx states the source; YOUR policy renders the verdict — the §6 line.
+```
+
 ### 5. `code-mode-sandbox` — agent writes the body, gate stays in the parent
 The harness PRD's north star as a bundle (validated by POC gates E1 + E4): instead of
 one-by-one tool calls, the agent **writes a code body** over a typed tool menu. The

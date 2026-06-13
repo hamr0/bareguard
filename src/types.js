@@ -169,6 +169,23 @@ export {};
  */
 
 /**
+ * `flags` config — gate on a named action FIELD's value, read directly off the
+ * action (never serialized). Shape: `{ <field>: { <value>: "deny" | "ask" } }`,
+ * e.g. `{ provenance: { web: "ask" }, injectionRisk: { high: "deny" } }`.
+ *
+ * A flag only ever restricts: outcomes are `"deny"` / `"ask"`, never `allow`
+ * (allow stays the default fall-through). The deny arm resolves at step 2 and
+ * the ask arm at step 4 — both before the allowlist (step 5) — so a flagged
+ * action is gated even when its `type` is allowlisted (floor supremacy). An
+ * absent field, an unconfigured field, or an unmapped value is a no-op (like
+ * `net` / `bash` on a non-matching `type`). Lets a memory adopter pass a
+ * structured verdict (`provenance`, `injectionRisk`) without encoding it as
+ * matchable text — the field is read directly, not via `JSON.stringify`.
+ *
+ * @typedef {Object.<string, Object.<string, "deny"|"ask">>} FlagsConfig
+ */
+
+/**
  * `secrets` config — when set, the gate auto-redacts `action` / `result` /
  * `reason` on every audit line (eval still sees the real action).
  *
@@ -208,6 +225,7 @@ export {};
  * @property {BudgetConfig} [budget]
  * @property {LimitsConfig} [limits]
  * @property {ContentConfig} [content]
+ * @property {FlagsConfig} [flags]
  * @property {SecretsConfig} [secrets]
  * @property {RateConfig} [defer]
  * @property {RateConfig} [spawn]

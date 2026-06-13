@@ -26,7 +26,7 @@
 
 ## What this is
 
-bareguard is a runtime policy library every agent action passes through. One `Gate` class, three call sites (`redact`, `check`, `record`), twelve primitives — each a small file you can read in a sitting.
+bareguard is a runtime policy library every agent action passes through. One `Gate` class, three call sites (`redact`, `check`, `record`), thirteen primitives — each a small file you can read in a sitting.
 
 Same patterns as [bareagent](https://www.npmjs.com/package/bare-agent), [barebrowse](https://www.npmjs.com/package/barebrowse), and [baremobile](https://www.npmjs.com/package/baremobile) — embed it, don't run it. No daemon, no SaaS, no telemetry.
 
@@ -77,7 +77,7 @@ then wire a Gate into my agent. Here's my setup: <describe loop, tools, budget>.
 
 That file has the `humanChannel` patterns, shared-budget-across-processes setup, eval order, audit format, and 10 wiring recipes.
 
-## The twelve primitives
+## The thirteen primitives
 
 Every primitive is one file (~30–180 LOC). The gate evaluates them in a fixed order (`deny > ask > scope > default`, first match wins — see the [Usage Guide](docs/02-features/usage-guide.md#how-it-works)).
 
@@ -90,6 +90,7 @@ Every primitive is one file (~30–180 LOC). The gate evaluates them in a fixed 
 | **limits** | `maxTurns` (halt), `maxToolRounds` (halt), `maxChildren` / `maxDepth` (action), `timeoutSeconds` (halt). |
 | **tools** | Tool-name `allowlist` / `denylist` (glob-matched) + per-tool `denyArgPatterns`. Allowlist is **scope-only** — does not silence asks. |
 | **content** | Pattern matches over the serialized action. Universal `denyPatterns` + `askPatterns`. **Safe defaults shipped.** |
+| **flags** | Gates on a **structured field's value** read directly off the action (`provenance`, `injectionRisk`), not a regex over the serialized form: `flags: { provenance: { web: "ask" }, injectionRisk: { high: "deny" } }`. Deny/ask only, both **before** the allowlist (floor supremacy). Lets a memory adopter pass a structured verdict without encoding it as text. |
 | **secrets** | Redacts known env-var values + cred patterns. When configured, the gate auto-redacts `action` / `result` / `reason` on every audit line (eval still sees the real action). Tags with name (`[REDACTED:ANTHROPIC_API_KEY]`). |
 | **audit** | One JSONL file per family. Phases: `gate`, `record`, `approval`, `halt`, `topup`, `terminate`. |
 | **approval** | Routes ask / halt events to the runner-supplied `humanChannel` callback. |
@@ -98,7 +99,7 @@ Every primitive is one file (~30–180 LOC). The gate evaluates them in a fixed 
 
 **Safe defaults** ship in `content`: `rm -rf /`, `DROP TABLE`, `TRUNCATE` denied outright; destructive verbs (`delete`, `revoke`, `force-push`, destructive HTTP methods) escalate to the human. Override with empty arrays for pure-allow.
 
-132 tests pass on the CI matrix: **Linux + macOS + Windows × Node 20 + 22** — including real-subprocess shared-budget contention, halt cascades, single-file audit atomicity, and `parent_run_id` / `spawn_depth` stitching across a 3-deep tree.
+139 tests pass on the CI matrix: **Linux + macOS + Windows × Node 20 + 22** — including real-subprocess shared-budget contention, halt cascades, single-file audit atomicity, and `parent_run_id` / `spawn_depth` stitching across a 3-deep tree.
 
 ## Docs
 

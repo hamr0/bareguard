@@ -14,6 +14,7 @@ import {
   toolsDenylistCheck, toolsDenyArgsCheck, toolsAllowlistCheck,
 } from "./primitives/tools.js";
 import { contentDenyCheck, contentAskCheck } from "./primitives/content.js";
+import { flagsDenyCheck, flagsAskCheck } from "./primitives/flags.js";
 import { deferRateCheck } from "./primitives/defer-rate.js";
 import { spawnRateCheck } from "./primitives/spawn-rate.js";
 
@@ -148,6 +149,12 @@ export class Gate {
     const d2 = contentDenyCheck(action, c);
     if (d2) return d2;
 
+    // 2b. flags deny → deny (structured field-value gate). Co-located with
+    // step 2 so a flagged action (e.g. injectionRisk:"high") is denied BEFORE
+    // the allowlist — blocked even if its `type` is allowlisted. Floor supremacy.
+    const d2f = flagsDenyCheck(action, this.cfg.flags);
+    if (d2f) return d2f;
+
     // 3. per-action-type deny primitives → deny
     let d3 = bashCheck(action, this.cfg.bash)
           ?? fsCheck(action,   this.cfg.fs)
@@ -165,6 +172,12 @@ export class Gate {
     // 4. content.askPatterns → askHuman
     const d4 = contentAskCheck(action, c);
     if (d4) return d4;
+
+    // 4b. flags ask → askHuman (structured field-value gate). Co-located with
+    // step 4 so a flagged action (e.g. provenance:"web") escalates to the human
+    // BEFORE the allowlist — fires even if its `type` is allowlisted.
+    const d4f = flagsAskCheck(action, this.cfg.flags);
+    if (d4f) return d4f;
 
     // 5. tools.allowlist enforcement (scope: set+match allow, set+miss deny)
     const d5 = toolsAllowlistCheck(action, t);
