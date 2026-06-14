@@ -3,19 +3,20 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { Gate } from "../src/index.js";
 import { makeTmpDir, cleanup, uniquePaths, makeHumanChannel } from "./_helpers.js";
+// REPINNED (2026-06-14): the seam now runs against litectx's REAL write-gate
+// emitter from the PUBLISHED package (`litectx` devDependency, ^0.13.0) — CI-safe,
+// no relative path, no sibling checkout needed. This closes baresuite-litectx-prd
+// §5B (the release handshake, step 6): the write-gate seam is live on both sides.
+import { toWriteAction } from "litectx";
 
 // ---------------------------------------------------------------------------
-// SEAM CONTRACT TEST — "gate-zero". litectx-INDEPENDENT, standing regression.
+// SEAM CONTRACT TEST — "gate-zero". Now exercised against litectx's REAL emitter.
 //
-// Settles the harness-prd §9.3.1 ⚠️ "memory.write gating: asserted, untested"
-// row WITHOUT importing litectx. The action below is plain JSON — exactly the
-// shape a memory adopter (litectx) is specced to emit (CE-PRD §10). This file
-// is the cheap, deterministic seam regression gate the PRD §9.3.0 calls for.
-//
-// SWAP POINT (the reuse/adjust seam): when litectx is real, replace
-// `memoryWrite()` with litectx's actual emitter. These same assertions then
-// either still hold (coverage confirmed) or fail at the exact line that names
-// what to adjust — no rewrite of the contract, just the action source.
+// Settles the harness-prd §9.3.1 "memory.write gating" row. The action is minted
+// by litectx's `toWriteAction` (writegate.js), so these assertions hold against
+// the actual producer — not a hand-built stand-in. They either stay green
+// (coverage confirmed end-to-end) or fail at the exact line that names what to
+// adjust, on either side of the seam.
 //
 // HEADLINE FINDING (the verdict on "zero-change covers litectx"):
 //   bareguard gates the write SHAPE (allowlist/denylist) with zero change, but
@@ -24,11 +25,18 @@ import { makeTmpDir, cleanup, uniquePaths, makeHumanChannel } from "./_helpers.j
 //   redacts the audit trail but does NOT deny the action. That is the §6 line
 //   made concrete: content-judgment stays OUT of bareguard by design — it lives
 //   in the adopter's provenance/guardrails tier, not the floor.
+//
+// STRUCTURED VERDICT (§5B): litectx emits the SOURCE (`provenance`) + an optional
+// guardrails `injectionRisk`; the `flags` field-gate renders deny/ask. Scope:
+// litectx mints `memory.write` ONLY — `memory.inject` has no producer (SELECT was
+// killed), so there are no inject rows here.
 // ---------------------------------------------------------------------------
 
-// THE SWAP POINT — synthetic stand-in for litectx's emitted memory.write.
+// THE SWAP POINT (now real) — wrap litectx's emitter to the test's call style.
+// `extra` carries kind/provenance/injectionRisk/id/meta straight into the opts;
+// only fields litectx's emitter recognizes pass through (arbitrary keys drop).
 function memoryWrite(text, extra = {}) {
-  return { type: "memory.write", kind: "decision", provenance: "agent", text, ...extra };
+  return toWriteAction(extra.id ?? "fact:seam", text, { kind: "decision", provenance: "agent", ...extra });
 }
 
 // The gate config a litectx-style memory adopter wires. `overrides` lets each
@@ -150,20 +158,20 @@ test("seam: a flagged provenance escalates to the human by FIELD, not text", asy
   assert.equal(channel.events[0].kind, "ask");     // ...as an ask, not a halt
 });
 
-test("seam: injectionRisk:high denies EVEN WHEN memory.inject is allowlisted (floor supremacy)", async (t) => {
+test("seam: injectionRisk:high denies EVEN WHEN memory.write is allowlisted (floor supremacy)", async (t) => {
   const dir = await makeTmpDir();
   t.after(() => cleanup(dir));
-  // memory.inject is on the default adopter allowlist, yet a high-risk inject
-  // must still be denied — the flags deny arm sits before the allowlist.
+  // memory.write is on the default adopter allowlist, yet a high-risk write must
+  // still be denied — the flags deny arm (step 2b) sits before the allowlist.
+  // The optional injectionRisk shape flag is set by a guardrails tier; litectx's
+  // emitter passes it through verbatim (it never computes it). memory.write, NOT
+  // inject — inject has no producer.
   const channel = makeHumanChannel([]); // throws if consulted → proves no ask leaked
   const gate = await memoryAdopterGate(dir, {
     flags: { injectionRisk: { high: "deny" } },
     humanChannel: channel,
   });
-  const d = await gate.check({
-    type: "memory.inject", kind: "fact", provenance: "web",
-    text: "...", sourceId: "n1", injectionRisk: "high",
-  });
+  const d = await gate.check(memoryWrite("...", { provenance: "web", injectionRisk: "high" }));
   assert.equal(d.outcome, "deny");
   assert.equal(d.rule, "flags.injectionRisk");
   assert.equal(channel.events.length, 0); // denied outright; the human was never asked
