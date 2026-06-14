@@ -867,13 +867,18 @@ boundary, and shared-budget lock hardening (fail-loud on corrupt read).
 
 **DECISION (2026-06-09): HOLD at 0.5.x.** Version numbers are decisions, not counters —
 1.0 can cut from 0.5.x any day; the question is only readiness to make the promise.
-Holding because the first real external consumer (litectx via the Software Factory —
-harness-prd §9.3.4) has not yet exercised the seam: locking before the swap-point test
-and integration bench run is the one scenario that risks an early 2.0.
+**Update 2026-06-14:** the first real consumer (litectx) has now exercised the **write-gate
+seam** — the `flags` field-gate is live and the swap-point test is repinned to litectx's
+published emitter (`litectx@^0.13.0`), gate item 1's first half met with **no API regret**
+(flags landed additive; the `flags.<field>` rule strings held). Still holding because the
+**integration bench** (gate item 1's second half) and the last-call review are not yet
+done — locking before the bench run is the one scenario that risks an early 2.0.
 
 **Gate to cut 1.0 (all three):**
-1. The seam exercised by a real consumer (harness-prd §9.3.4 items 1–2: swap-point
-   confirmation + integration bench) with no API regret surfaced.
+1. The seam exercised by a real consumer — **(a) swap-point confirmation ✅ DONE 2026-06-14**
+   (write-gate seam closed vs `litectx@^0.13.0`, `seam-contract.test.js`, no API regret);
+   **(b) integration bench ⏳ still pending** (harness-prd §9.3.4 item 2 — needs litectx's
+   `assemble()`/`recordUseful()`). Both halves green with no API regret before this gate clears.
 2. The **last-call breaking-change review** below resolved (each item changed or
    explicitly kept — breaking changes are cheap at 0.x, expensive forever after).
 3. The §21 unchecked box decided: do the bareagent deprecation re-exports first, or
@@ -893,8 +898,9 @@ and integration bench run is the one scenario that risks an early 2.0.
   treated as allow.
 
 **What the 1.0 promise covers when cut** (the SemVer surface): exports (`Gate`,
-`redact`, `Budget` errors, `defaultAuditPath`, `globToRegex`/`matchAny`), config keys,
-**rule strings** (adopters and the seam contract test match on them), the audit JSONL
+`redact`, `Budget` errors, `defaultAuditPath`, `globToRegex`/`matchAny`), config keys
+(incl. the new `flags`), **rule strings** (adopters and the seam contract test match on
+them — incl. `flags.<field>`, now live in litectx's write-gate seam), the audit JSONL
 line format, the budget file format, and the `humanChannel` event/decision contract.
 
 **Pending/future work index while holding** (so nothing lives only in chat): this
