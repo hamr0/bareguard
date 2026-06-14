@@ -1,6 +1,6 @@
 {
   "name": "bareguard",
-  "version": "0.5.2",
+  "version": "0.6.0",
   "description": "Action-side runtime policy library for autonomous agents — bounds what the agent does, not what it says. Sibling of bareagent in the bare suite.",
   "type": "module",
   "main": "./src/index.js",
@@ -24,7 +24,9 @@
     "NOTICE",
     "bareguard.context.md"
   ],
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "test": "node --test",
     "build:types": "tsc -p tsconfig.json",
@@ -42,7 +44,9 @@
   "license": "Apache-2.0",
   "author": "hamr0",
   "homepage": "https://github.com/hamr0/bareguard#readme",
-  "bugs": { "url": "https://github.com/hamr0/bareguard/issues" },
+  "bugs": {
+    "url": "https://github.com/hamr0/bareguard/issues"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/hamr0/bareguard.git"

@@ -4,6 +4,10 @@ All notable changes to bareguard are documented here. Format: [Keep a Changelog]
 
 ## [Unreleased]
 
+_Nothing yet._
+
+## [0.6.0] — 2026-06-14
+
 **Two library changes — the `flags` primitive (additive, opt-in) and a prototype-pollution hardening at the gate (Security, below).** The rest is tests, docs, and CI. No breaking change for plain-dict actions; an unset `flags` config is a no-op. The litectx write-gate **seam is now closed**: `seam-contract.test.js` runs against litectx's published `toWriteAction` emitter (`litectx@^0.13.0`, a **devDependency only** — not shipped to consumers; the production dep tree is unchanged at `proper-lockfile`).
 
 ### Security

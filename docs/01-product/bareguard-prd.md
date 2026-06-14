@@ -5,7 +5,7 @@
 **Last updated:** 2026-05-29
 **Language:** Node.js (JavaScript), ESM, target Node 20 LTS+. Ships `.d.ts` generated from JSDoc (v0.5) — typed consumption with no `@types` package.
 **Sibling spec:** `bareagent-prd.md`
-**Implementation status:** v0.5.2 — tests green on Linux/macOS/Windows × Node 20/22 (+ a `strictNullChecks` `tsc` typecheck job)
+**Implementation status:** v0.6.0 — tests green on Linux/macOS/Windows × Node 20/22 (+ a `strictNullChecks` `tsc` typecheck job)
 **Supersedes:** v0.1 (Python draft), v0.2 (orchestration), v0.3 (mid-MCP), v0.4 (post-MCP), v0.5 amendments doc, v0.6 unified
 
 > **For future Claude (implementation note):** This document is the single
@@ -864,6 +864,23 @@ boundary, and shared-budget lock hardening (fail-loud on corrupt read).
   torn/empty-read window that intermittently misfired the corruption path.
 - Documented (not changed): `denyPrivateIps` is literal-host/pre-DNS;
   `secrets.envVars` skips values < 8 chars.
+
+### bareguard 0.6 — `flags` primitive + litectx write-gate seam (SHIPPED 2026-06-14)
+
+- **`flags` — structured field-value gate (13th primitive)** (`0.6.0`): gates on a
+  named action field's value (`provenance`, `injectionRisk`) read directly, deny/ask
+  arms at steps 2b/4b before the allowlist (floor supremacy). The one net-new primitive
+  the litectx write-gate seam needed (§5B); generic, no `memory.*` recognition.
+- **litectx write-gate seam CLOSED** (`0.6.0`): `seam-contract.test.js` runs against
+  litectx's published `toWriteAction` (`litectx@^0.13.0`, devDependency only — not shipped).
+- **Prototype-pollution hardening at the gate** (`0.6.0`, Security): every action is
+  normalized to own-properties-only (`safeAction`, null-proto + null-proto `args`) at
+  `check`/`allows`/`record`/`run` entry, closing a gate-wide vector where a polluted
+  `Object.prototype` could inject a field and flip a decision (incl. deny→allow). `run()`
+  executes the normalized action (no TOCTOU). Behavior note: `run()`'s executor + the
+  `humanChannel` event receive a null-proto shallow copy (own props incl. `_ctx` preserved).
+- **Still pre-1.0 — the §19 HOLD stands** (1.0 is gated on the integration bench +
+  last-call review, below; the write-gate seam half is now done).
 
 ### bareguard 1.0 — stabilize
 

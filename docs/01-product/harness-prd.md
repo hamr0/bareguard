@@ -40,7 +40,7 @@ to *do*"). **Axis A is bareguard, sharpened. Axis B is the only genuinely new
 surface — and it is the a2a §12.4 deferred candidate, gated on a real user.**
 
 > **Status pointer (reconciled 2026-06-09).** **Axis A is built and released** (bareguard
-> 0.5.2 on npm); **Axis B is the one deferred new surface (= OQ1).** The intended first
+> 0.6.0 on npm); **Axis B is the one deferred new surface (= OQ1).** The intended first
 > external user is `litectx` via the **Software Factory**, but the seam is **specced, not
 > wired** (litectx has no bareguard dep yet) — §9.3 is authoritative and supersedes any
 > "litectx actively consumes bareguard" wording. See **§0.1** for the at-a-glance build state
@@ -55,7 +55,7 @@ The PRD describes a design; most of it already ships. Map of every surface to it
 
 | Surface | What it is | State |
 |---|---|---|
-| **Axis A** | gate the action by shape — the floor: `Gate` (deny/ask + closed allowlist), cumulative `Budget`, `audit`, `redact` | **BUILT & RELEASED — bareguard 0.5.2 (npm).** Axis A is not a thing to build; it *is* the shipped library. The harness POC (E1/E3/E4/E5, §9.2) proved these existing primitives *compose* into the harness pattern with `src/` untouched. |
+| **Axis A** | gate the action by shape — the floor: `Gate` (deny/ask + closed allowlist), cumulative `Budget`, `audit`, `redact` | **BUILT & RELEASED — bareguard 0.6.0 (npm).** Axis A is not a thing to build; it *is* the shipped library. The harness POC (E1/E3/E4/E5, §9.2) proved these existing primitives *compose* into the harness pattern with `src/` untouched. |
 | **Write-gate seam / `flags`** | structured field-value gate for a memory adopter's verdict (`provenance`/`injectionRisk`) — the litectx write-gate seam (§5B) | **BUILT & SEAM CLOSED (2026-06-13/14).** First `src/` change since the HOLD: the `flags` primitive (deny@2b / ask@4b, floor supremacy). `seam-contract.test.js` now runs against litectx's real published emitter (`litectx@^0.13.0` devDependency). Additive/backward-compatible; HOLD at 0.5.x unaffected. Seam live, regression-guarded every release — nothing further owed on it. |
 | **Axis B** | reconcile the return vs a per-request declared constraint | **DEFERRED — the only genuinely-new bareguard surface (§8). = OQ1** (the constraint-contract format, §10). E2 proved the *mechanic* in the runner only; the `src/` surface is unbuilt. |
 | **OQ3** | generalize `Budget`'s cumulative count to sends/rows/bytes + soft/hard tiers | **EXTENSION to an Axis-A primitive, not a new axis.** Hard cap already ships; tiering is additive, demand-gated (§10). **PROPOSED into `bareguard-prd.md` §19 (2026-06-09)** with the E3 evidence. |
@@ -697,7 +697,7 @@ extend-not-rebuild**).
 
 **What's next (reconciled 2026-06-09).** The at-a-glance build state and what's buildable
 without litectx live in **§0.1 / §0.1.1**; what genuinely waits on litectx is the short list in
-**§9.3.4**. Net: Axis A is built & released (0.5.2); the seam contract test is **done and CLOSED
+**§9.3.4**. Net: Axis A is built & released (0.6.0); the seam contract test is **done and CLOSED
 against litectx's real published emitter** (`test/seam-contract.test.js` vs `litectx@^0.13.0`, 10
 tests, suite green) — it proves write *shape* is gated with zero change and that secret/injection
 *content* is out by §6 design. Only the
