@@ -34,6 +34,11 @@ function flagsCheck(action, cfg, wantOutcome) {
   for (const field of Object.keys(cfg)) {
     const valueMap = cfg[field];
     if (!valueMap) continue;
+    // Direct read of the operator-named field — same trust the rest of the gate
+    // places in the action object (`bash` reads action.cmd, `net` action.url, …).
+    // The attacker influences the field's VALUE, not the field NAME, so the
+    // dangerous "index by an attacker-chosen key" is the value-map lookup below,
+    // not this read.
     const v = action[field];
     if (v == null) continue;                 // field absent → no-op
     // Only a primitive value can be a configured map key. Skip objects/arrays

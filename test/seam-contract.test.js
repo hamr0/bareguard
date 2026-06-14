@@ -48,7 +48,7 @@ async function memoryAdopterGate(dir, overrides = {}) {
   const channel = makeHumanChannel([]);
   const gate = new Gate({
     audit: { path: auditPath },
-    tools: { allowlist: ["memory.write", "memory.inject", "recall"] },
+    tools: { allowlist: ["memory.write", "recall"] }, // litectx mints memory.write only (§31)
     humanChannel: channel,
     ...overrides,
   });

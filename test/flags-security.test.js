@@ -38,14 +38,18 @@ test("flags: prototype-key field VALUES don't spuriously fire", () => {
   }
 });
 
-test("flags: a polluted Object.prototype cannot make a flag fire (own-key lookup)", () => {
-  // Defense-in-depth: even if the runtime's Object.prototype is polluted with a
-  // value equal to an outcome string, an EMPTY/unconfigured value-map must stay
-  // inert — the lookup honors only the operator's OWN keys.
+test("flags: an inherited value-map entry cannot fire a flag (own-key config lookup)", () => {
+  // Scope: this guards the VALUE-MAP lookup — the place a flag indexes by an
+  // attacker-controlled key (the action's field value). Even if Object.prototype
+  // is polluted with a value equal to an outcome string, an EMPTY/unconfigured
+  // value-map stays inert because the lookup honors the operator's OWN keys only.
+  // (The action-object read itself shares the whole gate's direct-property-access
+  // trust — a polluted action object is a gate-wide concern, not flags-specific,
+  // and is fail-safe here: flags can only restrict, never grant.)
   Object.prototype.web = "ask"; // simulate app-wide prototype pollution
   try {
     const r = flagsAskCheck({ type: "memory.write", provenance: "web" }, { provenance: {} });
-    assert.equal(r, null, "inherited Object.prototype.web must not leak into the gate");
+    assert.equal(r, null, "an inherited Object.prototype.web must not leak into the value-map lookup");
   } finally {
     delete Object.prototype.web;
   }
