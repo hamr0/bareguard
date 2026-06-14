@@ -43,6 +43,29 @@ function actionSummary(action) {
 }
 
 /**
+ * Normalize an action to OWN properties only — a null-prototype shallow copy
+ * (plus a null-proto `args`). Every eval step reads `action.<field>` or
+ * `action.args.<field>` directly, so without this a polluted `Object.prototype`
+ * (e.g. `Object.prototype.type = "bash"`) could inject a field the action never
+ * declared and flip a decision — including deny→allow on the allowlist. Applied
+ * once at each public entry (`check`/`allows`/`record`/`run`) so the decision,
+ * the audit line, the humanChannel event, and what `run` executes all see the
+ * same inheritance-free action. Shallow (top-level + `args`) is sufficient: no
+ * primitive reads deeper. ~0.2µs/call; idempotent. Complete-mediation, applied
+ * at the chokepoint — no primitive needs to change.
+ * @param {import("./types.js").Action} action the action to normalize
+ * @returns {import("./types.js").Action} a null-prototype shallow copy (own props preserved)
+ */
+function safeAction(action) {
+  if (action == null || typeof action !== "object") return action;
+  const safe = Object.assign(Object.create(null), action);
+  if (action.args != null && typeof action.args === "object") {
+    safe.args = Object.assign(Object.create(null), action.args);
+  }
+  return safe;
+}
+
+/**
  * The single chokepoint every agent action passes through. Construct once per
  * run, `await gate.init()`, then call {@link Gate#check} / {@link Gate#record}
  * (or {@link Gate#run}) for each action. Runs PRE-EVAL halt checks then the
@@ -216,7 +239,7 @@ export class Gate {
    */
   async allows(actionOrName) {
     if (!this._initialized) await this.init();
-    const action = typeof actionOrName === "string" ? { type: actionOrName } : actionOrName;
+    const action = safeAction(typeof actionOrName === "string" ? { type: actionOrName } : actionOrName);
     const halt = this._haltCheck();
     if (halt) return false;
     const decision = await this._stepEval(action);
@@ -232,6 +255,7 @@ export class Gate {
    */
   async check(action) {
     if (!this._initialized) await this.init();
+    action = safeAction(action); // own-props only — no inherited field can flip a decision
 
     let iterations = 0;
     while (true) {
@@ -429,6 +453,7 @@ export class Gate {
    */
   async record(action, result) {
     if (!this._initialized) await this.init();
+    action = safeAction(action); // own-props only (reads action.type for limits/spawn)
     this.limits.tick(action);
     if (action?.type === "spawn") this.limits.noteSpawn();
     await this.budget.record(result);
@@ -448,6 +473,10 @@ export class Gate {
    *   the executor's result, or a structured `policy_denied` error object if denied
    */
   async run(action, executor) {
+    // Normalize once so the DECISION and what the executor RUNS are the same
+    // action — otherwise an inherited field could be evaluated-away yet still
+    // execute (TOCTOU). check()/record() re-normalize (idempotent).
+    action = safeAction(action);
     const decision = await this.check(action);
     if (decision.outcome !== "allow") {
       return structuredError(decision, action);

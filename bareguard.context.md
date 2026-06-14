@@ -195,6 +195,7 @@ Format: `[REDACTED:ANTHROPIC_API_KEY]` for env-var matches, `[REDACTED:pattern=s
 
 ```
 PRE-EVAL (cross-cutting, all halt severity)
+  P-1. safeAction(action)           ← own-props-only null-proto copy (no inherited field can flip a decision); run() also executes this copy
   P0. secrets.redact(action)        ← mutation, not a decision step
   P1. budget.check()                ← halt if exceeded
   P2. limits.maxTurns               ← halt if exceeded

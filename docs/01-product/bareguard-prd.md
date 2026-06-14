@@ -215,6 +215,11 @@ default`.
 
 ```
 PRE-EVAL (cross-cutting, all halt severity if triggered):
+  P-1. safeAction(action)           ← normalize to own-props-only (null-proto +
+                                      null-proto args); no inherited field off a
+                                      polluted Object.prototype can flip a
+                                      decision. run() also executes this copy so
+                                      decision == execution (no TOCTOU).
   P0. secrets.redact(action)        ← mutation, not a decision
   P1. budget.check()                ← halt if exceeded
   P2. limits.maxTurns               ← halt if exceeded
