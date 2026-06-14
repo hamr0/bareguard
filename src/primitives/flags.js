@@ -36,7 +36,12 @@ function flagsCheck(action, cfg, wantOutcome) {
     if (!valueMap) continue;
     const v = action[field];
     if (v == null) continue;                 // field absent → no-op
-    if (valueMap[v] !== wantOutcome) continue; // unmapped, or the other arm's
+    // Only a primitive value can be a configured map key. Skip objects/arrays
+    // (incl. a hostile `toString`/`Symbol.toPrimitive` that would throw when
+    // coerced to a property key) rather than index with them — keeps the lookup
+    // total and the gate decision exception-free on a malformed field.
+    if (typeof v !== "string" && typeof v !== "number" && typeof v !== "boolean") continue;
+    if (valueMap[String(v)] !== wantOutcome) continue; // unmapped, or the other arm's
     return {
       outcome: wantOutcome === "deny" ? "deny" : "askHuman",
       severity: "action",

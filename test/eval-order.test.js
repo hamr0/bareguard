@@ -125,6 +125,23 @@ test("eval order — an unmapped/absent flag value is a no-op", async () => {
   assert.equal(dec.rule, "tools.allowlist");
 });
 
+test("eval order — a flag field with a hostile/non-primitive value can't throw the gate", async () => {
+  // A malformed action: the flagged field is an object whose toString throws.
+  // The lookup must NOT coerce it into a property key (which would throw) — it
+  // skips non-primitive values and falls through. Decision is clean (no throw),
+  // and fail-safe: the hostile value never matches a deny/ask mapping.
+  const gate = new Gate({
+    tools: { allowlist: ["memory.write"] },
+    flags: { provenance: { web: "ask" }, injectionRisk: { high: "deny" } },
+    humanChannel: async () => ({ decision: "deny" }),
+  });
+  await gate.init();
+  const hostile = { toString() { throw new Error("boom"); }, [Symbol.toPrimitive]() { throw new Error("boom"); } };
+  const dec = await gate.check({ type: "memory.write", provenance: hostile, injectionRisk: hostile, text: "x" });
+  assert.equal(dec.outcome, "allow");      // no throw; no spurious deny/ask
+  assert.equal(dec.rule, "tools.allowlist");
+});
+
 test("eval order — default allow when allowlist unset and nothing else fires", async () => {
   const gate = new Gate({
     bash: { allow: ["git", "ls"] },
