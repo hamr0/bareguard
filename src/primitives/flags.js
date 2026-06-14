@@ -41,7 +41,13 @@ function flagsCheck(action, cfg, wantOutcome) {
     // coerced to a property key) rather than index with them — keeps the lookup
     // total and the gate decision exception-free on a malformed field.
     if (typeof v !== "string" && typeof v !== "number" && typeof v !== "boolean") continue;
-    if (valueMap[String(v)] !== wantOutcome) continue; // unmapped, or the other arm's
+    const key = String(v);
+    // OWN keys only — a non-own lookup would read an inherited property, so a
+    // polluted `Object.prototype` (e.g. `Object.prototype.web = "ask"`) could
+    // make a flag fire on an empty/unconfigured value-map. Honor only what the
+    // operator actually configured.
+    if (!Object.hasOwn(valueMap, key)) continue; // absent / inherited → no-op
+    if (valueMap[key] !== wantOutcome) continue; // the other arm's outcome
     return {
       outcome: wantOutcome === "deny" ? "deny" : "askHuman",
       severity: "action",
