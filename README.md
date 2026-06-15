@@ -86,20 +86,20 @@ Every primitive is one file (~30–180 LOC). The gate evaluates them in a fixed 
 | **bash** | Command allowlist + `denyPatterns` when `action.type === "bash"`. With `allow` set, shell metacharacters (`;` `\|` `&` `$` `` ` `` `()` `<>`) are denied — a prefix allowlist can't bound chaining. |
 | **fs** | `writeScope` / `readScope` / `deny` for `read` / `write` / `edit`. Paths normalized (`.`/`..` collapsed) + segment-boundary matched — no traversal escapes. |
 | **net** | Egress domain allowlist + private-IP deny for `fetch` (IPv4/IPv6, link-local incl. cloud metadata). `denyPrivateIps` matches the **literal host** — it doesn't resolve DNS, so it's defense-in-depth, not an SSRF boundary; use `allowDomains` (fail-closed) to bound egress. |
-| **budget** | Tokens + cost USD, **halt severity** (escalates to human). Shared across processes via `proper-lockfile`. |
+| **budget** | Tokens + cost USD, **halt severity** (escalates to human). Shared across processes via `proper-lockfile`. Also caps **arbitrary countable resources** — `resources: { writes: 100, rows: 10000 }`, accrued from `result.counts`, same cumulative halt (rule `budget.resource.<name>`); optional `softRatio` emits a non-blocking `budget_warn` before the cap. |
 | **limits** | `maxTurns` (halt), `maxToolRounds` (halt), `maxChildren` / `maxDepth` (action), `timeoutSeconds` (halt). |
 | **tools** | Tool-name `allowlist` / `denylist` (glob-matched) + per-tool `denyArgPatterns`. Allowlist is **scope-only** — does not silence asks. |
 | **content** | Pattern matches over the serialized action. Universal `denyPatterns` + `askPatterns`. **Safe defaults shipped.** |
 | **flags** | Gates on a **structured field's value** read directly off the action (`provenance`, `injectionRisk`), not a regex over the serialized form: `flags: { provenance: { web: "ask" }, injectionRisk: { high: "deny" } }`. Deny/ask only, both **before** the allowlist (floor supremacy). Lets a memory adopter pass a structured verdict without encoding it as text. |
 | **secrets** | Redacts known env-var values + cred patterns. When configured, the gate auto-redacts `action` / `result` / `reason` on every audit line (eval still sees the real action). Tags with name (`[REDACTED:ANTHROPIC_API_KEY]`). |
-| **audit** | One JSONL file per family. Phases: `gate`, `record`, `approval`, `halt`, `topup`, `terminate`. |
+| **audit** | One JSONL file per family. Phases: `gate`, `record`, `approval`, `halt`, `topup`, `terminate`, `budget_warn`. Every line of one eval shares a correlation id (`aid`) so a request joins to its outcome even when two actions are identical. |
 | **approval** | Routes ask / halt events to the runner-supplied `humanChannel` callback. |
 | **defer-rate** | Caps `defer` actions per minute (default 15). Counted from the audit log; per-family. |
 | **spawn-rate** | Caps `spawn` actions per minute (default 10). Composes with `maxChildren` / `maxDepth`. |
 
 **Safe defaults** ship in `content`: `rm -rf /`, `DROP TABLE`, `TRUNCATE` denied outright; destructive verbs (`delete`, `revoke`, `force-push`, destructive HTTP methods) escalate to the human. Override with empty arrays for pure-allow.
 
-150 tests pass on the CI matrix: **Linux + macOS + Windows × Node 20 + 22** — including real-subprocess shared-budget contention, halt cascades, single-file audit atomicity, and `parent_run_id` / `spawn_depth` stitching across a 3-deep tree.
+167 tests pass on the CI matrix: **Linux + macOS + Windows × Node 20 + 22** — including real-subprocess shared-budget contention, halt cascades, single-file audit atomicity, and `parent_run_id` / `spawn_depth` stitching across a 3-deep tree.
 
 ## Docs
 

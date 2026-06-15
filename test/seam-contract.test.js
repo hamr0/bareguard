@@ -201,3 +201,31 @@ test("seam: an injection askPattern is a configurable lever — the seam is tuna
   assert.equal(d.outcome, "deny");
   assert.equal(d.rule, "content.askPatterns");
 });
+
+// ── OQ3 real-emitter bench ────────────────────────────────────────────────
+// The cumulative wall now counts WRITES, not just money. Drive litectx's REAL
+// published emitter in a decomposition loop (N×1 writes) through a write-count
+// cap and prove it halts — the operator's "limit agents beyond money" need,
+// proven against the real producer (not a synthetic action).
+test("seam OQ3: a write-count budget halts a real-emitter decomposition", async (t) => {
+  const dir = await makeTmpDir();
+  t.after(() => cleanup(dir));
+  const gate = await memoryAdopterGate(dir, {
+    tools: { allowlist: ["memory.write"] },
+    budget: { resources: { writes: 3 } },
+  });
+  // Three single-write commits are fine; the 4th trips the cumulative cap —
+  // decomposing the work into 1-write steps cannot walk past it.
+  let committed = 0;
+  for (let i = 0; i < 5; i++) {
+    const action = memoryWrite(`note ${i}`, { id: `fact:n${i}` });
+    const d = await gate.check(action);
+    if (d.outcome !== "allow") {
+      assert.equal(d.rule, "budget.resource.writes", "halts on the write-count cap");
+      break;
+    }
+    await gate.record(action, { counts: { writes: 1 } }, { aid: d.aid });
+    committed++;
+  }
+  assert.equal(committed, 3, "exactly the cap's worth of real writes committed");
+});

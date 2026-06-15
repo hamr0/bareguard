@@ -3,18 +3,24 @@
 //
 // File format (versioned per amendment §16):
 //   {
-//     "version": 1,
+//     "version": 2,
 //     "cap_usd": 5.00,  "spent_usd": 1.23,
 //     "cap_tokens": 100000, "spent_tokens": 24500,
+//     "resource_caps": { "writes": 100 }, "resource_spent": { "writes": 12 },
 //     "started_at": "...", "updated_at": "..."
 //   }
+// v1 (no resource_* keys) is read forward-compatibly: money totals are preserved
+// and the generic dimensions default to the in-memory config / empty. An OLDER
+// bareguard reading a v2 file fails SAFE (BudgetUnavailableError → halt), never
+// corrupts. (OQ3: generalize the cumulative wall beyond money/tokens.)
 
 import { promises as fsp } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import lockfile from "proper-lockfile";
 
-const FORMAT_VERSION = 1;
+const FORMAT_VERSION = 2;
+const SUPPORTED_VERSIONS = new Set([1, 2]);
 
 /**
  * Thrown when the shared budget file cannot be read, locked, or is an unsupported version.
@@ -40,12 +46,34 @@ export class Budget {
    * @param {object} [cfg] budget config
    * @param {number} [cfg.maxCostUsd] USD cap (default Infinity)
    * @param {number} [cfg.maxTokens] token cap (default Infinity)
+   * @param {Object<string,number>} [cfg.resources] cap-map for arbitrary countable
+   *   resources, `{ <name>: cap }` (e.g. `{ writes: 100, rows: 10000 }`). Each cap is
+   *   a finite number >= 0; accrued from `result.counts[<name>]`. (OQ3.)
+   * @param {number|null} [cfg.softRatio] soft-warn threshold in (0,1) (e.g. `0.8`);
+   *   crossing `ratio * cap` on a dimension surfaces a `warn` (observability only,
+   *   never halts). Default null = off.
    * @param {string|null} [cfg.sharedFile] path to the shared budget JSON file (null = local in-memory)
    * @param {boolean} [cfg.strict] enable trailing-average pre-flight halts (default false)
    */
   constructor(cfg = {}) {
     this.capUsd = cfg.maxCostUsd ?? Infinity;
     this.capTokens = cfg.maxTokens ?? Infinity;
+    // OQ3: generic countable-resource dimensions. Caps from config (or the shared
+    // file on init); running totals start at zero and accrue from result.counts.
+    this.resourceCaps = {};
+    for (const [name, cap] of Object.entries(cfg.resources ?? {})) {
+      if (typeof cap !== "number" || !isFinite(cap) || cap < 0) {
+        throw new Error(`invalid budget resource cap for "${name}": ${cap} (must be a finite number >= 0)`);
+      }
+      this.resourceCaps[name] = cap;
+    }
+    this.resourceSpent = {};
+    // OQ3 soft tier: a warn fires once when a dimension crosses ratio*cap (and is
+    // still below cap). Pure observability — it is NOT routed through check().
+    if (cfg.softRatio != null && (typeof cfg.softRatio !== "number" || !(cfg.softRatio > 0 && cfg.softRatio < 1))) {
+      throw new Error(`invalid budget softRatio: ${cfg.softRatio} (must be a number in (0,1))`);
+    }
+    this.softRatio = cfg.softRatio ?? null;
     this.sharedFile = cfg.sharedFile ?? null;
     this.spentUsd = 0;
     this.spentTokens = 0;
@@ -73,14 +101,20 @@ export class Budget {
     try {
       const buf = await fsp.readFile(this.sharedFile, "utf8");
       existing = JSON.parse(buf);
-      if (existing.version !== FORMAT_VERSION) {
-        throw new BudgetUnavailableError(`unsupported file version ${existing.version}; expected ${FORMAT_VERSION}`);
+      // Accept v1 (money-only) forward-compatibly and v2 (with resource_*). A v1
+      // file's money totals are preserved; generic dims keep the in-memory config.
+      if (!SUPPORTED_VERSIONS.has(existing.version)) {
+        throw new BudgetUnavailableError(`unsupported file version ${existing.version}; supported ${[...SUPPORTED_VERSIONS].join("/")}`);
       }
       this.capUsd      = existing.cap_usd      ?? this.capUsd;
       this.capTokens   = existing.cap_tokens   ?? this.capTokens;
       this.spentUsd    = existing.spent_usd    ?? 0;
       this.spentTokens = existing.spent_tokens ?? 0;
+      this.resourceCaps  = { ...this.resourceCaps,  ...(existing.resource_caps  ?? {}) };
+      this.resourceSpent = { ...this.resourceSpent, ...(existing.resource_spent ?? {}) };
       this.startedAt   = existing.started_at   ?? this.startedAt;
+      // v1 is upgraded in memory only; the next record()/_write() persists it as
+      // v2 (no unlocked rewrite here — init keeps its seed-only write semantics).
     } catch (err) {
       if (err.code === "ENOENT" || err instanceof SyntaxError) {
         if (rebuildFromAudit) {
@@ -102,13 +136,15 @@ export class Budget {
   async _write() {
     if (!this.sharedFile) return;
     const state = {
-      version:       FORMAT_VERSION,
-      cap_usd:       this.capUsd,
-      spent_usd:     this.spentUsd,
-      cap_tokens:    this.capTokens,
-      spent_tokens:  this.spentTokens,
-      started_at:    this.startedAt,
-      updated_at:    new Date().toISOString(),
+      version:        FORMAT_VERSION,
+      cap_usd:        this.capUsd,
+      spent_usd:      this.spentUsd,
+      cap_tokens:     this.capTokens,
+      spent_tokens:   this.spentTokens,
+      resource_caps:  this.resourceCaps,
+      resource_spent: this.resourceSpent,
+      started_at:     this.startedAt,
+      updated_at:     new Date().toISOString(),
     };
     // Atomic write: serialize to a unique temp file, then rename over the
     // target. rename(2) is atomic within a filesystem (and libuv maps it to an
@@ -200,6 +236,18 @@ export class Budget {
         reason: `spent ${this.spentTokens} tokens >= cap ${this.capTokens}`,
       };
     }
+    // 1b. Generic resource dimensions (OQ3): same post-fact halt as money — at or
+    // over a configured cap halts. Iteration order is the config's insertion order
+    // (deterministic). Strict projection stays money-only by design.
+    for (const [name, cap] of Object.entries(this.resourceCaps)) {
+      const spent = this.resourceSpent[name] ?? 0;
+      if (spent >= cap) {
+        return {
+          outcome: "askHuman", severity: "halt", rule: `budget.resource.${name}`,
+          reason: `spent ${spent} ${name} >= cap ${cap}`,
+        };
+      }
+    }
     // 2. Strict pre-flight: project next action via trailing avg; halt if
     // projection would exceed cap. Requires ≥3 samples to avoid cold-start
     // false halts. Per-dimension; runs after post-fact so reason strings
@@ -247,11 +295,13 @@ export class Budget {
     try {
       const buf = await fsp.readFile(this.sharedFile, "utf8");
       const s = JSON.parse(buf);
-      if (s.version !== FORMAT_VERSION) throw new BudgetUnavailableError(`version ${s.version}`);
+      if (!SUPPORTED_VERSIONS.has(s.version)) throw new BudgetUnavailableError(`version ${s.version}`);
       this.spentUsd    = s.spent_usd    ?? this.spentUsd;
       this.spentTokens = s.spent_tokens ?? this.spentTokens;
       this.capUsd      = s.cap_usd      ?? this.capUsd;
       this.capTokens   = s.cap_tokens   ?? this.capTokens;
+      this.resourceCaps  = { ...this.resourceCaps, ...(s.resource_caps ?? {}) };
+      if (s.resource_spent) this.resourceSpent = { ...s.resource_spent };
     } catch (err) {
       if (err.code !== "ENOENT") {
         // surface unexpected errors; keep local cache on missing file
@@ -260,25 +310,62 @@ export class Budget {
     }
   }
 
+  // OQ3 soft tier: edge-triggered warn — fires only when this delta carries a
+  // dimension from below ratio*cap to >= ratio*cap, and it is still under cap (at
+  // or over cap is a halt, not a warn). Infinite/zero caps never warn.
+  _maybeWarn(dimension, before, after, cap, out) {
+    if (this.softRatio == null || !isFinite(cap) || cap <= 0) return;
+    const threshold = this.softRatio * cap;
+    if (before < threshold && after >= threshold && after < cap) {
+      out.push({ dimension, spent: after, cap, ratio: after / cap });
+    }
+  }
+
   /**
-   * Add a result's spend deltas to the budget (atomic read-modify-write under lock when shared).
+   * Add a result's spend/count deltas to the budget (atomic read-modify-write under lock when shared).
    * @param {object} [result] execution result
    * @param {number} [result.costUsd] USD spent (default 0)
    * @param {number} [result.tokens] tokens spent (default 0)
-   * @returns {Promise<void>}
+   * @param {Object<string,number>} [result.counts] per-resource deltas (e.g. `{ writes: 1 }`), accrued against `resources` caps (OQ3)
+   * @returns {Promise<{warnings: Array<{dimension:string,spent:number,cap:number,ratio:number}>}>} soft-tier warnings crossed by this delta (empty when softRatio is off)
    * @throws {BudgetUnavailableError} if the shared file can't be read under the held lock
    */
   async record(result) {
     const dUsd = result?.costUsd ?? 0;
     const dTok = result?.tokens ?? 0;
-    this._pushBuf(dUsd, dTok);
-    if (dUsd === 0 && dTok === 0 && !this.sharedFile) {
-      return; // nothing to do
+    // Sanitize generic counts: accrue only POSITIVE deltas for CONFIGURED
+    // resources. Counts are monotonic (you can't un-write) so a negative delta
+    // is rejected — closing a "refund" evasion of the cumulative cap — and
+    // limiting to configured dimensions bounds the budget file against arbitrary
+    // count keys. Unconfigured/observed-only counts still appear on the record
+    // audit line via `result`; they just don't accrue toward a cap.
+    const counts = {};
+    for (const [name, d] of Object.entries(result?.counts ?? {})) {
+      if (typeof d === "number" && isFinite(d) && d > 0 && this.resourceCaps[name] != null) {
+        counts[name] = d;
+      }
     }
+    const hasCounts = Object.keys(counts).length > 0;
+    this._pushBuf(dUsd, dTok);
+    if (dUsd === 0 && dTok === 0 && !hasCounts && !this.sharedFile) {
+      return { warnings: [] }; // nothing to do
+    }
+    const warnings = [];
+    const accrue = (beforeUsd, beforeTok, beforeRes) => {
+      this.spentUsd    = beforeUsd + dUsd;
+      this.spentTokens = beforeTok + dTok;
+      this._maybeWarn("costUsd", beforeUsd, this.spentUsd, this.capUsd, warnings);
+      this._maybeWarn("tokens",  beforeTok, this.spentTokens, this.capTokens, warnings);
+      for (const [name, d] of Object.entries(counts)) {
+        const before = beforeRes[name] ?? 0;
+        this.resourceSpent[name] = before + d;
+        const cap = this.resourceCaps[name];
+        if (cap != null) this._maybeWarn(name, before, this.resourceSpent[name], cap, warnings);
+      }
+    };
     if (!this.sharedFile) {
-      this.spentUsd += dUsd;
-      this.spentTokens += dTok;
-      return;
+      accrue(this.spentUsd, this.spentTokens, this.resourceSpent);
+      return { warnings };
     }
     const sharedFile = this.sharedFile; // non-null past the guard above
     await this._withLock(async () => {
@@ -294,24 +381,27 @@ export class Budget {
         // rather than overspends against a budget file it can't read.
         throw new BudgetUnavailableError(`record could not read budget file: ${err.message}`);
       }
-      this.spentUsd    = (s.spent_usd ?? 0)    + dUsd;
-      this.spentTokens = (s.spent_tokens ?? 0) + dTok;
       this.capUsd      = s.cap_usd      ?? this.capUsd;
       this.capTokens   = s.cap_tokens   ?? this.capTokens;
+      this.resourceCaps  = { ...this.resourceCaps,  ...(s.resource_caps  ?? {}) };
+      this.resourceSpent = { ...(s.resource_spent ?? {}) }; // full sync from committed file
       this.startedAt   = s.started_at   ?? this.startedAt;
+      // Accrue against the COMMITTED totals from the file (not stale local cache).
+      accrue(s.spent_usd ?? 0, s.spent_tokens ?? 0, s.resource_spent ?? {});
       await this._write();
     });
+    return { warnings };
   }
 
   /**
    * Set a budget cap to a new value (raise or lower) and persist it atomically.
-   * @param {"costUsd"|"tokens"} dimension which cap to set
+   * @param {"costUsd"|"tokens"|string} dimension `"costUsd"` / `"tokens"`, or a generic resource name (OQ3)
    * @param {number} newCap new cap (finite, >= 0)
    * @returns {Promise<void>}
-   * @throws {Error} on unknown dimension or invalid newCap
+   * @throws {Error} on a non-string dimension or invalid newCap
    */
   async raiseCap(dimension, newCap) {
-    if (!["costUsd", "tokens"].includes(dimension)) {
+    if (typeof dimension !== "string" || dimension.length === 0) {
       throw new Error(`unknown budget dimension: ${dimension}`);
     }
     // A negative or non-finite cap is never meaningful — a negative cap makes
@@ -330,10 +420,13 @@ export class Budget {
           this.spentTokens = s.spent_tokens ?? this.spentTokens;
           this.capUsd      = s.cap_usd      ?? this.capUsd;
           this.capTokens   = s.cap_tokens   ?? this.capTokens;
+          this.resourceCaps  = { ...this.resourceCaps,  ...(s.resource_caps  ?? {}) };
+          this.resourceSpent = { ...this.resourceSpent, ...(s.resource_spent ?? {}) };
         } catch { /* keep local */ }
       }
       if (dimension === "costUsd") this.capUsd = newCap;
-      else this.capTokens = newCap;
+      else if (dimension === "tokens") this.capTokens = newCap;
+      else this.resourceCaps[dimension] = newCap; // generic resource cap (OQ3)
       await this._write();
     });
   }

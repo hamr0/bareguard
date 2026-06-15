@@ -31,6 +31,8 @@ export {};
  * @typedef {object} Result
  * @property {number} [costUsd]  Cost of this action in USD.
  * @property {number} [tokens]   Tokens consumed by this action.
+ * @property {Object<string,number>} [counts]  Per-resource deltas accrued against
+ *   `budget.resources` caps, e.g. `{ writes: 1, rows: 50 }` (OQ3).
  */
 
 /**
@@ -44,6 +46,8 @@ export {};
  * @property {string} rule    Rule id that decided this, e.g. `"fs.writeScope"`,
  *   `"budget.maxCostUsd"`, `"default"`, `"humanChannel.allow"`.
  * @property {string|null} reason  Human-readable explanation, or `null`.
+ * @property {string} [aid]  Per-eval correlation id (OQ4); pass to `record(action,
+ *   result, { aid })` to join the request to its outcome in the audit log.
  */
 
 /**
@@ -142,6 +146,12 @@ export {};
  * @typedef {object} BudgetConfig
  * @property {number} [maxCostUsd]  Default `Infinity`.
  * @property {number} [maxTokens]   Default `Infinity`.
+ * @property {Object<string,number>} [resources]  Cap-map for arbitrary countable
+ *   resources, `{ <name>: cap }` (e.g. `{ writes: 100, rows: 10000 }`). Accrued
+ *   from `result.counts`; same post-fact halt as money (rule `budget.resource.<name>`). (OQ3.)
+ * @property {number|null} [softRatio]  Soft-warn threshold in (0,1) (e.g. `0.8`).
+ *   Crossing `ratio * cap` on any dimension emits a non-blocking `budget_warn`
+ *   audit line — observability only, never halts. Default off. (OQ3.)
  * @property {boolean} [strict]     Pre-flight halt using a trailing-average
  *   projection (needs >=3 samples). Default `false`.
  * @property {string|null} [sharedFile]  Path to the cross-process budget file.
@@ -241,6 +251,7 @@ export {};
  */
 
 /**
- * Budget dimension that can be raised via `topup` / `raiseCap`.
- * @typedef {"costUsd"|"tokens"} BudgetDimension
+ * Budget dimension that can be raised via `topup` / `raiseCap`: `"costUsd"`,
+ * `"tokens"`, or a generic resource name (OQ3).
+ * @typedef {"costUsd"|"tokens"|string} BudgetDimension
  */

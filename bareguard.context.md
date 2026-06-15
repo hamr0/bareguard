@@ -26,6 +26,9 @@ One entry point:
 |---|---|
 | Gate every action my agent takes | `new Gate({...})` + `await gate.check(action)` before exec, `await gate.record(action, result)` after |
 | Stop runaway spend or runaway turns | `budget.maxCostUsd`, `budget.maxTokens`, `limits.maxTurns` — all halt severity |
+| Cap a non-money resource (writes, rows, bytes) | `budget.resources: { writes: 100 }` — halts on `budget.resource.<name>`; accrued from `result.counts: { writes: 1 }` (cumulative, decomposition-proof) |
+| Warn before a hard cap (monitor, don't block) | `budget.softRatio: 0.8` — emits a non-blocking `budget_warn` audit line at 80% of any cap; never halts |
+| Join a request to its outcome in the audit | every `check()` returns `decision.aid`; pass it to `record(action, result, { aid })` (or use `gate.run`, which threads it) — joins even byte-identical actions |
 | Cap concurrent / nested children | `limits.maxChildren`, `limits.maxDepth` — action severity |
 | Allowlist commands per-tool | `bash.allow: ["git", "ls"]` |
 | Deny destructive command patterns | `bash.denyPatterns: [/sudo/, /rm\s+-rf/]` |

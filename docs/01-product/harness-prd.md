@@ -58,7 +58,7 @@ The PRD describes a design; most of it already ships. Map of every surface to it
 | **Axis A** | gate the action by shape — the floor: `Gate` (deny/ask + closed allowlist), cumulative `Budget`, `audit`, `redact` | **BUILT & RELEASED — bareguard 0.6.0 (npm).** Axis A is not a thing to build; it *is* the shipped library. The harness POC (E1/E3/E4/E5, §9.2) proved these existing primitives *compose* into the harness pattern with `src/` untouched. |
 | **Write-gate seam / `flags`** | structured field-value gate for a memory adopter's verdict (`provenance`/`injectionRisk`) — the litectx write-gate seam (§5B) | **BUILT & SEAM CLOSED (2026-06-13/14).** First `src/` change since the HOLD: the `flags` primitive (deny@2b / ask@4b, floor supremacy). `seam-contract.test.js` now runs against litectx's real published emitter (`litectx@^0.13.0` devDependency). Additive/backward-compatible; HOLD at 0.5.x unaffected. Seam live, regression-guarded every release — nothing further owed on it. |
 | **Axis B** | reconcile the return vs a per-request declared constraint | **DEFERRED — the only genuinely-new bareguard surface (§8). = OQ1** (the constraint-contract format, §10). E2 proved the *mechanic* in the runner only; the `src/` surface is unbuilt. |
-| **OQ3** | generalize `Budget`'s cumulative count to sends/rows/bytes + soft/hard tiers | **EXTENSION to an Axis-A primitive, not a new axis.** Hard cap already ships; tiering is additive, demand-gated (§10). **PROPOSED into `bareguard-prd.md` §19 (2026-06-09)** with the E3 evidence. |
+| **OQ3** | generalize `Budget`'s cumulative count to sends/rows/bytes + soft/hard tiers | **BUILT 2026-06-14 (Unreleased).** `budget.resources` cap-map (halt `budget.resource.<name>`, accrued from `result.counts`) + `budget.softRatio` non-blocking `budget_warn`; v2 file w/ v1 read-compat. Operator is the adopter. `bareguard-prd.md` §19 status → IMPLEMENTED. |
 | **OQ4** | audit shape: log request + return together | **EXTENSION, demand-gated (§10). PROPOSED into `bareguard-prd.md` §19 (2026-06-09)** — gate/record lines share no per-action id; content-join goes ambiguous under repetition. |
 | **SF-9** | destructive-action classifier for the Software Factory's Ship gate | **A Factory-driven Axis-A *config* (a `shape → ask` rule), not a new axis.** Built when the Factory needs it (§9.3.0). |
 
@@ -92,6 +92,52 @@ discipline-fit:
 
 With 1, 3, and 4 delivered, **the pre-litectx sanctioned backlog is empty** — what remains
 either waits on litectx (§9.3.4) or on its own demand trigger (Axis B / OQ1, item 2).
+
+---
+
+## 0.2 Round update — 2026-06-14 (litectx 0.16.1): the deferrals reassessed
+
+A design round (no `src/` change) walked the deferred surface against **litectx 0.16.1**. Five
+realizations, each reclassifying a "pending/deferred" item — net: **0.16.1 unblocks no bareguard
+build; it removes two waits and reclassifies one demand-sensor.**
+
+1. **`memory.inject` is dead by design, not "pending."** litectx mints `memory.write` ONLY;
+   `writegate.js:14` states the inject type is reserved with **no producer** (SELECT was POC-killed
+   upstream). The inject-side seam will never light — stop waiting on it.
+2. **The Software Factory is gone — replaced by litectx-internal benches** (`litectx/docs/01-product/
+   benches-prd.md`: Part A validation = `bench:recall/impact/memory/assemble/summary`, **DONE**;
+   Part B factory app **PARKED**). Those benches are **CE-value gates that never route an action
+   through a gate**, so they are **NOT** a vehicle for the §9.3.2 integration bench. **But that
+   bench's purpose — guarding the write-gate seam — is already met** by the standing
+   `test/seam-contract.test.js` (vs published `litectx@^0.13.0`). §9.3.2 thus loses both vehicle and
+   purpose; it collapses to "already covered."
+3. **SF-8 / SF-9 are moot** — their trigger (a running Factory) no longer exists. Off the list.
+4. **`recordUseful()` is still unbuilt** in litectx (R-W7), so the full `assemble→…→recordUseful`
+   loop stays un-runnable — but per (2) that loop is no longer a bareguard deliverable.
+5. **Axis B / OQ1: `assemble` is NOT a demand source.** It fits-to-budget and returns within budget
+   (`{units,dropped,tokens}`) — no honest violation to reconcile. The §9.3.2-scenario-2 sensor is
+   **retired** and replaced by the concrete `recall`/`impact` spec in **§8.1** (design-only; still no
+   real demand → still unbuilt).
+
+The only item that became genuinely *buildable* (not yet demanded) is **OQ3** (cumulative budget →
+write-count, now that litectx's emitter is published) — assessed in **§10 OQ3**.
+
+### Build-round decisions (2026-06-14) — what we AGREED, in order
+
+Item-by-item walk of the deferred surface, with the user's call recorded:
+
+| Item | Decision | Note |
+|---|---|---|
+| **Axis B / OQ1** | **Spec'd, stays DEFERRED** | concrete `recall`/`impact` spec written (§8.1); no consumer has asked — not in the build set. |
+| **OQ3** (budget beyond money) | **AGREED — BUILD this round** | **the demand gate is now MET: the *operator* is the adopter.** User's rationale: *"user can set/monitor budget when overdone — memory writes, a 10k-row export might be uncalled-for; ways of auditing and setting limits for agents beyond money."* That is the non-money-resource adopter §19 was waiting for. |
+| **OQ4** (joinable audit line) | **AGREED — BUILD this round** | same operator-auditing motivation; pairs with OQ3 (show what was *requested* vs what *counted*). Additive; must not assume Axis B. |
+| **OQ2** (match-validator) | **RESOLVED — no build** | E5 showed the deterministic floor does all the safety work; advisory layer unearned. Closed. |
+| **SF-8 / SF-9** | **MOOT** | trigger (a running Factory) gone (§0.2 #3). |
+
+**Build order:** OQ3 (additive `Budget` extension: named-resource cumulative counter + soft/`warn`
+tier) → OQ4 (per-action correlation id threading `check → record` on the audit line). Both additive,
+`Budget`/`audit` only, HOLD-at-0.5.x-safe. **Per AGENT_RULES:** floor-touching → POC the riskiest
+assumption + checkpoint the load-bearing design before code; prove-don't-assert; never ship the POC.
 
 ---
 
@@ -371,6 +417,52 @@ the constraint contract within the §6 thesis and the LOC budget. Until then thi
 *request/user* — never the agent checking itself (that's M1 again). The contract
 format must make user-authored constraints the only input B reconciles against.
 
+## 8.1 Concrete spec — `recall`-provenance & `impact`-risk (settled 2026-06-14, design-only)
+
+The §6.5 skeleton (tap → `{field, stated, returned, text}` envelope → three sinks → never-block) is
+fixed. This section fills in the **variable check** for litectx's two real return shapes (grounded at
+file:line, litectx HEAD), and shows the declaration format (OQ1) they imply. **Still unbuilt** — this
+is the spec for *if* a consumer asks; none has. It replaces the retired `assemble`/scenario-2 sensor
+(§0.2 #5: `assemble` self-enforces its budget, so there is no honest violation to reconcile).
+
+**Case R — recall provenance** *(reversible-read branch, D7 §6.3 → feedback + audit, no halt)*
+- **Return:** `recall(q)` → `Hit[]`; memory hits carry `provenance` via `attachMemMeta`
+  (`litectx/src/index.js:332`). Values **today `human | agent`, `null` for indexed files** (`:120`).
+- **Constraint:** `{recall:{provenanceIn:["human","doc"]}}` (or `provenanceNotIn:[…]`).
+- **Check (caller, ~1 line):** `hits.filter(h => !allowed.has(h.provenance))`.
+- **Sink:** recall feeds context = reversible read → **agent-feedback + audit only, no HITL.**
+- **Envelope:** `{field:"provenance", stated:["human","doc"], returned:"agent", text:"fact:x is agent-authored; you restricted to human/doc"}`.
+
+**Case I — impact risk** *(the genuine detect-and-feed-A case — rides the edit's existing A-stop)*
+- **Return:** `impact(symbol)` → `{usedBy, risk, callers, callees}`, `risk ∈ low|med|high`
+  (`index.js:454` → `impact.js`).
+- **Constraint:** `{impact:{maxRisk:"med"}}`.
+- **Check (caller, ~1 line):** `RANK[risk] > RANK[maxRisk]`.
+- **Sink:** an edit *is* an A-action; B doesn't halt — the edit's existing A-stop now carries
+  "editing `foo`, impact=high (12 callers), you capped at med." Human sees blast radius, not spin.
+- **Envelope:** `{field:"risk", stated:"med", returned:"high", text:"foo: impact=high (12 callers), exceeds your stated max of med"}`.
+
+**What this pins about OQ1 — the format is tiny.** The two consumers need exactly two operator kinds:
+```
+constraints: {
+  recall: { provenanceIn: [...] | provenanceNotIn: [...] },  // set membership
+  impact: { maxRisk: "low" | "med" | "high" },               // ordered-enum threshold
+}
+```
+No numeric comparison, no nesting, no expression language. **OQ1 collapses to "freeze {membership,
+ordered-threshold}, keyed by tool name."** Skeleton untouched; build (if ever) = ~1 envelope + 2
+wire-points, runner-layer (bareagent), `src/` untouched — same as E2's `reconcile()`.
+
+**§6 compliance:** both checks read a *structured return field* against a *user-stated* value — no
+text scan, no content semantics; neither blocks (D7). A B that *filtered* recall hits or *stopped* the
+edit would cross into enforcement — forbidden.
+
+**Honest ceiling:** (1) recall provenance is **thin today** (`human|agent` only on hits; the richer
+`web|subagent|doc` enum lives on the *write* action) — Case R can't discriminate web-sourced memory
+until litectx surfaces full provenance on recall hits (litectx's gap). (2) impact risk is litectx's
+own verdict — B inherits its accuracy. (3) Still catches no F8 lie (tampered label) and no §11
+omission (the symbol you never `impact()`'d). (4) **No demand** — plausible, unrequested.
+
 ---
 
 ## 9. POC plan & what's already validated (AGENT_RULES: POC-first)
@@ -546,9 +638,11 @@ benches (aurora, gitdone):
    litectx's published `toWriteAction` (`litectx@^0.13.0`), plus the `flags` structured-field
    rows. The synthetic stand-in is retired; the seam is live and regression-guarded. *Nothing
    remains on litectx for this scenario.*
-2. **Axis-B / E2** — declare a real assembly constraint (e.g. payload ≤ N tokens; all
-   sources `trust ≥ X`) and reconcile against `assemble()`'s return. **First real stress of
-   OQ1's contract format** by an actual consumer.
+2. **Axis-B / E2** — ~~declare a real assembly constraint and reconcile against `assemble()`'s
+   return~~ **RETIRED 2026-06-14 (§0.2 #5):** `assemble` fits-to-budget and returns *within* budget,
+   so there is no honest violation for B to reconcile — it enforces the constraint upstream rather
+   than violating it downstream. The replacement demand-sensor is the `recall`/`impact` spec in
+   **§8.1** (design-only, still unbuilt, still no real demand).
 3. **Budget / E3** — repeated `memory.write`/`inject` (decomposition-style); does a
    cumulative tier bound total writes? **This is where the OQ3 need shows up with evidence.**
 4. **Selection / E5** — a bundle including vs excluding `memory.write`; tighten-only holds.
@@ -583,10 +677,13 @@ litectx *runnable* (memory engine + the CE slice that emits actions), not merely
    `memory.write` only).
 2. **The end-to-end integration bench (§9.3.2)** — the full `assemble → turn → check → record →
    recordUseful` loop needs litectx's `assemble()`/`recordUseful()` to exist.
-3. **The Software Factory proving bench** — its *subject* is litectx (the ON/OFF A/B); it cannot
-   run without litectx's memory + CE primitives.
-4. **SF-9 (ship-gate classifier)** and any other extension the Factory *surfaces because it ran
-   on litectx* — transitively gated on 3.
+3. ~~**The Software Factory proving bench**~~ **GONE 2026-06-14 (§0.2 #2):** the Factory was split
+   (`litectx/docs/01-product/benches-prd.md`) into Part A = litectx-internal CE-value benches (DONE)
+   + Part B = the factory app (PARKED). Those benches never route an action through a gate, so they
+   are not a bareguard-seam vehicle; the seam they'd have guarded is already covered by
+   `seam-contract.test.js`. No longer a wait.
+4. ~~**SF-9 (ship-gate classifier)** and other Factory-surfaced extensions~~ **MOOT 2026-06-14
+   (§0.2 #3):** trigger (a running Factory) no longer exists.
 
 Explicitly **NOT** waiting on litectx: Axis A (shipped), the gate-zero contract test (done),
 Axis B/OQ1 (needs *a* constraint-authoring user — likely not litectx), OQ3/OQ4 (demand-gated by
@@ -600,10 +697,12 @@ any driver). See §0.1.1.
   fit §6 + ≤150 LOC, and accept *only* user/request-authored constraints. **Scope
   narrowed by §6.5:** the check is the caller's (~1 line, can't be generic) and the
   skeleton (tap point, fact envelope, sinks, never-block) is already settled — OQ1 is
-  *only* the question of freezing a public *declaration format*, nothing more. *Status: a real
-  shape to stress it now exists — litectx's `assemble()` declared constraint (e.g. payload
-  ≤ N tokens / source `trust ≥ X`), exercised by §9.3.2 scenario 2. Don't design the DSL
-  speculatively; let the bench show what shape a real consumer actually needs.*
+  *only* the question of freezing a public *declaration format*, nothing more. *Status (2026-06-14):
+  **concrete spec written — §8.1.** The `assemble` sensor was retired (it self-enforces; §0.2 #5)
+  and replaced by the `recall`-provenance / `impact`-risk instantiation, which pins the format to
+  just two operator kinds (set-membership + ordered-enum threshold). **Still DEFERRED — no real
+  consumer has asked**; the spec stands as the pre-figured build (~1 envelope + 2 wire-points) for
+  when one does.*
 - **OQ2** — Does the match-validator (D8) earn its keep, or is the deterministic floor
   enough on its own? (Advisory-only either way.) *Status: **E5 (§9.2.5) exercised D8.**
   The mechanism holds — agent proposes, floor is selection-independent, tighten-only,
@@ -611,6 +710,7 @@ any driver). See §0.1.1.
   deterministic floor did all the safety work. **Leaning answer: the floor is enough;
   the advisory layer has not yet earned its keep.** Keep it advisory-only and build a
   real validator only on a concrete need — not speculatively. D8 is ergonomics (D2).*
+  **RESOLVED 2026-06-14: no build — closed.**
 - **OQ3** — Generalize `budget`'s cumulative model to arbitrary countable resources
   (sends, rows, bytes) — extend the primitive, or a new `limits.cumulative`? (Appendix
   E bar applies — prefer extend.) *E3 evidence:* the cumulative tier already enforces
@@ -634,11 +734,22 @@ any driver). See §0.1.1.
   - **PROPOSED into the stable spec (2026-06-09):** recorded as a future-feature
     candidate in `bareguard-prd.md` §19 with the E3 evidence. Still demand-gated —
     proposing ≠ building.
+  - **BUILT 2026-06-14 (Unreleased).** The demand gate was met by the *operator* (cap/monitor
+    runaway `memory.write`s, a 10k-row export — *limits for agents beyond money*). Shipped the
+    additive extension this DECISION scoped: `budget.resources` named-resource cumulative counter
+    (halt `budget.resource.<name>`, accrued from `result.counts`) + `budget.softRatio` non-blocking
+    `budget_warn` (off the `check()` decision path). v2 file format, v1 read-compat; counts hardened
+    positive-only/configured-only (`/security`). `strict`-default-for-money stayed out of scope.
+    Proven against litectx's real emitter (`seam-contract.test.js` OQ3 row). `bareguard-prd.md` §19 → IMPLEMENTED.
 - **OQ4** — Audit shape for reconciliation: log request + return together so
   ask-vs-response is reconstructable (a2a §12.2) without bloating the JSONL line.
   - **PROPOSED into the stable spec (2026-06-09):** recorded as a future-feature
     candidate in `bareguard-prd.md` §19. Still demand-gated; must not wait for or
     assume Axis B.
+  - **BUILT 2026-06-14 (Unreleased), with OQ3.** Per-eval correlation id (`aid`): minted in
+    `check()`, on every audit line, returned on the decision, threaded to `record` by `run()` (or
+    via `decision.aid` for the compose seam). Joins even byte-identical repeats. Axis B not assumed.
+    `bareguard-prd.md` §19 → IMPLEMENTED; `audit-correlation.test.js`.
 
 ### 10.1 Future sibling — `barecontext` (the context-economy axis, NOT now)
 

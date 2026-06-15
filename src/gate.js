@@ -257,6 +257,12 @@ export class Gate {
     if (!this._initialized) await this.init();
     action = safeAction(action); // own-props only — no inherited field can flip a decision
 
+    // OQ4: one correlation id per eval. Stamped on every audit line this call
+    // emits and returned on the decision, so a later record() (or the compose
+    // seam) can join request → outcome even when two actions are identical.
+    const aid = randomUUID().slice(0, 8);
+    const emit = (fields) => this.audit.emit({ aid, ...fields });
+
     let iterations = 0;
     while (true) {
       // PRE-EVAL: halt, else the 6-step eval. `_stepEval` always returns a
@@ -265,18 +271,18 @@ export class Gate {
 
       // Terminal allow/deny → audit and return.
       if (decision.outcome === "allow" || decision.outcome === "deny") {
-        await this.audit.emit({
+        await emit({
           phase: "gate", action,
           decision: decision.outcome, severity: decision.severity,
           rule: decision.rule, reason: decision.reason,
         });
         // Control flow above guarantees outcome is "allow" | "deny"; the cast
         // pins the internal eval result to the public Decision shape.
-        return /** @type {import("./types.js").Decision} */ (decision);
+        return /** @type {import("./types.js").Decision} */ ({ ...decision, aid });
       }
 
       // askHuman path: emit gate audit, dispatch to humanChannel, apply.
-      await this.audit.emit({
+      await emit({
         phase: "gate", action,
         decision: "askHuman", severity: decision.severity,
         rule: decision.rule, reason: decision.reason,
@@ -284,7 +290,7 @@ export class Gate {
 
       // Halt: also emit dedicated halt line for operator grep.
       if (decision.severity === "halt") {
-        await this.audit.emit({
+        await emit({
           phase: "halt", action: null,
           dimension: this._haltDimension(decision.rule),
           spent: this._haltSpent(decision.rule),
@@ -309,8 +315,9 @@ export class Gate {
           outcome: "deny", severity: "halt",
           rule: decision.rule,
           reason: `${decision.reason} (no humanChannel registered)`,
+          aid,
         };
-        await this.audit.emit({
+        await emit({
           phase: "gate", action,
           decision: "deny", severity: "halt",
           rule: denial.rule, reason: denial.reason,
@@ -347,11 +354,11 @@ export class Gate {
           clearTimeout(timer);
           if (raced === TIMEOUT) {
             const reason = `humanChannel timeout after ${this.humanChannelTimeoutMs}ms`;
-            await this.audit.emit({
+            await emit({
               phase: "approval", action,
               decision: "deny", reason,
             });
-            return { outcome: "deny", severity: "halt", rule: decision.rule, reason };
+            return { outcome: "deny", severity: "halt", rule: decision.rule, reason, aid };
           }
           response = raced;
         } else {
@@ -359,16 +366,16 @@ export class Gate {
         }
       }
       catch (err) {
-        await this.audit.emit({
+        await emit({
           phase: "approval", action,
           decision: "deny", reason: `humanChannel threw: ${err.message}`,
         });
         return { outcome: "deny", severity: "halt", rule: decision.rule,
-                 reason: `humanChannel threw: ${err.message}` };
+                 reason: `humanChannel threw: ${err.message}`, aid };
       }
 
       const human = response ?? { decision: "deny", reason: "humanChannel returned nothing" };
-      await this.audit.emit({
+      await emit({
         phase: "approval", action,
         decision: human.decision, reason: human.reason ?? null,
         newCap: human.newCap ?? null,
@@ -376,8 +383,8 @@ export class Gate {
 
       if (human.decision === "allow") {
         /** @type {import("./types.js").Decision} */
-        const decided = { outcome: "allow", severity: "action", rule: "humanChannel.allow", reason: human.reason ?? null };
-        await this.audit.emit({
+        const decided = { outcome: "allow", severity: "action", rule: "humanChannel.allow", reason: human.reason ?? null, aid };
+        await emit({
           phase: "gate", action,
           decision: "allow", severity: "action",
           rule: decided.rule, reason: decided.reason,
@@ -391,8 +398,9 @@ export class Gate {
           severity: decision.severity, // preserve halt vs action source
           rule: decision.rule,
           reason: human.reason ?? "human denied",
+          aid,
         };
-        await this.audit.emit({
+        await emit({
           phase: "gate", action,
           decision: "deny", severity: decided.severity,
           rule: decided.rule, reason: decided.reason,
@@ -403,8 +411,8 @@ export class Gate {
         if (decision.severity !== "halt") {
           // topup only meaningful for halt; for ask events, treat as allow.
           /** @type {import("./types.js").Decision} */
-          const decided = { outcome: "allow", severity: "action", rule: "humanChannel.allow", reason: "topup-on-ask treated as allow" };
-          await this.audit.emit({
+          const decided = { outcome: "allow", severity: "action", rule: "humanChannel.allow", reason: "topup-on-ask treated as allow", aid };
+          await emit({
             phase: "gate", action,
             decision: "allow", severity: "action",
             rule: decided.rule, reason: decided.reason,
@@ -412,21 +420,21 @@ export class Gate {
           return decided;
         }
         if (typeof human.newCap !== "number" || !isFinite(human.newCap) || human.newCap < 0) {
-          return { outcome: "deny", severity: "halt", rule: decision.rule, reason: "topup with invalid newCap" };
+          return { outcome: "deny", severity: "halt", rule: decision.rule, reason: "topup with invalid newCap", aid };
         }
         const dimension = this._haltDimension(decision.rule);
         if (!dimension) {
-          return { outcome: "deny", severity: "halt", rule: decision.rule, reason: "topup not applicable to this rule" };
+          return { outcome: "deny", severity: "halt", rule: decision.rule, reason: "topup not applicable to this rule", aid };
         }
         const oldCap = this._haltCap(decision.rule);
         await this.budget.raiseCap(dimension, human.newCap);
-        await this.audit.emit({
+        await emit({
           phase: "topup", action: null,
           dimension, oldCap, newCap: human.newCap,
         });
         if (++iterations >= MAX_TOPUP_ITERATIONS) {
           return { outcome: "deny", severity: "halt", rule: decision.rule,
-                   reason: `topup loop exceeded ${MAX_TOPUP_ITERATIONS} iterations` };
+                   reason: `topup loop exceeded ${MAX_TOPUP_ITERATIONS} iterations`, aid };
         }
         // re-evaluate gate.check in the next loop iteration
         continue;
@@ -434,13 +442,13 @@ export class Gate {
       if (human.decision === "terminate") {
         await this.terminate(human.reason ?? "human chose terminate");
         return { outcome: "deny", severity: "halt", rule: "gate.terminated",
-                 reason: human.reason ?? "human chose terminate" };
+                 reason: human.reason ?? "human chose terminate", aid };
       }
 
       // Unknown decision: defensive deny.
       return {
         outcome: "deny", severity: "halt", rule: decision.rule,
-        reason: `humanChannel returned unknown decision: ${human.decision}`,
+        reason: `humanChannel returned unknown decision: ${human.decision}`, aid,
       };
     }
   }
@@ -448,19 +456,31 @@ export class Gate {
   /**
    * Record an executed action: tick limits, apply spend to budget, and emit a record audit line.
    * @param {import("./types.js").Action} action the executed action
-   * @param {import("./types.js").Result} [result] execution result; `costUsd` / `tokens` drive the budget
+   * @param {import("./types.js").Result} [result] execution result; `costUsd` / `tokens` / `counts` drive the budget
+   * @param {object} [opts]
+   * @param {string} [opts.aid] correlation id from the matching `check()` decision (OQ4); joins this record to its request. Defaults to a fresh id.
    * @returns {Promise<void>}
    */
-  async record(action, result) {
+  async record(action, result, opts = {}) {
     if (!this._initialized) await this.init();
     action = safeAction(action); // own-props only (reads action.type for limits/spawn)
+    const aid = opts.aid ?? randomUUID().slice(0, 8);
     this.limits.tick(action);
     if (action?.type === "spawn") this.limits.noteSpawn();
-    await this.budget.record(result);
+    const { warnings } = await this.budget.record(result);
     await this.audit.emit({
-      phase: "record", action,
+      phase: "record", action, aid,
       decision: null, severity: null, rule: null, reason: null, result,
     });
+    // OQ3 soft tier: surface each crossed warning as a non-blocking observability
+    // line (the decision/halt path is untouched — a warn never stops the run).
+    for (const w of warnings) {
+      await this.audit.emit({
+        phase: "budget_warn", action: null, aid,
+        dimension: w.dimension, spent: w.spent, cap: w.cap, ratio: w.ratio,
+        reason: `soft budget: ${w.dimension} at ${(w.ratio * 100).toFixed(0)}% (${w.spent}/${w.cap})`,
+      });
+    }
   }
 
   // Convenience: gate.check + execute + gate.record. Caller supplies executor.
@@ -482,7 +502,7 @@ export class Gate {
       return structuredError(decision, action);
     }
     const result = await executor(action);
-    await this.record(action, result);
+    await this.record(action, result, { aid: decision.aid }); // OQ4: join record → its decision
     return result;
   }
 
@@ -494,7 +514,9 @@ export class Gate {
    */
   async raiseCap(dimension, newCap) {
     if (!this._initialized) await this.init();
-    const oldCap = dimension === "costUsd" ? this.budget.capUsd : this.budget.capTokens;
+    const oldCap = dimension === "costUsd" ? this.budget.capUsd
+                 : dimension === "tokens" ? this.budget.capTokens
+                 : this.budget.resourceCaps[dimension]; // generic resource (OQ3)
     await this.budget.raiseCap(dimension, newCap);
     await this.audit.emit({
       phase: "topup", action: null,
@@ -545,16 +567,23 @@ export class Gate {
     };
   }
 
+  // Generic resource halts carry rule `budget.resource.<name>` (OQ3); map them
+  // back to the raiseable dimension <name> for the halt/topup lines.
+  _resourceFromRule(rule) {
+    return rule?.startsWith("budget.resource.") ? rule.slice("budget.resource.".length) : null;
+  }
   _haltDimension(rule) {
     if (rule === "budget.maxCostUsd") return "costUsd";
     if (rule === "budget.maxTokens")  return "tokens";
-    return null; // limits.maxTurns / maxToolRounds have no raiseable budget dimension
+    return this._resourceFromRule(rule); // generic resource, or null for limits.*
   }
   _haltSpent(rule) {
     if (rule === "budget.maxCostUsd")     return this.budget.spentUsd;
     if (rule === "budget.maxTokens")      return this.budget.spentTokens;
     if (rule === "limits.maxTurns")       return this.limits.turns;
     if (rule === "limits.maxToolRounds")  return this.limits.toolRounds;
+    const r = this._resourceFromRule(rule);
+    if (r) return this.budget.resourceSpent[r] ?? null;
     return null;
   }
   _haltCap(rule) {
@@ -562,6 +591,8 @@ export class Gate {
     if (rule === "budget.maxTokens")      return this.budget.capTokens;
     if (rule === "limits.maxTurns")       return this.limits.maxTurns;
     if (rule === "limits.maxToolRounds")  return this.limits.maxToolRounds;
+    const r = this._resourceFromRule(rule);
+    if (r) return this.budget.resourceCaps[r] ?? null;
     return null;
   }
 }
