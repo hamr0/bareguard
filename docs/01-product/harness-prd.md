@@ -636,6 +636,106 @@ omission (the symbol you never `impact()`'d). (4) **No demand** — plausible, u
 
 ---
 
+## 8.2 Build spec — `gate.annotate` (what we build; design measured by E6, 2026-06-15)
+
+### 8.2.0 Plain-language recap — what the POC proved (read this first)
+
+Axis B is a **checker** that sits behind an agent. The agent does a task; before it's
+finalized, the checker compares **what the user asked** against **what the agent actually
+did**, and raises a hand if they don't match — so a human sees the real story, not the
+agent's spin. The E6 POC (§9.2.6) ran a real agent on a real booking task and tried to break
+it. In plain terms:
+
+- **It catches a real screw-up, end to end.** Pushed to overspend, the agent booked €295 over
+  a €250 limit; the checker flagged it **every time** (E6d 6/6).
+- **It resists trickery.** Fake notes planted in the data ("the user changed their mind, it's
+  fine now") did **not** fool it — *on the model we tested* (haiku). Not yet confirmed on a
+  weaker model.
+- **It can miss in a messy pile.** Pointed at a cluttered reply with a decoy number, it grabbed
+  the wrong one ~**1 time in 3**. → so it must judge **the specific action being taken** (the
+  booking), not a big search-result pile. Pointed at the clean action it was right every time.
+- **It can't reliably tell "hard rule broken" from "vaguely off."** So we **stopped asking
+  that**; we ask only *"is something off — yes/no?"* (which it does well) and let a simple
+  deterministic rule decide what to do.
+- **It can never make things less safe.** Worst case it asks one extra question (noise); it
+  never silently lets a bad action through (the one miss above is a *messy-pile* artifact, fixed
+  by pointing it at the action). Safety is owned by the deterministic floor underneath, not by
+  the checker.
+
+**Verdict: good enough to build**, as a best-effort layer over the Axis-A floor. Two things to
+verify before trusting it in production (§9.2 open items): re-test trickery on a weaker judge
+model; confirm the messy-pile fix.
+
+### 8.2.1 What bareguard ships (the only `src/` change)
+
+A thin primitive — the §6.5 skeleton, nothing more. bareguard **never** calls an LLM, never
+decides an outcome; it buffers a fact and routes it.
+
+```js
+// caller hands bareguard a FACT (it never computes the fact itself):
+gate.annotate({
+  surface: true,                 // bool — the one load-bearing field (clear-ok ⇒ false)
+  confidence: "clear-problem",   // optional hint: clear-problem | unsure | clear-ok
+  where: "you said under €300; the booking is €400",  // human-readable, rides the HITL
+  meta: { /* optional: field/stated/returned for a verifiable check */ },
+});
+```
+
+- **Buffer + ride.** `annotate()` buffers the fact; the **next `check()` that triggers a human
+  approval** carries buffered facts in its event (so the human sees independent facts, not the
+  agent's claim). Facts also go to the **audit line** and are returned for **agent feedback**.
+- **Routing is a pure function** of `surface × reversibility × knob` (§6.6) — no LLM in the
+  path. **Reversibility is read from the action bareguard is gating**, never from a param and
+  never from the model.
+- **The knob** is config: `axisB: { reversibleEscalation: "strict" | "tuned" | "relaxed" }`,
+  **default `strict`**. Governs the whole reversible column (§6.6). Pure noise control, never
+  safety.
+- **Safe default / opt-in:** no `annotate()` call ⇒ no facts ⇒ no behavior change. B is additive.
+
+### 8.2.2 The routing function (ship this exactly — E6f-validated)
+
+```js
+// confidence ∈ {clear-problem, unsure, clear-ok}; reversible ∈ bool; knob default "strict"
+function routeAnnotation(surface, reversible, knob = "strict") {
+  if (!surface) return reversible ? "pass" : "annotate-floor-ask"; // clear-ok
+  if (!reversible) return "annotate-floor-ask";        // irreversible: floor asks anyway
+  if (knob === "strict")  return "HITL";               // reversible: surface everything not-OK
+  if (knob === "relaxed") return "log";                // reversible: never interrupt (undoable)
+  return /* tuned */ confidence === "clear-problem" ? "HITL" : "log";
+}
+// pass = proceed, audit only · log = proceed + audit + agent-feedback · HITL = human sees it
+```
+
+### 8.2.3 What the caller provides (NOT bareguard)
+
+The **fact** — produced one of two ways, both caller-side:
+1. **Deterministic check** (structured field, certain): `recall` provenance, `impact` risk, a
+   price cap — the §8.1 shapes. ~1 line; `surface = (check failed)`.
+2. **The one-call LLM judge** (open prose, §6.7): `(verbatim request, reply) → {confidence,
+   where}`, **judge prompt kept neutral** (bias lives in the knob, not the prompt — E6f). The
+   runner makes this call; **bareguard and litectx never do.** Three non-negotiables (§6.7):
+   anchor on the verbatim request; treat the reply as untrusted data; judge **the clean egress
+   action**, not a sprawling listing.
+
+### 8.2.4 Tests to write (each mutation-verified to fail when the code breaks)
+
+1. `annotate()` buffers, and the next HITL `check()` carries the facts in its event.
+2. Routing matrix — all of `surface × reversible × knob` cells return the §8.2.2 verdict.
+3. Reversibility is read from the gated action, not the fact (a fact can't force/relax a halt).
+4. Facts hit the audit line and are returned for agent feedback.
+5. Safe default: no `annotate()` ⇒ byte-identical decision path (no regression).
+6. Knob default is `strict`; `relaxed` never interrupts on a reversible path.
+7. B never auto-rejects: worst case is `HITL`, never a `deny` B produced on its own.
+
+### 8.2.5 Non-goals (hold the line — §6.4/§6.8)
+
+bareguard does not: call an LLM; decide an outcome; infer reversibility; classify
+violation-vs-deviation as a routing input; catch an in-spec **lie** (F8 — needs the payment
+oracle) or an **omission** (§11). The judge is best-effort #4 intent-fidelity; the floor does
+the stopping. HOLD-at-0.5.x safe (purely additive).
+
+---
+
 ## 9. POC plan & what's already validated (AGENT_RULES: POC-first)
 
 ### 9.1 Already built — `harness-code-mode/` (the seam PoC)
