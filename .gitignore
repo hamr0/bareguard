@@ -11,6 +11,9 @@ src/**/*.d.ts
 !.env.example
 .claude/settings.local.json
 
+# litectx local index (sqlite; regenerated on demand — never committed)
+.litectx/
+
 # Throwaway A2A intent-drift bench (code only). Never committed, never shipped.
 # The durable findings live in docs/00-context/a2a-intent-drift-prd.md (tracked).
 notes/smol/a2a-intent/
