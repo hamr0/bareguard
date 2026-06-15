@@ -1,6 +1,6 @@
 # Harness Code-Mode — Experiment PoC (living)
 
-> Sibling to [`../docs/00-context/a2a-intent-drift-prd.md`](../docs/00-context/a2a-intent-drift-prd.md).
+> Sibling to [`../docs/00-context/harness-research.md`](../docs/00-context/harness-research.md) (Part II — the A2A experiment).
 > That experiment closed on a thesis: you can't make a probabilistic agent
 > deterministic, so the durable job is to **stop and surface the predefined
 > irreversible actions to a human** (§11). This PoC tests the architectural

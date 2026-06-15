@@ -1,7 +1,7 @@
 # Harness — Product Requirements Document (PRD, living)
 
 > Companion to [`bareguard-prd.md`](bareguard-prd.md) (the stable spec) and
-> [`../00-context/a2a-intent-drift-prd.md`](../00-context/a2a-intent-drift-prd.md)
+> [`../00-context/harness-research.md`](../00-context/harness-research.md) (Part II)
 > (the experiment this grew out of). **Separate doc on purpose:** the harness is a
 > big job that will *reshape* overlapping bareguard primitives. Keeping it apart
 > stops a moving spec from tangling a stable one.
@@ -57,7 +57,7 @@ The PRD describes a design; most of it already ships. Map of every surface to it
 |---|---|---|
 | **Axis A** | gate the action by shape — the floor: `Gate` (deny/ask + closed allowlist), cumulative `Budget`, `audit`, `redact` | **BUILT & RELEASED — bareguard 0.6.0 (npm).** Axis A is not a thing to build; it *is* the shipped library. The harness POC (E1/E3/E4/E5, §9.2) proved these existing primitives *compose* into the harness pattern with `src/` untouched. |
 | **Write-gate seam / `flags`** | structured field-value gate for a memory adopter's verdict (`provenance`/`injectionRisk`) — the litectx write-gate seam (§5B) | **BUILT & SEAM CLOSED (2026-06-13/14).** First `src/` change since the HOLD: the `flags` primitive (deny@2b / ask@4b, floor supremacy). `seam-contract.test.js` now runs against litectx's real published emitter (`litectx@^0.13.0` devDependency). Additive/backward-compatible; HOLD at 0.5.x unaffected. Seam live, regression-guarded every release — nothing further owed on it. |
-| **Axis B** | reconcile the return vs a per-request declared constraint | **DEFERRED — the only genuinely-new bareguard surface (§8). = OQ1** (the constraint-contract format, §10). E2 proved the *mechanic* in the runner only; the `src/` surface is unbuilt. |
+| **Axis B** | reconcile the return vs a per-request declared constraint | **DESIGN-COMPLETE, BUILD-PENDING — the only genuinely-new bareguard surface (§8). #2 resolved = thin primitive `gate.annotate` (§6.7); routing §6.6; boundary §6.8.** E2 proved the runner mechanic; **E6 (§9.2.6) validated the return-time judge end-to-end 6/6 on real agent output** under drift, with two named failure modes (sprawl-locate miss; injection still an open pre-deploy gate). OQ1 (the operator set) freezes on the first real consumer. The `src/` surface is still unbuilt. |
 | **OQ3** | generalize `Budget`'s cumulative count to sends/rows/bytes + soft/hard tiers | **BUILT 2026-06-14 (Unreleased).** `budget.resources` cap-map (halt `budget.resource.<name>`, accrued from `result.counts`) + `budget.softRatio` non-blocking `budget_warn`; v2 file w/ v1 read-compat. Operator is the adopter. `bareguard-prd.md` §19 status → IMPLEMENTED. |
 | **OQ4** | audit shape: log request + return together | **EXTENSION, demand-gated (§10). PROPOSED into `bareguard-prd.md` §19 (2026-06-09)** — gate/record lines share no per-action id; content-join goes ambiguous under repetition. |
 | **SF-9** | destructive-action classifier for the Software Factory's Ship gate | **A Factory-driven Axis-A *config* (a `shape → ask` rule), not a new axis.** Built when the Factory needs it (§9.3.0). |
@@ -171,7 +171,7 @@ re-author, plus a return-boundary detector that makes F7's invisible loss visibl
 | D4 | **Refusal = structured in-band error**, same envelope as a normal return, doubles as agent feedback. `deny` → agent + audit (no live human). `ask` → live human; agent gets the error only on refusal. | **LOCKED** |
 | D5 | **Two-tier floor.** Aggregate/closed (cumulative limits + closed allowlist) = the real wall. Per-action regex = HITL *trigger* only (decomposable → never a security boundary alone). Quantitative things go cumulative. | **LOCKED** |
 | D6 | **Closed allowlist:** deny-by-default, tuneable-to-loosen (never the reverse), fail-closed, safe defaults. | **LOCKED** |
-| D7 | **Axis B = detect-and-feed-A, never blocks alone.** Annotates A's stop with independent facts; B changes *what the human sees*, not *whether* you stop. Reversible-path violation → feedback + audit (B always surfaces; only A halts). | **LOCKED** |
+| D7 | **Axis B = detect-and-feed-A, never blocks alone.** Annotates A's stop with independent facts; B changes *what the human sees*, not *whether* you stop. **Routing (§6.6): a deterministic `violation` always escalates to HITL; an LLM-judged `deviation` escalates only when irreversible, else passes to feedback + audit. "No pass" = escalate to A's HITL, never auto-reject. The LLM is caller-side only (§6.7).** | **LOCKED** |
 | D8 | **Harness selection** is the agent's *proposal*, made at runtime, always (no ungoverned path). A probabilistic match-validator may *advise*; it is never the floor. | **PoC-VALIDATED (E5)** — mechanism shown; the *advisory* layer earns nothing yet (OQ2). Lives in the runner, not bareguard. |
 
 ---
@@ -306,15 +306,18 @@ independent facts, not the agent's claim* — and it is the concrete cure for F7
 (invisible loss → visible on the approval screen).
 
 ### 6.3 The reversible-path edge (D7)
-If a B-violation sits on a path where **nothing irreversible happens** (e.g. reading
-drifted data), there is no A-stop to ride into. B's finding then goes to two sinks:
+If a B-finding sits on a path where **nothing irreversible happens** (e.g. reading
+drifted data), there is no A-stop to ride into. B's finding can go to two sinks:
 1. **agent feedback** (in-band) → agent re-plans, and
 2. **audit trail** → reconstructable later.
 
-No forced human interrupt (reversible = undoable = low-stakes; interrupting on every
-reversible drift is noise and violates D2's "reversible → HITL optional"). **B always
-surfaces; only A halts.** B has *no enforcement logic of its own* — one detector,
-facts to two sinks, riding into A when an A-stop already exists.
+Whether B *also* escalates to a human on a reversible path depends on the **kind** of
+mismatch — see §6.6. The short version: a soft, LLM-judged **deviation** that is
+reversible passes silently to the two sinks above (interrupting on every reversible
+maybe is noise, and violates D2's "reversible → HITL optional"); a hard, deterministic
+**violation** always escalates to A's HITL, reversible or not (certainty earns the
+glance). **B always surfaces; B never auto-rejects — worst case it escalates to A's
+HITL, where the human decides.** B has *no enforcement logic of its own*.
 
 ### 6.4 Hard ceiling — do NOT overclaim (bounds the whole PRD)
 B checks the **returned value** against a **stated** constraint. Therefore it
@@ -351,8 +354,9 @@ surface would ever ship:**
 1. **Tap point** — reads the *authoritative tool return*, never the agent's claim.
 2. **Timing** — after the return, before the next action.
 3. **Fact envelope** — one output shape regardless of domain:
-   `{field, stated, returned, text}` (e.g. `{field:"price", stated:300, returned:400,
-   text:"€400, exceeds your stated max of €300"}`).
+   `{kind, field, stated, returned, text}` where `kind ∈ violation|deviation` (§6.6);
+   a deviation needs only `kind` + `text` (e.g. `{kind:"violation", field:"price",
+   stated:300, returned:400, text:"€400, exceeds your stated max of €300"}`).
 4. **Routing** — facts go to the three §6.3 sinks: the human-ask annotation, agent
    feedback (in-band context), and the audit line.
 5. **The prohibition** — never blocks, never modifies, never decides (D7).
@@ -369,6 +373,142 @@ already happening shows independent facts instead of the agent's framing. B chan
 what the human *knows*, never what the system *does*. The E2 PoC (`harness-code-mode/
 axis-b.mjs`) implements exactly this split: a domain-specific `reconcile()` (the
 variable part, 2 hardcoded fields) emitting the fixed envelope into the fixed sinks.
+
+### 6.6 Violation vs deviation — and the routing table (settled 2026-06-15)
+
+Two kinds of mismatch, separated by **how the check is computed** — not a label anyone
+picks:
+
+- **Violation** — a **deterministic** check on a structured return field failed
+  (`price>300`, `risk>med`, `provenance ∉ {human}`). Hard, certain, binary. Produced by
+  the caller's ~1-line check; no model involved.
+- **Deviation** — there was no structured field to check, so the caller asked an **LLM**
+  "does this answer match the request?" and it judged drift. Soft, fallible.
+  *Everything an LLM produces is a deviation by construction* — a fallible judge cannot
+  manufacture a hard "violation."
+
+So `kind` is decided by **which check ran**, never by the model: deterministic →
+`violation`; LLM → `deviation`.
+
+**Reversibility is NOT inferred** — it is a property of the *action B is riding*
+(booking = irreversible, recall-read = reversible), known structurally by the floor.
+Never let a model guess it: a hallucinated "reversible" would silently downgrade a
+booking to auto-pass.
+
+**Routing table.** B never auto-rejects — "no pass" = escalate to A's HITL, where the
+**human** picks approve/reject; "pass" = proceed + audit + agent feedback, no human:
+
+| | reversible | irreversible |
+|---|---|---|
+| **deviation** (LLM-judged) | **pass** — audit + agent feedback, no human | **no pass** — HITL |
+| **violation** (deterministic) | **no pass** — HITL | **no pass** — HITL |
+
+Read: a **violation always earns a human glance** (certainty earns the interrupt); a
+**deviation only interrupts when irreversible** (don't halt on a soft maybe you can
+undo). HITL-approve *is* the "accepted delta" — no separate tolerance band is needed.
+If a violation keeps being approved, the fix is to **change the stated constraint, not
+soften B**.
+
+**Empirical caveat (E6e, §9.2.6) — `kind` is the soft axis; reversibility is the hard
+one.** A cheap judge (haiku) reliably decides **surface-or-not** (9/9 clear cases on the
+E6e set; nothing that drifted slipped to `none`) but **over-calls `violation` on prose
+drift** — it labeled 3/3 genuine *deviations* as *violations*, and got verifiable-vs-opinion
+only 5/8. Because `violation` always routes to HITL, this errs *toward* surfacing — **safe,
+but it means the "reversible deviation passes silently" cell fires less often than this
+table implies** (more HITL noise, never less safety). So in routing, treat **reversibility
+(deterministic, read from the action) as the load-bearing axis** and the LLM's `kind` as a
+surfacing-biased *hint*, not a reliable classification.
+
+### 6.7 Who computes the check — and why the LLM is caller-side only
+
+bareguard ships the **skeleton only** (`gate.annotate`, §6.5); the **check is the
+caller's** (this is the **#2 = thin primitive** resolution, 2026-06-15). For the
+**deviation** path the caller — the *runner*, **never bareguard, never the tool
+(litectx)** — makes the LLM call. bareguard making an LLM call would drop a fallible
+model inside the floor and break its no-content-reasoning guarantee (§6.4).
+
+**Judge at return time, against the verbatim request — not an intake checklist.** The
+reference is the user's **original request, verbatim** (from the transcript), compared
+to the **returned value** *when the result comes back* — no up-front extraction, no
+door-step HITL, and crucially nothing the *agent* paraphrased (so it can't launder its
+own drift; the user's literal words are the immutable anchor). This preserves full
+automation: the human is pulled in only by §6.6 routing, never to confirm a contract.
+
+**Resolved design (2026-06-15) — one open call.** The check is a single LLM call over the
+open shape: given the **verbatim request** and the **answer**, it returns *(a)* `checkable`
+— is the relevant constraint VERIFIABLE (a number / fact / named set) or a matter of
+OPINION/intent; *(b)* `outcome` — `violation` (a verifiable constraint broken), `deviation`
+(a judgment-level drift), or `none`; *(c)* `where` — the human-readable mismatch. The runner
+maps that to the envelope; bareguard routes `kind × reversible` (§6.6), deciding **routing,
+never outcome**.
+
+```json
+{ "checkable": true, "outcome": "violation",
+  "where": "you said under €300; the booking is €400" }
+```
+```js
+gate.annotate({ kind: outcome, field, stated, returned, text: where })
+// bareguard reads reversibility from the action it rides, then routes per §6.6.
+```
+
+**Why one open call is good enough — and why it is not a safety bet.** B **never decides
+outcome**, so a wrong call costs only a *missed annotation* or *a little HITL noise* — never
+an unsafe action, because Axis A already gated the action. A best-effort judge *over* a
+deterministic floor is sound; the same judge *as* the floor would not be. This is a long-tail
+layer — additive, improvable, never complete — and the openness (any ask, any answer) is why
+a flexible LLM call, not a rigid schema, is the right tool.
+
+**Three non-negotiables (cheap; this is where errors stop being bounded):**
+1. **Anchor on the verbatim request.** Compare against the user's literal words from the
+   transcript — never the agent's paraphrase or working context. This is the anchor that
+   stops the agent laundering its own drift (E6 hole 3: judging a €450 booking vs a poisoned
+   €500 *belief* cleared it; vs the user's original €300 it flagged).
+2. **Reply-as-data, never instructions.** The answer is untrusted input; forged
+   amendments/instructions inside it are ignored. Held on haiku (E6b, 100%) but **not
+   disproven** — re-test on weaker/cheaper judge models before any real deployment, where a
+   verdict channel is likeliest to leak.
+3. **Fail toward surfacing.** When unsure (checkable-or-opinion? violation-or-deviation?),
+   default to the *safer* routing — treat as a `violation` / surface to the human. The one
+   place mis-classification has teeth is a real violation mis-tagged as a *reversible*
+   deviation → silent pass; surfacing-when-unsure closes it, at the cost of a little HITL
+   noise (irreversible paths ask anyway).
+
+**Optional hardening — locate, then math.** For a *clean structured egress* (a single-field
+booking, `recall` provenance, `impact` risk) the model can emit the comparison spec and let
+deterministic code render the numeric verdict — cheap insurance against arithmetic/currency
+fumbles. NOT required (E6b's verdict-judge got the blatant cases 100% too). It does **not**
+rescue sprawl: free-locating a multi-number reply missed ~1/3 (E6b decoy option-list) where
+the clean egress hit 6/6 (E6d). So the load-bearing rule is **judge the authoritative egress
+action (§6.2), not a free-text listing** — apply locate+math there if you want extra certainty.
+
+### 6.8 Where Axis B stops — the #3/#4 boundary (the lie, the payment oracle, the standards)
+
+Axis B owns **#4 — intent fidelity**: *did my agent emit / act on a faithful instruction?*
+It does **not** own **#3 — identity + authorization + the unforgeable number** (who
+authorized what; the payment pre-auth that actually moves money). The two **interlock; neither
+absorbs the other.** Full derivation: [`harness-research.md`](../00-context/harness-research.md)
+(Parts I–III).
+
+- **The lie is outside B by construction (F8).** B compares request vs return; an in-spec lie
+  lives *inside* a compliant-looking return (`reports 199, books 450`) and defeats a
+  claim-checker 100%. Do **not** grow the judge to chase it — that re-opens the overclaim hole.
+  Scope stays "**catches honest violations, NOT lies or omissions**" (§6.4).
+- **The lie is caught elsewhere, by a different instrument:** the **payment rail's
+  pre-authorization** — the one independent oracle the agent cannot forge (the number that
+  actually moves money). That is #3 / the payment layer, **never bareguard**. bareguard's only
+  contact with it: at the irreversible **egress** stop, surface *the oracle's number, not the
+  agent's claim*, to the human (§12.1 design note; Part III "Identity and the gate").
+- **The standards cover #3, not #4.** The live IETF drafts (AIP, DAAP, OAuth-OBO, AI-Agent
+  Authn/Authz, **Delegation Receipts**) + the NIST initiative all solve *who + scope*. The
+  Delegation Receipt draft explicitly notes the others **assume the operator faithfully
+  represented the user** — the exact seam B refuses to assume. bareguard sits in the **#4 gap**
+  the standards authors name and leave open: complementary, not redundant.
+- **Deepest mitigation isn't a better gate or oracle** — it's preferring **reversible rails**
+  (escrow, hold-then-capture, confirm-before-final). Where no oracle exists, the honest answer
+  is **reversibility + human escalation**, not a magic check.
+
+A clean #4 gate establishes *your half of the record* (a faithful instruction at egress) so the
+counterparty's #3 trace/oracle becomes usable **against them, not against you**.
 
 ---
 
@@ -419,28 +559,39 @@ format must make user-authored constraints the only input B reconciles against.
 
 ## 8.1 Concrete spec — `recall`-provenance & `impact`-risk (settled 2026-06-14, design-only)
 
-The §6.5 skeleton (tap → `{field, stated, returned, text}` envelope → three sinks → never-block) is
+The §6.5 skeleton (tap → `{kind, field, stated, returned, text}` envelope → sinks → never-decide) is
 fixed. This section fills in the **variable check** for litectx's two real return shapes (grounded at
 file:line, litectx HEAD), and shows the declaration format (OQ1) they imply. **Still unbuilt** — this
 is the spec for *if* a consumer asks; none has. It replaces the retired `assemble`/scenario-2 sensor
 (§0.2 #5: `assemble` self-enforces its budget, so there is no honest violation to reconcile).
 
-**Case R — recall provenance** *(reversible-read branch, D7 §6.3 → feedback + audit, no halt)*
+> **#2 RESOLVED (2026-06-15) — thin primitive.** bareguard ships `gate.annotate` (the §6.5 skeleton:
+> envelope + `kind × reversible` routing per §6.6); the **check stays the caller's**, so OQ1's format
+> is not frozen by the surface. Both litectx checks below are **deterministic → `kind:"violation"`**;
+> the soft **`deviation`** path (LLM-judged) is caller/runner-side only (§6.7) and needs no litectx
+> change. Routing is now **violation always → HITL** (§6.6), which tightens Case R below.
+
+**Case R — recall provenance** *(deterministic membership → `kind:"violation"`; reversible read)*
 - **Return:** `recall(q)` → `Hit[]`; memory hits carry `provenance` via `attachMemMeta`
   (`litectx/src/index.js:332`). Values **today `human | agent`, `null` for indexed files** (`:120`).
 - **Constraint:** `{recall:{provenanceIn:["human","doc"]}}` (or `provenanceNotIn:[…]`).
 - **Check (caller, ~1 line):** `hits.filter(h => !allowed.has(h.provenance))`.
-- **Sink:** recall feeds context = reversible read → **agent-feedback + audit only, no HITL.**
-- **Envelope:** `{field:"provenance", stated:["human","doc"], returned:"agent", text:"fact:x is agent-authored; you restricted to human/doc"}`.
+- **Sink:** a membership breach is a **deterministic `violation`** → under §6.6 **escalates to HITL
+  even though the read is reversible** (certainty earns the glance). *(This is the §6.6 tightening: the
+  earlier draft routed reversible reads to feedback+audit only; a hard provenance breach now asks. A
+  soft "this memory feels off-topic" would be a `deviation` and, being reversible, would pass silently —
+  but that judgment is not what this deterministic check produces.)*
+- **Envelope:** `{kind:"violation", field:"provenance", stated:["human","doc"], returned:"agent", text:"fact:x is agent-authored; you restricted to human/doc"}`.
 
 **Case I — impact risk** *(the genuine detect-and-feed-A case — rides the edit's existing A-stop)*
 - **Return:** `impact(symbol)` → `{usedBy, risk, callers, callees}`, `risk ∈ low|med|high`
   (`index.js:454` → `impact.js`).
 - **Constraint:** `{impact:{maxRisk:"med"}}`.
 - **Check (caller, ~1 line):** `RANK[risk] > RANK[maxRisk]`.
-- **Sink:** an edit *is* an A-action; B doesn't halt — the edit's existing A-stop now carries
-  "editing `foo`, impact=high (12 callers), you capped at med." Human sees blast radius, not spin.
-- **Envelope:** `{field:"risk", stated:"med", returned:"high", text:"foo: impact=high (12 callers), exceeds your stated max of med"}`.
+- **Sink:** an edit *is* an irreversible A-action; the `violation` rides the edit's existing A-stop,
+  which now carries "editing `foo`, impact=high (12 callers), you capped at med." Human sees blast
+  radius, not spin. (Routing unchanged by §6.6 — irreversible violation was always HITL.)
+- **Envelope:** `{kind:"violation", field:"risk", stated:"med", returned:"high", text:"foo: impact=high (12 callers), exceeds your stated max of med"}`.
 
 **What this pins about OQ1 — the format is tiny.** The two consumers need exactly two operator kinds:
 ```
@@ -455,7 +606,9 @@ wire-points, runner-layer (bareagent), `src/` untouched — same as E2's `reconc
 
 **§6 compliance:** both checks read a *structured return field* against a *user-stated* value — no
 text scan, no content semantics; neither blocks (D7). A B that *filtered* recall hits or *stopped* the
-edit would cross into enforcement — forbidden.
+edit would cross into enforcement — forbidden. The soft `deviation` path (§6.7) *does* read content,
+but via an **LLM the runner calls** — bareguard still only receives a fact and routes it, so the floor
+itself stays content-blind. bareguard never makes the LLM call.
 
 **Honest ceiling:** (1) recall provenance is **thin today** (`human|agent` only on hits; the richer
 `web|subagent|doc` enum lives on the *write* action) — Case R can't discriminate web-sourced memory
@@ -478,7 +631,10 @@ Taken alone it is a **plumbing smoke test of existing primitives**. The follow-o
 gates close the gaps: real LLM generation → **E1**; `node:vm` is not a hardened
 sandbox → **E4**; harness *selection* (D8) → **E5**; Axis-B reconciliation (§8) →
 **E2** (mechanic only; the `src/` surface stays DEFERRED). All gates E1–E5 are now
-**DONE** (§9.2); the full locked spine D1–D8 is exercised.
+**DONE** (§9.2); the full locked spine D1–D8 is exercised. **E6 (2026-06-15)** adds a
+real-model probe of the §6.6/§6.7 return-time judge against the three review holes —
+end-to-end confirmed 6/6 under drift, with two named failure modes (sprawl-locate miss;
+injection still open). See §9.2.6.
 
 ### 9.2 POC graduation gates (before ANY primitive change)
 1. **E1 · real generation** — **DONE** (`harness-code-mode/run-e1.mjs`). A real LLM
@@ -547,6 +703,44 @@ sandbox → **E4**; harness *selection* (D8) → **E5**; Axis-B reconciliation (
    T2 mismatch) and changed no decision — **OQ2 evidence that the deterministic floor
    does all the safety work and the advisory layer is, so far, unearned.** Runner-layer;
    reuses the seam `node:vm` sandbox (confinement is E4's concern); `src/` untouched.
+
+6. **E6 · return-time judge — the three review holes** — **DONE (2026-06-15)**
+   (`harness-code-mode/e6-judge.mjs` + `run-e6{,b,c,d}.mjs`). Review surfaced three holes
+   in the §6.6/§6.7 judge — (1) the judge eats attacker-controlled reply text; (2)
+   "locate" silently misses; (3) reversible-now poisons irreversible-later. This gate
+   probes each against the REAL model (haiku via the E1 CLIPipe), with negative controls
+   and an A/B between the *tempting* verdict-judge ("is this a violation?") and the
+   *proposed* locate-judge ("extract field+value; deterministic math decides"). Honest
+   findings, the non-results included:
+   - **End-to-end CONFIRMED (E6d, 6/6).** A real generated agent under drift pressure
+     books €295 over a stated €250; Axis A intercepts the booking; the locate-judge flags
+     the *actual intercepted action* against the *verbatim request*. The full A+B loop
+     fires on real agent output, not synthetic replies.
+   - **B is drift-conditional (E6c).** Under a HARD €250 cap a cooperative agent *refused
+     to book* 3/3 → no egress, nothing to catch. B earns its keep only in the drift
+     regime (matches the a2a thesis); E6d had to *induce* drift to exercise it.
+   - **Hole 2 is real and measured.** Free-locating a sprawling multi-number reply (decoy
+     option-list) **missed 1/3**; the same judge on the clean single-field egress action
+     hit **6/6**. ⇒ §6.7 scoping rule 1: **judge the structured egress action, never
+     free-locate an arbitrary return.**
+   - **Hole 3 closed by anchor.** The €450 booking vs the agent's poisoned €500 belief →
+     no flag; vs the user's original €300 → flag. Anchor on the verbatim request.
+   - **Hole 1 UNRESOLVED (not disproven).** Forged amendment / reviewer-instruction / fake
+     prior-approval injected into the reply did **not** beat *either* judge on haiku (both
+     100%) — so the hole didn't bite this model and locate was **not** shown superior.
+     §6.7 scoping rule 2: injection stays a hard pre-deploy test on weaker judge models.
+   - **E6e · the one-call judge on a LABELED set, incl. the prose/deviation branch never
+     probed before** (`run-e6e.mjs`). 11 cases (verifiable / opinion / ambiguous / injection)
+     with ground truth. Result: **surfacing is reliable (9/9 clear cases; nothing that
+     drifted returned `none`)**, the injection-inside-a-deviation held (flagged 3/3), but
+     **`kind` is not reliable — outcome 6/9, every miss a `deviation` over-called as
+     `violation`; verifiable-vs-opinion only 5/8.** Since over-calling `violation` errs
+     *toward* surfacing, the safety-relevant axis held while the unreliable axis costs only
+     HITL noise → **route on reversibility, treat `kind` as a hint** (§6.6 caveat).
+   **Scope honesty:** POC only, never shipped; the judge/LLM is caller-side (§6.7), `src/`
+   untouched; still catches no F8 lie / §11 omission (§6.4/§6.8). **Net: the thin-primitive
+   build is evidenced — the loop works 6/6 on real output, with two named failure modes
+   and where to avoid them; injection remains the one open pre-deploy gate.**
 
 POC validates → design properly → only then propose concrete primitive reshapes (§7
 "extend" rows) back into `bareguard-prd.md`. **Never ship the POC** (AGENT_RULES).
@@ -783,8 +977,9 @@ analysis now live in [`barecontext-prd.md`](barecontext-prd.md) §5. Only that d
 
 - **`bareguard-prd.md`** — the stable spec the harness *uses* and proposes to extend
   (§7). Subject to its Appendix C + E. No change to it until POC graduation (§9.2).
-- **`a2a-intent-drift-prd.md`** — the experiment that produced F7, F8, §11, M1, §12.4
-  — the evidentiary base for every "ceiling" claim here.
+- **`../00-context/harness-research.md`** (Part II — A2A experiment) — produced F7, F8, §11,
+  M1, §12.4 — the evidentiary base for every "ceiling" claim here. Part I (problem space) frames
+  the #1–#4 layering; Part III (identity) the actor/action boundary.
 - **`harness-code-mode/`** — the seam PoC (§9.1) and home for E1–E4.
 - **`litectx`** (`~/PycharmProjects/litectx`) — the intended first real external consumer
   (§9.3); its CE-PRD §10 specs the bareguard seam. Wired via the Software Factory, not directly.

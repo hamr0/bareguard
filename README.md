@@ -30,7 +30,7 @@ bareguard is a runtime policy library every agent action passes through. One `Ga
 
 Same patterns as [bareagent](https://www.npmjs.com/package/bare-agent), [barebrowse](https://www.npmjs.com/package/barebrowse), and [baremobile](https://www.npmjs.com/package/baremobile) — embed it, don't run it. No daemon, no SaaS, no telemetry.
 
-It owns exactly one layer. Not a content guardrail (use `guardrails-ai` for toxicity / PII / schema). Not a sandbox (Docker / gVisor for containment). Not authn (caller's concern — see [Identity and the gate](docs/02-features/identity-and-the-gate.md)). The five-layer split: system prompt → guardrails-ai → **bareguard** → sandbox → OS perms.
+It owns exactly one layer. Not a content guardrail (use `guardrails-ai` for toxicity / PII / schema). Not a sandbox (Docker / gVisor for containment). Not authn (caller's concern — see [Identity and the gate](docs/00-context/harness-research.md#identity-and-the-gate) — Part III of the harness research). The five-layer split: system prompt → guardrails-ai → **bareguard** → sandbox → OS perms.
 
 ## Install
 
@@ -109,7 +109,7 @@ Every primitive is one file (~30–180 LOC). The gate evaluates them in a fixed 
 | **[Usage Guide](docs/02-features/usage-guide.md)** | Eval order, common gotchas, and 8 deployment recipes. |
 | **[Harness cookbook](docs/02-features/harness-cookbook.md)** | Vetted capability bundles — tighten-only presets over one floor. |
 | **[PRD](docs/01-product/bareguard-prd.md)** | Unified design spec + future-feature candidates. |
-| **[Identity and the gate](docs/02-features/identity-and-the-gate.md)** | Why auth is upstream; per-principal policy via `_ctx`. |
+| **[Harness research](docs/00-context/harness-research.md)** | Problem space, the A2A intent-drift experiment, and identity/the gate (auth is upstream; per-principal policy via `_ctx`) — three merged. |
 | **[NO-GO list](docs/04-process/non-roadmap.md)** | What bareguard deliberately won't do. |
 | **[Decisions log](docs/04-process/decisions-log.md)** · **[CHANGELOG](CHANGELOG.md)** | Design calls and release history. |
 

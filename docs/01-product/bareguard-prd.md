@@ -960,7 +960,7 @@ sibling library").
 - *Origin / relation:* prompted by [bindu](https://github.com/GetBindu/bindu)'s
   Ed25519-signed A2A records, but this is integrity of bareguard's **own log**, not
   agent authentication — bareguard authorizes the action, not the actor. See
-  [identity-and-the-gate.md](../02-features/identity-and-the-gate.md).
+  [harness-research.md, Part III "Identity and the gate"](../00-context/harness-research.md#identity-and-the-gate).
 
 **Budget: generalized cumulative dimensions + soft/hard split (IMPLEMENTED 2026-06-14;
 PROPOSED 2026-06-09; harness-prd OQ3).** Two additive extensions to the shipped `Budget`, *not* a rewrite:

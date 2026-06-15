@@ -15,7 +15,7 @@ bareguard is a runtime policy library every agent action passes through. One
 | [Harness PRD](01-product/harness-prd.md) | The floor+harness / Axis-A-B design (living). §0.1 = at-a-glance build state: Axis A built & released, Axis B (OQ1) deferred. POC gates E1–E5; gate-zero seam contract test (`test/seam-contract.test.js`). |
 | [barecontext PRD](01-product/barecontext-prd.md) | SEED / NOT-NOW — the context-economy axis (future bare-suite sibling) and the bareguard↔barecontext sorting rule, parked so it never bloats the gate. |
 | [litectx PRD](01-product/litectx-prd.md) | DRAFT — the lite code-aware memory engine (recall + impact) realizing the barecontext axis; bareguard's intended first external consumer. Graduates to its own repo. |
-| [Identity and the gate](02-features/identity-and-the-gate.md) | Where agent identity / auth sits relative to bareguard (upstream), and how to policy per-principal via `_ctx` without auth code in the gate. |
+| [Harness research](00-context/harness-research.md) | Three merged research/context docs: **Part I** the agentic-web problem space (#1–#4 layering, egress gate, IETF/standards landscape); **Part II** the A2A intent-drift experiment (F7/F8, corrected thesis); **Part III** identity and the gate (auth is upstream — bareguard authorizes the *action*, not the *actor*; per-principal policy via `_ctx`). |
 | [NO-GO list](04-process/non-roadmap.md) | What bareguard will deliberately never do, and why. Read before proposing a new primitive. |
 | [Decisions log](04-process/decisions-log.md) | Design calls resolved across versions. |
 | [CHANGELOG](../CHANGELOG.md) | Release-by-release diff. |
