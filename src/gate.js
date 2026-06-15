@@ -87,7 +87,8 @@ export function routeAnnotation(surface, reversible, knob = "strict") {
 /**
  * Bound an annotation `meta` object so an annotate audit line can't exceed the
  * audit's atomic-append cap. Non-objects → null; oversized / unserializable →
- * a small marker (the live value the caller passed is still theirs to keep).
+ * a small marker that replaces it everywhere downstream (buffer / event / drain).
+ * The caller still holds their own original object reference.
  * @param {*} meta
  * @returns {object|null}
  */
@@ -389,6 +390,10 @@ export class Gate {
         const axisB = this.cfg.axisB ?? {};
         const knob = axisB.reversibleEscalation === "relaxed" ? "relaxed" : "strict";
         const reversible = Array.isArray(axisB.reversible) && axisB.reversible.includes(action?.type);
+        // check() only needs log-vs-not: a surfacing fact attaches unless the knob
+        // routed it to log-only. routeAnnotation's richer return (pass / annotate-
+        // floor-ask / HITL) is for callers wiring their own Axis-B sink via the
+        // exported fn; here every not-`log` surfacing fact rides this ask.
         const surfacing = this._annotations.filter(
           (a) => a.surface && routeAnnotation(a.surface, reversible, knob) !== "log",
         );

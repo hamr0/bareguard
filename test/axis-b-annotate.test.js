@@ -5,8 +5,9 @@
 // tests; each is mutation-verified to fail when the routing/wiring breaks.
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { Gate, routeAnnotation } from "../src/index.js";
-import { makeHumanChannel } from "./_helpers.js";
+import { makeHumanChannel, makeTmpDir, cleanup, uniquePaths } from "./_helpers.js";
 
 // pure-allow content (disable shipped safe-default patterns) + a structured flag
 // to raise a CONTROLLED ask, so we observe only Axis-B behavior.
@@ -155,6 +156,26 @@ test("annotate bounds oversized verdict/where/meta (audit line stays under PIPE_
   assert.equal(fact.meta._truncated, true, "oversized meta replaced with a marker");
   const line = (await gate.audit.readAll()).find((l) => l.phase === "annotate");
   assert.ok(Buffer.byteLength(JSON.stringify(line), "utf8") < 3500, "annotate audit line under the atomic-append cap");
+});
+
+// Security: redaction EXPANDS matches; the persisted line must stay atomic anyway.
+// (Uses a real file — fileless mode skips truncation by design — and an expanding
+// redactor: each /a/ match becomes a ~22-byte [REDACTED:...] tag.)
+test("annotate audit line stays atomic when redaction expands where/meta (file path)", async () => {
+  const dir = await makeTmpDir();
+  try {
+    const { auditPath } = uniquePaths(dir);
+    const gate = new Gate({ audit: { path: auditPath }, secrets: { patterns: [/a/] } });
+    await gate.init();
+    await gate.annotate({ surface: true, where: "a".repeat(300), meta: { k: "a".repeat(300) } });
+    const raw = await readFile(auditPath, "utf8");
+    for (const l of raw.split("\n").filter(Boolean)) {
+      const bytes = Buffer.byteLength(l + "\n", "utf8");
+      assert.ok(bytes <= 3500, `audit line must stay under the atomic-append cap; got ${bytes} bytes`);
+    }
+  } finally {
+    await cleanup(dir);
+  }
 });
 
 // honored facts (surface=false) never reach the human, even on an ask.

@@ -130,6 +130,17 @@ export class Audit {
           }
         }
       }
+      // Axis-B annotate lines carry `where`/`meta`. They are size-bounded at the
+      // source (gate.annotate), but redaction runs AFTER that bound and can EXPAND
+      // a field ([REDACTED:...] per match), so re-bound them here like result —
+      // otherwise the atomicity guarantee leaks for secret-heavy reply text.
+      if (typeof truncated.where === "string" && Buffer.byteLength(truncated.where, "utf8") > 200) {
+        truncated.where = truncated.where.slice(0, 200) + "[TRUNCATED]";
+      }
+      if (truncated.meta != null && typeof truncated.meta === "object") {
+        const bytes = Buffer.byteLength(JSON.stringify(truncated.meta), "utf8");
+        if (bytes > 200) truncated.meta = { _truncated: true, bytes };
+      }
       serialized = JSON.stringify(truncated) + "\n";
     }
     if (NEEDS_LOCK) {
