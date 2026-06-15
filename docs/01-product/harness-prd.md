@@ -171,7 +171,7 @@ re-author, plus a return-boundary detector that makes F7's invisible loss visibl
 | D4 | **Refusal = structured in-band error**, same envelope as a normal return, doubles as agent feedback. `deny` → agent + audit (no live human). `ask` → live human; agent gets the error only on refusal. | **LOCKED** |
 | D5 | **Two-tier floor.** Aggregate/closed (cumulative limits + closed allowlist) = the real wall. Per-action regex = HITL *trigger* only (decomposable → never a security boundary alone). Quantitative things go cumulative. | **LOCKED** |
 | D6 | **Closed allowlist:** deny-by-default, tuneable-to-loosen (never the reverse), fail-closed, safe defaults. | **LOCKED** |
-| D7 | **Axis B = detect-and-feed-A, never blocks alone.** Annotates A's stop with independent facts; B changes *what the human sees*, not *whether* you stop. **Routing (§6.6): a deterministic `violation` always escalates to HITL; an LLM-judged `deviation` escalates only when irreversible, else passes to feedback + audit. "No pass" = escalate to A's HITL, never auto-reject. The LLM is caller-side only (§6.7).** | **LOCKED** |
+| D7 | **Axis B = detect-and-feed-A, never blocks alone.** Annotates A's stop with independent facts; B changes *what the human sees*, not *whether* you stop. **Routing (§6.6, collapsed 2026-06-15): the judge returns surface-confidence (`clear-problem`/`unsure`/`clear-ok`), NOT violation/deviation (E6e showed `kind` unreliable). bareguard routes surface-vs-pass × reversibility: irreversible → the floor's HITL (B annotates); reversible → the escalation knob (strict default = surface anything not-clearly-OK). B never auto-rejects; the LLM is caller-side only (§6.7).** | **LOCKED** |
 | D8 | **Harness selection** is the agent's *proposal*, made at runtime, always (no ungoverned path). A probabilistic match-validator may *advise*; it is never the floor. | **PoC-VALIDATED (E5)** — mechanism shown; the *advisory* layer earns nothing yet (OQ2). Lives in the runner, not bareguard. |
 
 ---
@@ -311,12 +311,12 @@ drifted data), there is no A-stop to ride into. B's finding can go to two sinks:
 1. **agent feedback** (in-band) → agent re-plans, and
 2. **audit trail** → reconstructable later.
 
-Whether B *also* escalates to a human on a reversible path depends on the **kind** of
-mismatch — see §6.6. The short version: a soft, LLM-judged **deviation** that is
-reversible passes silently to the two sinks above (interrupting on every reversible
-maybe is noise, and violates D2's "reversible → HITL optional"); a hard, deterministic
-**violation** always escalates to A's HITL, reversible or not (certainty earns the
-glance). **B always surfaces; B never auto-rejects — worst case it escalates to A's
+Whether B *also* escalates to a human on a reversible path is set by the **reversible-
+escalation knob** (§6.6, default **strict**) — *not* by classifying the mismatch's kind
+(E6e showed that unreliable). `strict` surfaces anything not-clearly-OK to A's HITL;
+`relaxed` sends it to the two sinks above only (no interrupt — D2's "reversible → HITL
+optional", for high-volume undoable reads); `tuned` splits on the judge's confidence.
+**B always surfaces *somewhere*; B never auto-rejects — worst case it escalates to A's
 HITL, where the human decides.** B has *no enforcement logic of its own*.
 
 ### 6.4 Hard ceiling — do NOT overclaim (bounds the whole PRD)
@@ -374,50 +374,68 @@ what the human *knows*, never what the system *does*. The E2 PoC (`harness-code-
 axis-b.mjs`) implements exactly this split: a domain-specific `reconcile()` (the
 variable part, 2 hardcoded fields) emitting the fixed envelope into the fixed sinks.
 
-### 6.6 Violation vs deviation — and the routing table (settled 2026-06-15)
+### 6.6 The routing model — surface-vs-pass × reversibility (collapsed 2026-06-15)
 
-Two kinds of mismatch, separated by **how the check is computed** — not a label anyone
-picks:
+**Why this superseded the earlier violation/deviation table.** The first design routed on
+`kind` (a *deterministic violation* vs an *LLM-judged deviation*). **E6e (§9.2.6) measured
+that axis as unreliable** — a cheap judge (haiku) decides **surface-or-not** reliably (9/9
+clear cases; nothing that drifted slipped to `none`) but **cannot reliably tell violation
+from deviation** (6/9; it over-called `violation` on every prose drift; verifiable-vs-opinion
+only 5/8). And `kind` only ever governed *one* cell anyway (reversible + flagged → interrupt
+vs stay quiet). So we **drop `kind` from routing** and key only on the two *reliable* signals:
 
-- **Violation** — a **deterministic** check on a structured return field failed
-  (`price>300`, `risk>med`, `provenance ∉ {human}`). Hard, certain, binary. Produced by
-  the caller's ~1-line check; no model involved.
-- **Deviation** — there was no structured field to check, so the caller asked an **LLM**
-  "does this answer match the request?" and it judged drift. Soft, fallible.
-  *Everything an LLM produces is a deviation by construction* — a fallible judge cannot
-  manufacture a hard "violation."
+- **Surface-confidence** — the judge returns `clear-problem` / `unsure` / `clear-ok`
+  (E6e-reliable). This collapses to **surface vs pass**, with `unsure` an explicit bucket.
+- **Reversibility** — a property of the *action B is riding* (booking = irreversible,
+  recall-read = reversible), **read structurally from the floor, never inferred by the
+  model** (a hallucinated "reversible" would silently downgrade a booking to auto-pass).
 
-So `kind` is decided by **which check ran**, never by the model: deterministic →
-`violation`; LLM → `deviation`.
+`kind` (violation/deviation, verifiable/opinion) survives **only as descriptive text** in
+`where` for the human to read — never as a routing input.
 
-**Reversibility is NOT inferred** — it is a property of the *action B is riding*
-(booking = irreversible, recall-read = reversible), known structurally by the floor.
-Never let a model guess it: a hallucinated "reversible" would silently downgrade a
-booking to auto-pass.
+**Routing.** Terms: **pass** = proceed, audit only; **log** = proceed + audit + agent
+feedback, no human; **HITL** = a human sees it. B never auto-rejects.
 
-**Routing table.** B never auto-rejects — "no pass" = escalate to A's HITL, where the
-**human** picks approve/reject; "pass" = proceed + audit + agent feedback, no human:
-
-| | reversible | irreversible |
+| judge ↓ \ action → | **reversible** (floor doesn't stop) | **irreversible** (floor asks anyway) |
 |---|---|---|
-| **deviation** (LLM-judged) | **pass** — audit + agent feedback, no human | **no pass** — HITL |
-| **violation** (deterministic) | **no pass** — HITL | **no pass** — HITL |
+| **clear-problem** | escalate per knob | **HITL** — B annotates the floor's ask |
+| **unsure**        | escalate per knob | **HITL** — B annotates the floor's ask |
+| **clear-ok**      | pass (audit only) | **HITL (floor)** — B annotates nothing |
 
-Read: a **violation always earns a human glance** (certainty earns the interrupt); a
-**deviation only interrupts when irreversible** (don't halt on a soft maybe you can
-undo). HITL-approve *is* the "accepted delta" — no separate tolerance band is needed.
-If a violation keeps being approved, the fix is to **change the stated constraint, not
-soften B**.
+Two things to read off it:
+1. **The irreversible column is uniform HITL — and not because of B.** Axis A stops every
+   irreversible action regardless; B's only move there is whether to *attach a fact*. B never
+   *causes* an irreversible interrupt; it makes the one already happening **informed**.
+2. **All of B's actual routing lives in the reversible column** — the only place B decides
+   whether a human is pulled in for something the floor would let through.
 
-**Empirical caveat (E6e, §9.2.6) — `kind` is the soft axis; reversibility is the hard
-one.** A cheap judge (haiku) reliably decides **surface-or-not** (9/9 clear cases on the
-E6e set; nothing that drifted slipped to `none`) but **over-calls `violation` on prose
-drift** — it labeled 3/3 genuine *deviations* as *violations*, and got verifiable-vs-opinion
-only 5/8. Because `violation` always routes to HITL, this errs *toward* surfacing — **safe,
-but it means the "reversible deviation passes silently" cell fires less often than this
-table implies** (more HITL noise, never less safety). So in routing, treat **reversibility
-(deterministic, read from the action) as the load-bearing axis** and the LLM's `kind` as a
-surfacing-biased *hint*, not a reliable classification.
+**The reversible-escalation knob (the one tuning control; default strict).** Because the
+judge over-flags `clear-problem` (E6e), the noise on a reversible-heavy flow comes from the
+whole flagged set, not just `unsure` — so the knob governs the **entire reversible column**:
+
+| knob | reversible `clear-problem` | reversible `unsure` |
+|---|---|---|
+| **strict** (safe default) | HITL | HITL |
+| **tuned** | HITL | log+feed |
+| **relaxed** | log+feed | log+feed |
+
+`strict` surfaces anything not-clearly-OK (the §6.3 "reversible → HITL optional" line, dialed
+to *on*); `relaxed` is that line dialed to *off* (never interrupt for an undoable action —
+right for high-volume reads like `recall`); `tuned` splits the difference. **This knob is
+purely a noise / attention-budget control, never a safety one** — the floor + reversibility
+own safety, B owns informedness — which is exactly why it is safe to set per-case. HITL-approve
+*is* the "accepted delta"; if the same flag keeps being approved, fix the **stated
+constraint**, not B.
+
+**E6f caveat (§9.2.7) — `unsure` is rarely emitted; the knob is the real control; keep the
+judge prompt neutral.** Measured: the judge commits to `clear-problem`/`clear-ok` and emits
+`unsure` **~never (0/6 on ambiguous asks)** — so in practice this is **binary surface vs
+`clear-ok`**, the `unsure` row a harmless never-taken path. And the surfacing bias must live in
+the **knob, not the judge prompt**: a prompt told to "prefer not-OK when in doubt"
+**false-flagged a clearly-compliant €280** (E6f) where a neutral prompt cleared it (E6e). So
+**calibrate the judge neutrally** (did the answer honor the request?) and let the knob carry
+aggressiveness — detection stays calibrated, policy stays in the knob. Surface accuracy on
+real drift held 6/7 (the one miss a false-positive — noise, the safe direction).
 
 ### 6.7 Who computes the check — and why the LLM is caller-side only
 
@@ -434,21 +452,21 @@ door-step HITL, and crucially nothing the *agent* paraphrased (so it can't laund
 own drift; the user's literal words are the immutable anchor). This preserves full
 automation: the human is pulled in only by §6.6 routing, never to confirm a contract.
 
-**Resolved design (2026-06-15) — one open call.** The check is a single LLM call over the
-open shape: given the **verbatim request** and the **answer**, it returns *(a)* `checkable`
-— is the relevant constraint VERIFIABLE (a number / fact / named set) or a matter of
-OPINION/intent; *(b)* `outcome` — `violation` (a verifiable constraint broken), `deviation`
-(a judgment-level drift), or `none`; *(c)* `where` — the human-readable mismatch. The runner
-maps that to the envelope; bareguard routes `kind × reversible` (§6.6), deciding **routing,
-never outcome**.
+**Resolved design (2026-06-15, collapsed) — one open call.** The check is a single LLM call
+over the open shape: given the **verbatim request** and the **answer**, it returns *(a)*
+`confidence` — `clear-problem` / `unsure` / `clear-ok` (does the answer honor the request?);
+*(b)* `where` — the human-readable mismatch (the place the optional `kind`/`checkable`
+description lives, for the human to read). The runner maps `confidence` to surface-vs-pass;
+bareguard routes that **× reversibility** per §6.6, deciding **routing, never outcome**. The
+judge is **not** asked violation-vs-deviation — E6e showed that axis is unreliable (§6.6).
 
 ```json
-{ "checkable": true, "outcome": "violation",
+{ "confidence": "clear-problem",
   "where": "you said under €300; the booking is €400" }
 ```
 ```js
-gate.annotate({ kind: outcome, field, stated, returned, text: where })
-// bareguard reads reversibility from the action it rides, then routes per §6.6.
+gate.annotate({ surface: confidence !== "clear-ok", confidence, text: where })
+// bareguard reads reversibility from the action it rides, then routes per §6.6 + the knob.
 ```
 
 **Why one open call is good enough — and why it is not a safety bet.** B **never decides
@@ -465,13 +483,13 @@ a flexible LLM call, not a rigid schema, is the right tool.
    €500 *belief* cleared it; vs the user's original €300 it flagged).
 2. **Reply-as-data, never instructions.** The answer is untrusted input; forged
    amendments/instructions inside it are ignored. Held on haiku (E6b, 100%) but **not
-   disproven** — re-test on weaker/cheaper judge models before any real deployment, where a
-   verdict channel is likeliest to leak.
-3. **Fail toward surfacing.** When unsure (checkable-or-opinion? violation-or-deviation?),
-   default to the *safer* routing — treat as a `violation` / surface to the human. The one
-   place mis-classification has teeth is a real violation mis-tagged as a *reversible*
-   deviation → silent pass; surfacing-when-unsure closes it, at the cost of a little HITL
-   noise (irreversible paths ask anyway).
+   disproven** — re-test on weaker/cheaper judge models before any real deployment.
+3. **Fail toward surfacing — in the knob, not the judge prompt.** Safe-by-default surfacing
+   comes from (a) the judge reliably catching real drift + (b) the reversible-escalation knob
+   defaulting to **strict** (§6.6). Do **not** bias the *judge prompt* toward "not-OK" — E6f
+   showed that false-flags clean cases (a compliant €280 surfaced) for zero safety gain. Keep
+   the judge **calibrated** (honors-the-request? — `clear-ok` vs `clear-problem`; `unsure` is
+   accepted but emitted ~never, so don't design around it); the knob carries the aggressiveness.
 
 **Optional hardening — locate, then math.** For a *clean structured egress* (a single-field
 booking, `recall` provenance, `impact` risk) the model can emit the comparison spec and let
@@ -737,6 +755,14 @@ injection still open). See §9.2.6.
      `violation`; verifiable-vs-opinion only 5/8.** Since over-calling `violation` errs
      *toward* surfacing, the safety-relevant axis held while the unreliable axis costs only
      HITL noise → **route on reversibility, treat `kind` as a hint** (§6.6 caveat).
+   - **E6f · the collapsed confidence framing** (`run-e6f.mjs`). Judge returns only
+     `clear-problem`/`unsure`/`clear-ok`; routing is the pure `confidence × reversible × knob`
+     function (no LLM in the routing path). **Surface accuracy held 6/7** — every real drift
+     caught, injection held; the one miss a *false-positive* (a surfacing-biased prompt flagged
+     a compliant €280 — safe direction = noise). **`unsure` emitted 0/6** on ambiguous asks
+     (the model commits to problem/ok), so the bucket is effectively dead and the **knob** is
+     the real noise control. Two design corrections recorded (§6.6/§6.7): don't rely on
+     `unsure`; keep the judge prompt **neutral** and put surfacing aggressiveness in the knob.
    **Scope honesty:** POC only, never shipped; the judge/LLM is caller-side (§6.7), `src/`
    untouched; still catches no F8 lie / §11 omission (§6.4/§6.8). **Net: the thin-primitive
    build is evidenced — the loop works 6/6 on real output, with two named failure modes
