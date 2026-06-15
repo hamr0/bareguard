@@ -256,6 +256,7 @@ import {
   BudgetUnavailableError,         // thrown on lock failure / corrupt budget file
   SAFE_DEFAULT_DENY_PATTERNS,     // exposed in case you want to extend
   SAFE_DEFAULT_ASK_PATTERNS,      // exposed in case you want to extend
+  routeAnnotation,                // pure Axis-B routing fn (surface × reversible × knob)
   globToRegex, matchAny,          // glob helpers (v0.1: `*` only)
 } from "bareguard";
 
@@ -272,6 +273,8 @@ await gate.check(action);                         // returns { outcome, severity
 await gate.allows(action);                        // pure boolean — no audit, no budget delta
 await gate.record(action, result);                // updates budget + emits record audit line
 await gate.run(action, executor);                 // check + execute + record (one call)
+await gate.annotate(fact);                         // Axis B: buffer a return-time judge fact (rides the next ask)
+gate.drainAnnotations();                           // SYNC — return + clear buffered facts (agent feedback)
 await gate.terminate(reason);                     // sticky terminate
 await gate.raiseCap(dimension, newCap);           // explicit cap raise (separate from humanChannel topup)
 await gate.haltContext();                         // deterministic stats over audit log
@@ -560,6 +563,33 @@ const gate = new Gate({
 ```
 
 The wrapper caches `allow` returns (deny / halt / topup / terminate always bypass) keyed by the action shape minus `_ctx`, and tags the cached return's `reason` so `phase: "approval"` audit lines still show every cached and fresh decision. **Why this is a recipe and not a primitive:** "same action" has no universal definition — same args? same arg shape? same session? what TTL? — and the gate would have to pick one. PRD §17 records this as a NO-GO. Full body in [README Recipe 8](README.md#8-sticky-approvals--humanchannel-wrapper).
+
+### Recipe 11: Axis B — surface a return-time judge fact on the next approval
+
+The primitives gate the **action**; `gate.annotate` carries a fact about the **result** — did it honor the user's request? You compute the fact (a deterministic check, or a caller-side LLM judge returning a decisive `honored`/`broke` — bareguard never runs the LLM). bareguard buffers it, audits it, and lets it ride the next human ask so the approver sees independent facts, not the agent's spin. It never blocks alone.
+
+```javascript
+const gate = new Gate({
+  flags: { needsReview: { yes: "ask" } },
+  // operator declares which action TYPES are undoable — read off the gated action,
+  // never the fact / agent / model (a hallucinated "reversible" must not auto-pass):
+  axisB: { reversibleEscalation: "strict", reversible: ["recall", "search"] },
+  humanChannel: async (event) => {
+    if (event.annotations) for (const a of event.annotations) console.log("⚠", a.where);
+    return { decision: "allow" };
+  },
+});
+await gate.init();
+
+// your caller-side judge over (verbatim request, returned value) → honored | broke:
+const verdict = await myJudge(userRequest, toolResult);          // "honored" | "broke"
+await gate.annotate({ surface: verdict !== "honored", verdict, where: "you said under €300; the booking is €400" });
+
+await gate.check({ type: "book", needsReview: "yes" });          // the buffered fact rides this ask
+const facts = gate.drainAnnotations();                            // and/or feed back to the agent each turn
+```
+
+Routing is `routeAnnotation(surface, reversible, knob)` (pure, exported): a `broke` fact on an irreversible action — or on a reversible one under `strict` — rides the ask; under `relaxed` a reversible `broke` goes to audit + agent-feedback only. The knob is pure noise control, never safety. **Why the judge is caller-side:** bareguard putting an LLM inside the floor would drop a fallible model into the decision path; keep the model out — bareguard only buffers, routes, and sinks the fact you computed.
 
 ## See also
 

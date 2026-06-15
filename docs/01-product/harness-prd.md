@@ -57,7 +57,7 @@ The PRD describes a design; most of it already ships. Map of every surface to it
 |---|---|---|
 | **Axis A** | gate the action by shape — the floor: `Gate` (deny/ask + closed allowlist), cumulative `Budget`, `audit`, `redact` | **BUILT & RELEASED — bareguard 0.6.0 (npm).** Axis A is not a thing to build; it *is* the shipped library. The harness POC (E1/E3/E4/E5, §9.2) proved these existing primitives *compose* into the harness pattern with `src/` untouched. |
 | **Write-gate seam / `flags`** | structured field-value gate for a memory adopter's verdict (`provenance`/`injectionRisk`) — the litectx write-gate seam (§5B) | **BUILT & SEAM CLOSED (2026-06-13/14).** First `src/` change since the HOLD: the `flags` primitive (deny@2b / ask@4b, floor supremacy). `seam-contract.test.js` now runs against litectx's real published emitter (`litectx@^0.13.0` devDependency). Additive/backward-compatible; HOLD at 0.5.x unaffected. Seam live, regression-guarded every release — nothing further owed on it. |
-| **Axis B** | reconcile the return vs a per-request declared constraint | **DESIGN-COMPLETE, BUILD-PENDING — the only genuinely-new bareguard surface (§8). #2 resolved = thin primitive `gate.annotate` (§6.7); routing §6.6; boundary §6.8.** E2 proved the runner mechanic; **E6 (§9.2.6) validated the return-time judge end-to-end 6/6 on real agent output** under drift, with two named failure modes (sprawl-locate miss; injection still an open pre-deploy gate). OQ1 (the operator set) freezes on the first real consumer. The `src/` surface is still unbuilt. |
+| **Axis B** | reconcile the return vs a per-request declared constraint | **BUILT 2026-06-15 (Unreleased) — the only genuinely-new bareguard surface (§8). #2 resolved = thin primitive `gate.annotate` (§8.2); routing §6.6; boundary §6.8.** E2 proved the runner mechanic; **E6 (§9.2.6) validated the return-time judge end-to-end** under drift (decisive `honored`/`broke`, E6i 7/7). `gate.annotate` ships buffer + route + sinks in `src/` (8 tests, mutation-verified, suite 175); the judge stays caller-side, bareguard never runs an LLM. OQ1 (the operator set) freezes on the first real consumer; injection on a sub-haiku model is the one deferred pre-deploy gate. |
 | **OQ3** | generalize `Budget`'s cumulative count to sends/rows/bytes + soft/hard tiers | **BUILT 2026-06-14 (Unreleased).** `budget.resources` cap-map (halt `budget.resource.<name>`, accrued from `result.counts`) + `budget.softRatio` non-blocking `budget_warn`; v2 file w/ v1 read-compat. Operator is the adopter. `bareguard-prd.md` §19 status → IMPLEMENTED. |
 | **OQ4** | audit shape: log request + return together | **EXTENSION, demand-gated (§10). PROPOSED into `bareguard-prd.md` §19 (2026-06-09)** — gate/record lines share no per-action id; content-join goes ambiguous under repetition. |
 | **SF-9** | destructive-action classifier for the Software Factory's Ship gate | **A Factory-driven Axis-A *config* (a `shape → ask` rule), not a new axis.** Built when the Factory needs it (§9.3.0). |
@@ -171,7 +171,7 @@ re-author, plus a return-boundary detector that makes F7's invisible loss visibl
 | D4 | **Refusal = structured in-band error**, same envelope as a normal return, doubles as agent feedback. `deny` → agent + audit (no live human). `ask` → live human; agent gets the error only on refusal. | **LOCKED** |
 | D5 | **Two-tier floor.** Aggregate/closed (cumulative limits + closed allowlist) = the real wall. Per-action regex = HITL *trigger* only (decomposable → never a security boundary alone). Quantitative things go cumulative. | **LOCKED** |
 | D6 | **Closed allowlist:** deny-by-default, tuneable-to-loosen (never the reverse), fail-closed, safe defaults. | **LOCKED** |
-| D7 | **Axis B = detect-and-feed-A, never blocks alone.** Annotates A's stop with independent facts; B changes *what the human sees*, not *whether* you stop. **Routing (§6.6, collapsed 2026-06-15): the judge returns surface-confidence (`clear-problem`/`unsure`/`clear-ok`), NOT violation/deviation (E6e showed `kind` unreliable). bareguard routes surface-vs-pass × reversibility: irreversible → the floor's HITL (B annotates); reversible → the escalation knob (strict default = surface anything not-clearly-OK). B never auto-rejects; the LLM is caller-side only (§6.7).** | **LOCKED** |
+| D7 | **Axis B = detect-and-feed-A, never blocks alone.** Annotates A's stop with independent facts; B changes *what the human sees*, not *whether* you stop. **Routing (§6.6, decisive 2026-06-15): the judge returns a decisive verdict (`honored`/`broke`), NOT a confidence scale (E6g showed the confidence framing hedges clean cases — a compliant €280 drew `unsure` and surfaced) and NOT violation/deviation (E6e showed `kind` unreliable). bareguard routes surface-vs-pass × reversibility: irreversible → the floor's HITL (B annotates); reversible → the escalation knob (strict default = surface anything not `honored`). B never auto-rejects; the LLM is caller-side only (§6.7).** | **LOCKED** |
 | D8 | **Harness selection** is the agent's *proposal*, made at runtime, always (no ungoverned path). A probabilistic match-validator may *advise*; it is never the floor. | **PoC-VALIDATED (E5)** — mechanism shown; the *advisory* layer earns nothing yet (OQ2). Lives in the runner, not bareguard. |
 
 ---
@@ -313,9 +313,10 @@ drifted data), there is no A-stop to ride into. B's finding can go to two sinks:
 
 Whether B *also* escalates to a human on a reversible path is set by the **reversible-
 escalation knob** (§6.6, default **strict**) — *not* by classifying the mismatch's kind
-(E6e showed that unreliable). `strict` surfaces anything not-clearly-OK to A's HITL;
+(E6e showed that unreliable). `strict` surfaces anything not `honored` to A's HITL;
 `relaxed` sends it to the two sinks above only (no interrupt — D2's "reversible → HITL
-optional", for high-volume undoable reads); `tuned` splits on the judge's confidence.
+optional", for high-volume undoable reads). (The knob is binary: the decisive `honored`/
+`broke` verdict left the old `tuned` middle setting with nothing to split — §6.6.)
 **B always surfaces *somewhere*; B never auto-rejects — worst case it escalates to A's
 HITL, where the human decides.** B has *no enforcement logic of its own*.
 
@@ -374,7 +375,7 @@ what the human *knows*, never what the system *does*. The E2 PoC (`harness-code-
 axis-b.mjs`) implements exactly this split: a domain-specific `reconcile()` (the
 variable part, 2 hardcoded fields) emitting the fixed envelope into the fixed sinks.
 
-### 6.6 The routing model — surface-vs-pass × reversibility (collapsed 2026-06-15)
+### 6.6 The routing model — surface-vs-pass × reversibility (decisive 2026-06-15)
 
 **Why this superseded the earlier violation/deviation table.** The first design routed on
 `kind` (a *deterministic violation* vs an *LLM-judged deviation*). **E6e (§9.2.6) measured
@@ -384,8 +385,14 @@ from deviation** (6/9; it over-called `violation` on every prose drift; verifiab
 only 5/8). And `kind` only ever governed *one* cell anyway (reversible + flagged → interrupt
 vs stay quiet). So we **drop `kind` from routing** and key only on the two *reliable* signals:
 
-- **Surface-confidence** — the judge returns `clear-problem` / `unsure` / `clear-ok`
-  (E6e-reliable). This collapses to **surface vs pass**, with `unsure` an explicit bucket.
+- **A decisive verdict** — the judge returns `honored` / `broke` (binary, no confidence
+  scale). An intermediate framing (`clear-problem`/`unsure`/`clear-ok`) was tried and
+  **dropped: E6g (§9.2.6) showed the confidence framing *hedges* — a clearly-compliant €280
+  drew `unsure` and surfaced**; LLMs are weak at graded confidence, strong at decisive
+  categories. The decisive `honored`/`broke` ask (Aurora's matching-judge pattern) cleared
+  €280 to `honored` 5/5 while every real drift + the injection case still `broke` 5/5 (E6i).
+  `surface = (verdict !== "honored")`. The floor-raise lives in a **decisive tiebreak** — *if
+  you cannot confirm it was honored, return `broke`* — not in an `unsure` hedge bucket.
 - **Reversibility** — a property of the *action B is riding* (booking = irreversible,
   recall-read = reversible), **read structurally from the floor, never inferred by the
   model** (a hallucinated "reversible" would silently downgrade a booking to auto-pass).
@@ -398,9 +405,8 @@ feedback, no human; **HITL** = a human sees it. B never auto-rejects.
 
 | judge ↓ \ action → | **reversible** (floor doesn't stop) | **irreversible** (floor asks anyway) |
 |---|---|---|
-| **clear-problem** | escalate per knob | **HITL** — B annotates the floor's ask |
-| **unsure**        | escalate per knob | **HITL** — B annotates the floor's ask |
-| **clear-ok**      | pass (audit only) | **HITL (floor)** — B annotates nothing |
+| **broke**    | escalate per knob | **HITL** — B annotates the floor's ask |
+| **honored**  | pass (audit only) | **HITL (floor)** — B annotates nothing |
 
 Two things to read off it:
 1. **The irreversible column is uniform HITL — and not because of B.** Axis A stops every
@@ -409,33 +415,35 @@ Two things to read off it:
 2. **All of B's actual routing lives in the reversible column** — the only place B decides
    whether a human is pulled in for something the floor would let through.
 
-**The reversible-escalation knob (the one tuning control; default strict).** Because the
-judge over-flags `clear-problem` (E6e), the noise on a reversible-heavy flow comes from the
-whole flagged set, not just `unsure` — so the knob governs the **entire reversible column**:
+**The reversible-escalation knob (the one tuning control; default strict).** The verdict is
+binary, so the knob is too — it governs the **entire reversible-`broke` set** (one cell with
+two possible actions, hence two settings):
 
-| knob | reversible `clear-problem` | reversible `unsure` |
-|---|---|---|
-| **strict** (safe default) | HITL | HITL |
-| **tuned** | HITL | log+feed |
-| **relaxed** | log+feed | log+feed |
+| knob | reversible `broke` |
+|---|---|
+| **strict** (safe default) | HITL |
+| **relaxed** | log+feed |
 
-`strict` surfaces anything not-clearly-OK (the §6.3 "reversible → HITL optional" line, dialed
+`strict` surfaces anything not `honored` (the §6.3 "reversible → HITL optional" line, dialed
 to *on*); `relaxed` is that line dialed to *off* (never interrupt for an undoable action —
-right for high-volume reads like `recall`); `tuned` splits the difference. **This knob is
-purely a noise / attention-budget control, never a safety one** — the floor + reversibility
-own safety, B owns informedness — which is exactly why it is safe to set per-case. HITL-approve
-*is* the "accepted delta"; if the same flag keeps being approved, fix the **stated
-constraint**, not B.
+right for high-volume reads like `recall`). The old three-way knob's middle setting (`tuned`)
+existed only to split `clear-problem` from `unsure`; the decisive verdict removed that split,
+so the knob is binary. **This knob is purely a noise / attention-budget control, never a safety
+one** — the floor + reversibility own safety, B owns informedness — which is exactly why it is
+safe to set per-case. HITL-approve *is* the "accepted delta"; if the same flag keeps being
+approved, fix the **stated constraint**, not B.
 
-**E6f caveat (§9.2.7) — `unsure` is rarely emitted; the knob is the real control; keep the
-judge prompt neutral.** Measured: the judge commits to `clear-problem`/`clear-ok` and emits
-`unsure` **~never (0/6 on ambiguous asks)** — so in practice this is **binary surface vs
-`clear-ok`**, the `unsure` row a harmless never-taken path. And the surfacing bias must live in
-the **knob, not the judge prompt**: a prompt told to "prefer not-OK when in doubt"
-**false-flagged a clearly-compliant €280** (E6f) where a neutral prompt cleared it (E6e). So
-**calibrate the judge neutrally** (did the answer honor the request?) and let the knob carry
-aggressiveness — detection stays calibrated, policy stays in the knob. Surface accuracy on
-real drift held 6/7 (the one miss a false-positive — noise, the safe direction).
+**Why decisive verbs, not a confidence scale (§9.2.6, E6g/E6i).** The earlier framing asked the
+judge for *confidence* (`clear-problem`/`unsure`/`clear-ok`). E6f then logged a compliant €280
+being surfaced and (wrongly) blamed a surfacing-biased *prompt*. **E6g's clean A/B refuted that**:
+a *neutral* prompt false-flagged €280 **4/5 — worse than the biased one (1/5)**. The bug was the
+**confidence framing itself** — €280 is "near the cap," so a graded-confidence judge won't vouch
+and hedges to `unsure`/`clear-problem`. Switching to a decisive **`honored`/`broke`** ask with
+sharp definitions + examples (E6i) cleared €280 5/5 and kept every real drift + injection at
+`broke` 5/5, with none of the hedging variance. **Calibrate the judge as a decisive call (did the
+answer honor the request? `honored`/`broke`); the knob carries aggressiveness.** The fix was the
+*wording of the ask*, never a deterministic carve-out for numbers (E6h confirmed a calculator path
+also works, but adding one is perfection-chasing the long tail — the decisive judge is enough).
 
 ### 6.7 Who computes the check — and why the LLM is caller-side only
 
@@ -452,20 +460,21 @@ door-step HITL, and crucially nothing the *agent* paraphrased (so it can't laund
 own drift; the user's literal words are the immutable anchor). This preserves full
 automation: the human is pulled in only by §6.6 routing, never to confirm a contract.
 
-**Resolved design (2026-06-15, collapsed) — one open call.** The check is a single LLM call
+**Resolved design (2026-06-15, decisive) — one open call.** The check is a single LLM call
 over the open shape: given the **verbatim request** and the **answer**, it returns *(a)*
-`confidence` — `clear-problem` / `unsure` / `clear-ok` (does the answer honor the request?);
-*(b)* `where` — the human-readable mismatch (the place the optional `kind`/`checkable`
-description lives, for the human to read). The runner maps `confidence` to surface-vs-pass;
+`verdict` — a decisive **`honored` / `broke`** (did the answer honor the request?), **not** a
+confidence scale (E6g showed graded confidence hedges clean cases — §6.6); *(b)* `where` — the
+human-readable mismatch (the place the optional `kind`/`checkable` description lives, for the
+human to read). The runner maps `verdict` to surface-vs-pass (`surface = verdict !== "honored"`);
 bareguard routes that **× reversibility** per §6.6, deciding **routing, never outcome**. The
 judge is **not** asked violation-vs-deviation — E6e showed that axis is unreliable (§6.6).
 
 ```json
-{ "confidence": "clear-problem",
+{ "verdict": "broke",
   "where": "you said under €300; the booking is €400" }
 ```
 ```js
-gate.annotate({ surface: confidence !== "clear-ok", confidence, text: where })
+gate.annotate({ surface: verdict !== "honored", verdict, text: where })
 // bareguard reads reversibility from the action it rides, then routes per §6.6 + the knob.
 ```
 
@@ -484,12 +493,15 @@ a flexible LLM call, not a rigid schema, is the right tool.
 2. **Reply-as-data, never instructions.** The answer is untrusted input; forged
    amendments/instructions inside it are ignored. Held on haiku (E6b, 100%) but **not
    disproven** — re-test on weaker/cheaper judge models before any real deployment.
-3. **Fail toward surfacing — in the knob, not the judge prompt.** Safe-by-default surfacing
-   comes from (a) the judge reliably catching real drift + (b) the reversible-escalation knob
-   defaulting to **strict** (§6.6). Do **not** bias the *judge prompt* toward "not-OK" — E6f
-   showed that false-flags clean cases (a compliant €280 surfaced) for zero safety gain. Keep
-   the judge **calibrated** (honors-the-request? — `clear-ok` vs `clear-problem`; `unsure` is
-   accepted but emitted ~never, so don't design around it); the knob carries the aggressiveness.
+3. **Ask a decisive category, never a confidence scale.** Safe-by-default surfacing comes from
+   (a) the judge reliably catching real drift + (b) the reversible-escalation knob defaulting to
+   **strict** (§6.6). The judge's ask is a decisive **`honored`/`broke`** with sharp definitions +
+   examples (Aurora's matching-judge pattern), *not* a graded confidence. A confidence scale
+   hedges: E6g's clean A/B showed even a *neutral*-worded confidence judge false-flagged a
+   compliant €280 (4/5) — the framing, not the wording, was the bug; the decisive ask cleared it
+   5/5 (E6i, §9.2.6). Encode the floor-raise as a **decisive tiebreak** ("can't confirm honored →
+   `broke`"), not an `unsure` hedge bucket; let the knob carry aggressiveness. Do **not** add a
+   deterministic carve-out for numbers to "help" the judge — that's chasing the long tail (E6h).
 
 **Optional hardening — locate, then math.** For a *clean structured egress* (a single-field
 booking, `recall` provenance, `impact` risk) the model can emit the comparison spec and let
@@ -636,7 +648,16 @@ omission (the symbol you never `impact()`'d). (4) **No demand** — plausible, u
 
 ---
 
-## 8.2 Build spec — `gate.annotate` (what we build; design measured by E6, 2026-06-15)
+## 8.2 Build spec — `gate.annotate` — **IMPLEMENTED 2026-06-15** (design measured by E6)
+
+> **Status: BUILT & verified (Unreleased).** Shipped in `src/gate.js` (`annotate()` /
+> `drainAnnotations()` / exported `routeAnnotation()`), `src/types.js` (`Annotation`,
+> `AxisBConfig`, `axisB` on `GateConfig`, `annotations` on `HumanEvent`), exported from
+> `src/index.js`. Covered by `test/axis-b-annotate.test.js` (the §8.2.4 set, 8 tests,
+> mutation-verified); full suite 175/175, typecheck clean. The spec below is the
+> as-built contract. The one variance from the early sketch: reversibility is resolved
+> from `config.axisB.reversible` (operator-declared action **types**), read off the gated
+> action — not a per-action boolean (the agent must not be able to self-declare it).
 
 ### 8.2.0 Plain-language recap — what the POC proved (read this first)
 
@@ -655,16 +676,23 @@ it. In plain terms:
   the wrong one ~**1 time in 3**. → so it must judge **the specific action being taken** (the
   booking), not a big search-result pile. Pointed at the clean action it was right every time.
 - **It can't reliably tell "hard rule broken" from "vaguely off."** So we **stopped asking
-  that**; we ask only *"is something off — yes/no?"* (which it does well) and let a simple
-  deterministic rule decide what to do.
+  that**; we ask one decisive question — *"did the agent **honor** what the user asked, or
+  **break** it?"* (which it does well) — and let a simple deterministic rule decide what to do.
+- **Asking for a "confidence level" backfired.** When we asked *how sure* it was (ok / unsure /
+  problem), it got jittery on clean work — it flagged a perfectly fine €280 booking (under a
+  €300 limit) because €280 felt "close to the line." Switching to the blunt honor/break question
+  fixed it: the €280 passed every time, while every real screw-up still got caught. Lesson: these
+  models are bad at *shades of confidence*, good at *clear yes/no calls*.
 - **It can never make things less safe.** Worst case it asks one extra question (noise); it
   never silently lets a bad action through (the one miss above is a *messy-pile* artifact, fixed
   by pointing it at the action). Safety is owned by the deterministic floor underneath, not by
   the checker.
 
-**Verdict: good enough to build**, as a best-effort layer over the Axis-A floor. Two things to
-verify before trusting it in production (§9.2 open items): re-test trickery on a weaker judge
-model; confirm the messy-pile fix.
+**Verdict: good enough to build**, as a best-effort layer over the Axis-A floor. The €280
+false-alarm is **resolved** (decisive honor/break ask, E6i). One item is **deferred** to the
+first real deployment, not blocking the build: re-test trickery (injection) on a judge model
+weaker than haiku — none is reachable in our test env (the local CLI bottoms out at haiku), so
+this waits on a real adopter's chosen model.
 
 ### 8.2.1 What bareguard ships (the only `src/` change)
 
@@ -674,8 +702,8 @@ decides an outcome; it buffers a fact and routes it.
 ```js
 // caller hands bareguard a FACT (it never computes the fact itself):
 gate.annotate({
-  surface: true,                 // bool — the one load-bearing field (clear-ok ⇒ false)
-  confidence: "clear-problem",   // optional hint: clear-problem | unsure | clear-ok
+  surface: true,                 // bool — the one load-bearing field (honored ⇒ false)
+  verdict: "broke",              // optional hint: honored | broke (decisive, not a confidence scale)
   where: "you said under €300; the booking is €400",  // human-readable, rides the HITL
   meta: { /* optional: field/stated/returned for a verifiable check */ },
 });
@@ -687,21 +715,19 @@ gate.annotate({
 - **Routing is a pure function** of `surface × reversibility × knob` (§6.6) — no LLM in the
   path. **Reversibility is read from the action bareguard is gating**, never from a param and
   never from the model.
-- **The knob** is config: `axisB: { reversibleEscalation: "strict" | "tuned" | "relaxed" }`,
-  **default `strict`**. Governs the whole reversible column (§6.6). Pure noise control, never
-  safety.
+- **The knob** is config: `axisB: { reversibleEscalation: "strict" | "relaxed" }`,
+  **default `strict`**. Binary (the decisive verdict left no middle to split — §6.6). Governs
+  the whole reversible-`broke` set. Pure noise control, never safety.
 - **Safe default / opt-in:** no `annotate()` call ⇒ no facts ⇒ no behavior change. B is additive.
 
-### 8.2.2 The routing function (ship this exactly — E6f-validated)
+### 8.2.2 The routing function (ship this exactly — E6i-validated)
 
 ```js
-// confidence ∈ {clear-problem, unsure, clear-ok}; reversible ∈ bool; knob default "strict"
+// verdict ∈ {honored, broke} → surface = (verdict !== "honored"); reversible ∈ bool; knob "strict"|"relaxed"
 function routeAnnotation(surface, reversible, knob = "strict") {
-  if (!surface) return reversible ? "pass" : "annotate-floor-ask"; // clear-ok
+  if (!surface) return reversible ? "pass" : "annotate-floor-ask"; // honored
   if (!reversible) return "annotate-floor-ask";        // irreversible: floor asks anyway
-  if (knob === "strict")  return "HITL";               // reversible: surface everything not-OK
-  if (knob === "relaxed") return "log";                // reversible: never interrupt (undoable)
-  return /* tuned */ confidence === "clear-problem" ? "HITL" : "log";
+  return knob === "strict" ? "HITL" : "log";           // reversible broke: strict surfaces, relaxed logs
 }
 // pass = proceed, audit only · log = proceed + audit + agent-feedback · HITL = human sees it
 ```
@@ -711,11 +737,11 @@ function routeAnnotation(surface, reversible, knob = "strict") {
 The **fact** — produced one of two ways, both caller-side:
 1. **Deterministic check** (structured field, certain): `recall` provenance, `impact` risk, a
    price cap — the §8.1 shapes. ~1 line; `surface = (check failed)`.
-2. **The one-call LLM judge** (open prose, §6.7): `(verbatim request, reply) → {confidence,
-   where}`, **judge prompt kept neutral** (bias lives in the knob, not the prompt — E6f). The
-   runner makes this call; **bareguard and litectx never do.** Three non-negotiables (§6.7):
-   anchor on the verbatim request; treat the reply as untrusted data; judge **the clean egress
-   action**, not a sprawling listing.
+2. **The one-call LLM judge** (open prose, §6.7): `(verbatim request, reply) → {verdict, where}`,
+   a decisive **`honored`/`broke`** ask with sharp definitions + examples — **not** a confidence
+   scale (E6g/E6i), aggressiveness lives in the knob. The runner makes this call; **bareguard and
+   litectx never do.** Three non-negotiables (§6.7): anchor on the verbatim request; treat the
+   reply as untrusted data; judge **the clean egress action**, not a sprawling listing.
 
 ### 8.2.4 Tests to write (each mutation-verified to fail when the code breaks)
 
@@ -823,7 +849,7 @@ injection still open). See §9.2.6.
    reuses the seam `node:vm` sandbox (confinement is E4's concern); `src/` untouched.
 
 6. **E6 · return-time judge — the three review holes** — **DONE (2026-06-15)**
-   (`harness-code-mode/e6-judge.mjs` + `run-e6{,b,c,d}.mjs`). Review surfaced three holes
+   (`harness-code-mode/e6-judge.mjs` + `run-e6{,b,c,d,e,f,g,h,i}.mjs`). Review surfaced three holes
    in the §6.6/§6.7 judge — (1) the judge eats attacker-controlled reply text; (2)
    "locate" silently misses; (3) reversible-now poisons irreversible-later. This gate
    probes each against the REAL model (haiku via the E1 CLIPipe), with negative controls
@@ -861,12 +887,30 @@ injection still open). See §9.2.6.
      caught, injection held; the one miss a *false-positive* (a surfacing-biased prompt flagged
      a compliant €280 — safe direction = noise). **`unsure` emitted 0/6** on ambiguous asks
      (the model commits to problem/ok), so the bucket is effectively dead and the **knob** is
-     the real noise control. Two design corrections recorded (§6.6/§6.7): don't rely on
-     `unsure`; keep the judge prompt **neutral** and put surfacing aggressiveness in the knob.
+     the real noise control. E6f's tentative fix — "keep the judge prompt neutral" — was **wrong
+     and superseded by E6g** (below).
+   - **E6g · the €280 A/B — confidence framing refuted** (`run-e6g.mjs`). A clean biased-vs-neutral
+     A/B on the same compliant €280 booking. The *neutral* confidence prompt false-flagged it
+     **4/5 — worse than the biased one (1/5)**; both still caught the €400 violation 5/5. So the
+     E6f "neutral prompt fixes it" claim is **refuted**: the bug is the **confidence framing
+     itself** (€280 is "near the cap," so a graded judge hedges to `unsure`/`clear-problem`), not
+     prompt wording. LLMs are weak at graded confidence (Aurora's lesson).
+   - **E6h · the deterministic detour, confirmed but NOT taken** (`run-e6h.mjs`). A plain
+     `locate→decide` (LLM extracts the number, math compares) cleared €280 **0/3** and caught €400
+     **3/3**. Proves a calculator carve-out *works* — but adding one is **perfection-chasing the
+     long tail**; the decisive judge (E6i) is enough, so we route numbers through the same one call.
+   - **E6i · the decisive judge — the actual fix** (`run-e6i.mjs`). Replacing the confidence scale
+     with a decisive **`honored`/`broke`** ask (sharp definitions + examples, Aurora's
+     matching-judge pattern; floor-raise as a decisive tiebreak, no `unsure` bucket) scored **7/7
+     on clear cases**: €280 `honored` 5/5 (false+ gone), €400 / 1-stop / cheapest→premium /
+     risks→benefits / forged-injection all `broke` 5/5, simple-explanation `honored` 5/5 — and the
+     ambiguous "reasonably priced" case `broke` 5/5 (floor-raise, by design). No hedging variance.
+     This is the §6.6/§6.7 design of record; the confidence judge (E6f) is the rejected step.
    **Scope honesty:** POC only, never shipped; the judge/LLM is caller-side (§6.7), `src/`
    untouched; still catches no F8 lie / §11 omission (§6.4/§6.8). **Net: the thin-primitive
-   build is evidenced — the loop works 6/6 on real output, with two named failure modes
-   and where to avoid them; injection remains the one open pre-deploy gate.**
+   build is evidenced — the loop works 6/6 on real output, the €280 false+ is fixed by the
+   decisive ask (E6i), with two named failure modes and where to avoid them; injection on a
+   sub-haiku judge model remains the one deferred pre-deploy gate.**
 
 POC validates → design properly → only then propose concrete primitive reshapes (§7
 "extend" rows) back into `bareguard-prd.md`. **Never ship the POC** (AGENT_RULES).

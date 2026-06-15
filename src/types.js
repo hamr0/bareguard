@@ -75,6 +75,38 @@ export {};
  * @property {string} rule
  * @property {string|null} reason
  * @property {HaltContext} context
+ * @property {Annotation[]} [annotations]  Axis-B facts riding this ask (§6.6);
+ *   absent when none buffered or none should surface (so the event is unchanged
+ *   for callers that never use `annotate()`).
+ */
+
+/**
+ * Axis-B annotation fact (§6.6/§8.2) — a caller-computed verdict on whether a
+ * returned value honored the user's request. bareguard never computes this (no
+ * LLM) and never decides an outcome; it buffers, audits, lets it ride the next
+ * human ask, and exposes it for agent feedback via `gate.drainAnnotations()`.
+ * `surface` is the one load-bearing field — the caller sets it (e.g. to
+ * `verdict !== "honored"`); the rest is carried, not interpreted.
+ *
+ * @typedef {object} Annotation
+ * @property {boolean} surface  true ⇒ the answer did NOT honor the request (show the human).
+ * @property {string|null} [verdict]  decisive hint, e.g. `"honored"` | `"broke"` (carried text).
+ * @property {string|null} [where]  human-readable description of the mismatch.
+ * @property {object|null} [meta]  optional structured detail (e.g. field/stated/returned).
+ */
+
+/**
+ * `axisB` config — the operator's return-time-judge routing preset (§6.6/§8.2).
+ *
+ * @typedef {object} AxisBConfig
+ * @property {"strict"|"relaxed"} [reversibleEscalation]  The knob; default
+ *   `"strict"`. On a reversible action a `broke` fact rides the human ask under
+ *   `strict`, or goes to audit + agent-feedback only under `relaxed`. Pure noise
+ *   control, never safety (the floor + reversibility own safety).
+ * @property {string[]} [reversible]  Action TYPES the operator declares undoable
+ *   (e.g. `["recall","search"]`). Reversibility is read off the GATED ACTION's
+ *   `type` against this list — never from the fact, the agent, or the model.
+ *   Absent / unmatched ⇒ treated as not reversible (safe default).
  */
 
 /**
@@ -236,6 +268,7 @@ export {};
  * @property {LimitsConfig} [limits]
  * @property {ContentConfig} [content]
  * @property {FlagsConfig} [flags]
+ * @property {AxisBConfig} [axisB]  Axis-B return-time-judge routing (§6.6/§8.2).
  * @property {SecretsConfig} [secrets]
  * @property {RateConfig} [defer]
  * @property {RateConfig} [spawn]

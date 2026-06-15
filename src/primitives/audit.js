@@ -91,6 +91,10 @@ export class Audit {
       // reason strings can echo action-derived data (e.g. net.invalidUrl puts
       // the full URL in the reason), so redact them too.
       if (typeof line.reason === "string") line.reason = this._redact(line.reason);
+      // Axis-B annotate lines carry reply-derived `where`/`meta` (gate.annotate);
+      // redact them too so the persisted log keeps the "no raw secrets" guarantee.
+      if (typeof line.where === "string") line.where = this._redact(line.where);
+      if (line.meta != null && typeof line.meta === "object") line.meta = this._redact(line.meta);
     }
     const { filePath } = this;
     if (filePath === null) {

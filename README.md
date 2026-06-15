@@ -99,7 +99,30 @@ Every primitive is one file (~30–180 LOC). The gate evaluates them in a fixed 
 
 **Safe defaults** ship in `content`: `rm -rf /`, `DROP TABLE`, `TRUNCATE` denied outright; destructive verbs (`delete`, `revoke`, `force-push`, destructive HTTP methods) escalate to the human. Override with empty arrays for pure-allow.
 
-167 tests pass on the CI matrix: **Linux + macOS + Windows × Node 20 + 22** — including real-subprocess shared-budget contention, halt cascades, single-file audit atomicity, and `parent_run_id` / `spawn_depth` stitching across a 3-deep tree.
+177 tests pass on the CI matrix: **Linux + macOS + Windows × Node 20 + 22** — including real-subprocess shared-budget contention, halt cascades, single-file audit atomicity, and `parent_run_id` / `spawn_depth` stitching across a 3-deep tree.
+
+## Axis B — return-time annotations (opt-in)
+
+The primitives above gate the **action** (what the agent is about to *do*). `gate.annotate` is the complementary surface: it carries a return-time **fact** about whether a result **honored** the user's request, so a human approval shows independent facts, not the agent's spin. bareguard **never runs an LLM and never decides** — you compute the fact (a deterministic check, or your own caller-side judge); bareguard buffers it, audits it, and lets it **ride the next human ask**. It never blocks alone.
+
+```js
+const gate = new Gate({
+  flags: { needsReview: { yes: "ask" } },
+  axisB: { reversibleEscalation: "strict", reversible: ["recall", "search"] }, // operator declares undoable TYPES
+  humanChannel: async (event) => {
+    if (event.annotations) console.log("Heads up:", event.annotations); // facts ride the ask
+    return { decision: "allow" };
+  },
+});
+await gate.init();
+
+// after a result comes back, your judge returns honored/broke:
+await gate.annotate({ surface: true, verdict: "broke", where: "you said under €300; the booking is €400" });
+await gate.check({ type: "book", needsReview: "yes" }); // the buffered fact rides this ask
+const facts = gate.drainAnnotations(); // and/or feed them back to the agent
+```
+
+Reversibility is read from the **gated action's type** (your `axisB.reversible` list) — never the fact, the agent, or the model. The knob (`strict` default | `relaxed`) is pure noise control on the reversible path, never safety.
 
 ## Docs
 

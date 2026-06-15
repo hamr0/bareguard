@@ -21,12 +21,14 @@
  * @typedef {import("./types.js").LimitsConfig} LimitsConfig
  * @typedef {import("./types.js").ContentConfig} ContentConfig
  * @typedef {import("./types.js").FlagsConfig} FlagsConfig
+ * @typedef {import("./types.js").AxisBConfig} AxisBConfig
+ * @typedef {import("./types.js").Annotation} Annotation
  * @typedef {import("./types.js").SecretsConfig} SecretsConfig
  * @typedef {import("./types.js").RateConfig} RateConfig
  * @typedef {import("./types.js").AuditConfig} AuditConfig
  */
 
-export { Gate } from "./gate.js";
+export { Gate, routeAnnotation } from "./gate.js";
 export { redact } from "./primitives/secrets.js";
 export {
   SAFE_DEFAULT_DENY_PATTERNS,

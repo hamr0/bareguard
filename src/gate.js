@@ -66,6 +66,42 @@ function safeAction(action) {
 }
 
 /**
+ * Pure Axis-B routing (§6.6/§8.2.2): a fact's surface flag × the gated action's
+ * reversibility × the operator's escalation knob → where the fact goes. No LLM,
+ * no side effects. `surface` comes from the caller-computed judge verdict
+ * (`broke` ⇒ true); `reversible` is read from the GATED ACTION's type via the
+ * operator's config — never the fact, the agent, or the model.
+ * @param {boolean} surface  true if the answer did NOT honor the request
+ * @param {boolean} reversible  true if the gated action's type is operator-declared undoable
+ * @param {"strict"|"relaxed"} [knob]  operator knob; default "strict"
+ * @returns {"pass"|"annotate-floor-ask"|"HITL"|"log"}
+ *   pass = audit only · annotate-floor-ask = rides A's already-happening stop ·
+ *   HITL = rides A's next ask · log = audit + agent-feedback only (no human)
+ */
+export function routeAnnotation(surface, reversible, knob = "strict") {
+  if (!surface) return reversible ? "pass" : "annotate-floor-ask"; // honored
+  if (!reversible) return "annotate-floor-ask";        // irreversible broke: rides A's stop
+  return knob === "strict" ? "HITL" : "log";           // reversible broke: strict rides, relaxed logs
+}
+
+/**
+ * Bound an annotation `meta` object so an annotate audit line can't exceed the
+ * audit's atomic-append cap. Non-objects → null; oversized / unserializable →
+ * a small marker (the live value the caller passed is still theirs to keep).
+ * @param {*} meta
+ * @returns {object|null}
+ */
+function boundMeta(meta) {
+  if (meta == null || typeof meta !== "object") return null;
+  try {
+    const bytes = Buffer.byteLength(JSON.stringify(meta), "utf8");
+    return bytes > 1000 ? { _truncated: true, bytes } : meta;
+  } catch {
+    return { _unserializable: true };
+  }
+}
+
+/**
  * The single chokepoint every agent action passes through. Construct once per
  * run, `await gate.init()`, then call {@link Gate#check} / {@link Gate#record}
  * (or {@link Gate#run}) for each action. Runs PRE-EVAL halt checks then the
@@ -110,6 +146,9 @@ export class Gate {
     this.humanChannelTimeoutMs = config.humanChannelTimeoutMs ?? null;
     this.terminated = false;
     this._initialized = false;
+    // Axis B (§6.6/§8.2): buffered return-time-judge facts awaiting a human ask
+    // to ride / an agent-feedback drain. Empty unless the caller calls annotate().
+    this._annotations = [];
   }
 
   /**
@@ -339,6 +378,23 @@ export class Gate {
         context: await this.haltContext(),
       };
 
+      // Axis B (§6.6): a buffered judge fact rides THIS ask if it should surface
+      // and the knob doesn't downgrade it to log-only. Reversibility is read from
+      // the GATED ACTION's type via the operator's config — never the fact, the
+      // agent, or the model (a hallucinated "reversible" must not auto-pass). B
+      // only attaches a note to an ask A already raised; it never changed the
+      // decision, so this can never block or flip an outcome. Empty buffer ⇒ no
+      // `annotations` key ⇒ byte-identical event (additive, opt-in).
+      if (this._annotations.length) {
+        const axisB = this.cfg.axisB ?? {};
+        const knob = axisB.reversibleEscalation === "relaxed" ? "relaxed" : "strict";
+        const reversible = Array.isArray(axisB.reversible) && axisB.reversible.includes(action?.type);
+        const surfacing = this._annotations.filter(
+          (a) => a.surface && routeAnnotation(a.surface, reversible, knob) !== "log",
+        );
+        if (surfacing.length) event.annotations = surfacing.map((a) => ({ ...a }));
+      }
+
       let response;
       try {
         const channelPromise = this.humanChannel(event);
@@ -481,6 +537,51 @@ export class Gate {
         reason: `soft budget: ${w.dimension} at ${(w.ratio * 100).toFixed(0)}% (${w.spent}/${w.cap})`,
       });
     }
+  }
+
+  /**
+   * Axis B (§6.6/§8.2) — buffer a return-time-judge FACT about whether a returned
+   * value honored the user's request. bareguard NEVER computes the fact (no LLM)
+   * and NEVER decides an outcome: it buffers, audits the fact (sink 1), lets it
+   * ride the next human ask `check()` raises (sink 3, §6.6 routing), and exposes
+   * it for agent feedback via {@link Gate#drainAnnotations} (sink 2). Additive and
+   * opt-in: with no `annotate()` call the decision path is byte-identical.
+   * @param {import("./types.js").Annotation} fact  caller-computed fact; only
+   *   `surface` is load-bearing (e.g. set it to `verdict !== "honored"`). Junk
+   *   (non-object) is ignored — annotate can never throw into the agent loop.
+   * @returns {Promise<void>}
+   */
+  async annotate(fact) {
+    if (!this._initialized) await this.init();
+    if (fact == null || typeof fact !== "object") return; // fail-safe: ignore junk
+    // Bound each field at the source so an annotate audit line stays well under
+    // the audit's PIPE_BUF line cap (atomic shared-file appends): `where`/`meta`
+    // are reply-derived and otherwise unbounded. This also bounds what reaches
+    // the human/agent — `where` is a one-line summary by design.
+    const norm = {
+      surface: fact.surface === true,
+      verdict: typeof fact.verdict === "string" ? fact.verdict.slice(0, 80) : null,
+      where:   typeof fact.where   === "string" ? fact.where.slice(0, 300)   : null,
+      meta:    boundMeta(fact.meta),
+    };
+    this._annotations.push(norm);
+    // Sink 1: the fact is recorded even if no ask ever rides it.
+    await this.audit.emit({
+      phase: "annotate", action: null,
+      surface: norm.surface, verdict: norm.verdict, where: norm.where, meta: norm.meta,
+    });
+  }
+
+  /**
+   * Axis B sink 2 — drain buffered annotations for agent feedback. Returns the
+   * buffered facts (a copy) and clears the buffer; clearing also stops stale facts
+   * from riding a later, unrelated ask. Call once per turn.
+   * @returns {import("./types.js").Annotation[]}
+   */
+  drainAnnotations() {
+    const out = this._annotations.map((a) => ({ ...a }));
+    this._annotations = [];
+    return out;
   }
 
   // Convenience: gate.check + execute + gate.record. Caller supplies executor.
