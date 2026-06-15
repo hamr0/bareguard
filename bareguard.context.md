@@ -1,7 +1,7 @@
 # bareguard — Integration Guide
 
 > For AI assistants and developers wiring bareguard into a project.
-> v0.6.0 | Node.js >= 20 | 1 production dep (`proper-lockfile`) | ships TypeScript types | Apache-2.0
+> v0.7.1 | Node.js >= 20 | 1 production dep (`proper-lockfile`) | ships TypeScript types | Apache-2.0
 >
 > Full design spec: [`docs/01-product/bareguard-prd.md`](docs/01-product/bareguard-prd.md) — unified PRD (v0.7).
 
@@ -39,6 +39,7 @@ One entry point:
 | Redact API keys from actions before audit | `secrets.envVars: ["ANTHROPIC_API_KEY"]`, `secrets.patterns: [/sk-[A-Za-z0-9]{40,}/]` |
 | Ask the human before destructive verbs | safe-default `content.askPatterns` ship; provide `humanChannel` callback |
 | Deny/ask on a structured field (e.g. a memory adopter's verdict) | `flags: { provenance: { web: "ask" }, injectionRisk: { high: "deny" } }` — reads `action[field]` directly, before the allowlist |
+| Confirm the human before *every* call of a tool (e.g. every `bash`) | `flags: { type: { bash: "ask" } }` — gates the always-present `type` field; fires even when the tool is allowlisted, routes through the one `humanChannel` (no separate approval channel) |
 | Pre-filter MCP catalog by what the agent CAN call | `await gate.allows(action)` — pure boolean, no audit, no budget delta |
 | One-shot wrapper: check + execute + record | `await gate.run(action, executor)` |
 | Stop the run cleanly with a paper trail | `await gate.terminate(reason)` |

@@ -4,6 +4,16 @@ All notable changes to bareguard are documented here. Format: [Keep a Changelog]
 
 ## [Unreleased]
 
+## [0.7.1] — 2026-06-15
+
+**Docs + tests only — no library change.** Surfaces an existing capability of the `flags` primitive (shipped 0.6.0) that an adopter couldn't find, so they reached for a separate per-tool approval channel instead.
+
+### Documentation
+- **Blanket per-tool confirmation is `flags: { type: { bash: "ask" } }` — documented across README, context guide, cookbook, and PRD.** Because `type` is itself an action field, gating it asks the human before *every* action of that type (e.g. every `bash`) — and because the `flags` ask arm sits at step 4b, **before** the allowlist (step 5), it fires even on an allowlisted tool and an `allow` decision never preempts it. This is the consolidation path away from a bolted-on per-tool checkpoint: **one `humanChannel` owns confirmation, no second approval channel, no local drift.** The reframed answer to an adopter's "always-ask" request — **no new primitive needed** (the repro that "didn't fire" was on `bareguard@0.4.2`, which predates `flags`; the config key was silently ignored). README flags row + `bareguard.context.md` "I want to…" row + `harness-cookbook.md` worked example (`humanChannel` with `event.action._ctx` preserved) + `bareguard-prd.md` §13 flags row note.
+
+### Tests
+- **+2, suite 178 → 180** (all green; typecheck clean): `flags-security.test.js` pins the always-ask-per-type contract end-to-end through the real `Gate` — (1) an allowlisted `bash` action still routes to `humanChannel` as `kind:"ask"` / `rule:"flags.type"` with `action._ctx` preserved, and an `allow` reply lets it proceed; (2) a `deny` reply blocks, and an unconfigured `type` is a no-op (no over-firing). Both **mutation-confirmed to fail** when the ask arm (step 4b) is neutered.
+
 ## [0.7.0] — 2026-06-15
 
 ### Added

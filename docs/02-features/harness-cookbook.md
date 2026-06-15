@@ -124,6 +124,26 @@ new Gate({
 // no-op. litectx states the source; YOUR policy renders the verdict — the §6 line.
 ```
 
+**Blanket "always confirm this tool" — gate the `type` field.** `flags` keys on
+*any* action field, and every action already carries `type`. So "confirm before
+every exec" is not a separate approval channel — it's a flag on the type that
+rides the **same `humanChannel`** as every other ask:
+```js
+new Gate({
+  ...FLOOR,
+  bash: { allow: ["ls", "echo"] },        // allowlist still scopes WHICH commands run...
+  flags: { type: { bash: "ask" } },        // ...but EVERY bash action asks first (4b before 5)
+  humanChannel: async (event) => {         // event.kind === "ask", event.action._ctx intact
+    const ok = await confirmWith(event.action._ctx, event.action);
+    return { decision: ok ? "allow" : "deny" };
+  },
+});
+// Fires on every `type:"bash"` action even though bash is allowlisted — the ask arm
+// runs before the allowlist, so an allow decision never preempts the confirm. deny
+// blocks, allow proceeds, terminate kills the run. This replaces a bolted-on
+// per-tool checkpoint: one humanChannel owns confirmation, no local drift.
+```
+
 ### 5. `code-mode-sandbox` — agent writes the body, gate stays in the parent
 The harness PRD's north star as a bundle (validated by POC gates E1 + E4): instead of
 one-by-one tool calls, the agent **writes a code body** over a typed tool menu. The

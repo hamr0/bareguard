@@ -75,3 +75,49 @@ test("flags: floor supremacy through the real Gate — flagged inject denied des
   assert.equal(d.outcome, "deny");
   assert.equal(d.rule, "flags.injectionRisk");
 });
+
+// ---------------------------------------------------------------------------
+// flags — blanket "always ask on a tool TYPE" contract. An adopter wanting
+// "confirm before every exec/bash" gates the always-present `type` field:
+// `flags: { type: { bash: "ask" } }`. This is the consolidation path away from
+// a separate per-tool confirmation channel — one humanChannel owns the ask.
+// Pins the acceptance: fires for EVERY such action (even allowlisted), routes
+// kind:"ask" with action + _ctx intact, deny blocks / allow proceeds.
+// ---------------------------------------------------------------------------
+
+test("flags: type-keyed ask fires on every action of that type, even allowlisted", async () => {
+  const seen = [];
+  const gate = new Gate({
+    audit: { path: null },
+    bash: { allow: ["ls", "echo"] },        // bash IS allowlisted...
+    flags: { type: { bash: "ask" } },        // ...and STILL asks (4b before allowlist 5)
+    humanChannel: async (event) => { seen.push(event); return { decision: "allow" }; },
+  });
+  await gate.init();
+
+  const d = await gate.check({ type: "bash", args: { command: "ls" }, _ctx: { chatId: "chat1" } });
+
+  assert.equal(seen.length, 1, "humanChannel consulted for the allowlisted bash action");
+  assert.equal(seen[0].kind, "ask", "routed as an ask, not a halt");
+  assert.equal(seen[0].rule, "flags.type");
+  assert.equal(seen[0].action.type, "bash");
+  assert.deepEqual(seen[0].action._ctx, { chatId: "chat1" }, "_ctx routing context preserved on the event");
+  assert.equal(d.outcome, "allow", "allow reply lets the action proceed");
+});
+
+test("flags: type-keyed ask — deny reply blocks; non-configured type does not fire", async () => {
+  const seen = [];
+  const gate = new Gate({
+    audit: { path: null },
+    flags: { type: { bash: "ask" } },
+    humanChannel: async (event) => { seen.push(event); return { decision: "deny" }; },
+  });
+  await gate.init();
+
+  const denied = await gate.check({ type: "bash", args: { command: "echo hi" } });
+  assert.equal(denied.outcome, "deny", "deny reply blocks the action");
+
+  const other = await gate.check({ type: "read", args: { path: "/tmp/x" } });
+  assert.equal(other.outcome, "allow", "an unconfigured type is a no-op — flag never fires");
+  assert.equal(seen.length, 1, "humanChannel consulted only for the configured type");
+});
