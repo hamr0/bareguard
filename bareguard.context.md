@@ -32,6 +32,7 @@ One entry point:
 | Cap concurrent / nested children | `limits.maxChildren`, `limits.maxDepth` — action severity |
 | Allowlist commands per-tool | `bash.allow: ["git", "ls"]` |
 | Deny destructive command patterns | `bash.denyPatterns: [/sudo/, /rm\s+-rf/]` |
+| Tier shell commands by severity → map to ceremony | `bash.classify: true` — classifies each command `safe`/`destructive`/`super_destructive` (Linux/macOS/Windows); tiers 2–3 raise the ask with `event.classification` + `event.tier`; the `humanChannel` maps severity → ceremony (PIN, 2-key, auto-deny). Best-effort/defeatable, **not** a sandbox. Tune via `extraDestructive` / `extraSuperDestructive` / `reclassify` |
 | Restrict file paths the agent can read/write | `fs.readScope`, `fs.writeScope`, `fs.deny` |
 | Egress allowlist / private-IP block | `net.allowDomains`, `net.denyPrivateIps: true` |
 | Share budget across parent + child processes | `budget.sharedFile: "/path/budget.json"` (uses `proper-lockfile`) |
@@ -351,6 +352,7 @@ These are deliberately NOT in bareguard. Don't look for them — build them or u
 15. **`net.denyPrivateIps` is hostname-based, not post-DNS.** It blocks IPv4 private/loopback/link-local (incl. cloud-metadata `169.254.169.254` and `0.0.0.0`), IPv6 loopback/ULA/link-local (brackets stripped), and IPv4-mapped IPv6. It does NOT resolve DNS, so a public hostname that resolves to a private address (DNS rebinding) is not caught — resolve-then-check upstream if that's in your threat model. Pair with `net.allowDomains` for a positive egress allowlist.
 16. **`bash.allow` fails closed on shell metacharacters** (v0.4.5). When `bash.allow` is set, any command containing `;`, `|`, `&`, `$`, `` ` ``, `(`, `)`, `<`, `>`, or a newline is **denied** (rule `bash.allow.shellMeta`) — a prefix allowlist can't bound what runs after a chain/pipe/substitution. This also denies legitimate pipes like `git log | head`. If you need chaining, don't rely on `bash.allow` as the boundary — use `content.denyPatterns` (which scans the whole command) or `bash.denyPatterns`.
 17. **Audit auto-redacts when `secrets` is configured** (v0.4.5). The gate redacts `action`, `result`, and `reason` on every audit line at write time. Eval runs on the *unredacted* action (matching is never weakened); only the persisted log is masked. Don't pre-redact before `check()`/`record()` — it's redundant and pre-redaction would weaken policy matching.
+18. **`bash.classify` patterns are ReDoS-safe (linear-time)**. The shipped severity corpus avoids catastrophic backtracking — a crafted command string (e.g. `rm -rfrfrf…`) classifies in linear time (1 MB ≈ 16 ms), so a hostile/confused agent can't hang the gate via the classifier. If you add your own `extraDestructive` / `extraSuperDestructive` patterns, keep them linear too: avoid multiple consecutive unbounded quantifiers over the same class (`[a-z]*x[a-z]*y[a-z]*`); prefer non-consuming lookaheads. **Defense-in-depth:** classify runs at the ask step (4), after the deny floor (steps 1–3) — it can only escalate to a human ask, never downgrade a deny. It is best-effort UX tiering, **not** a sandbox.
 
 ## Recipes
 

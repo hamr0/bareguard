@@ -882,6 +882,38 @@ boundary, and shared-budget lock hardening (fail-loud on corrupt read).
 - **Still pre-1.0 — the §19 HOLD stands** (1.0 is gated on the integration bench +
   last-call review, below; the write-gate seam half is now done).
 
+### bareguard 0.8 — command severity classification (`bash.classify`) (SHIPPED 2026-06-17)
+
+- **`bash.classify` — cross-platform command severity tiering** (harness-prd §7.1,
+  multis-driven): bareguard owns the **mechanism + a full cross-platform tiered pattern
+  list** (Linux/macOS/Windows), shipped **in-lib**, framed **best-effort** (not
+  "authoritative"); the consumer owns the ceremony. Classifies each `bash` command
+  `safe`/`destructive`/`super_destructive` at the ask step (step 4, before
+  `content.askPatterns`); tiers 2–3 raise the **existing** ask with `event.classification`
+  + `event.tier`, so the `humanChannel` maps severity → ceremony. Zero auth logic in the
+  lib; never hard-denies 2–3. Exports `classifyCommand` (pure) + `DESTRUCTIVE_PATTERNS` /
+  `SUPER_DESTRUCTIVE_PATTERNS`; adds `classify`/`platform`/`extra*`/`reclassify` to
+  `BashConfig` and `classification`/`tier` to `HumanEvent`. **Additive — `classify` off ⇒
+  decision path + every audit/event line byte-identical.**
+- **Honest scope / boundary:** best-effort, **defeatable by obfuscation, NOT a sandbox** —
+  UX tiering, not enforcement; the fs/exec scope stays the hard boundary. The deny floor
+  still wins (`rm -rf /` → `content.denyPatterns` deny at step 2, before classify).
+  *Disagreement of record:* the build recommendation was "best-effort" framing over
+  "authoritative", and the adopter agreed (coverage = full, framing = best-effort) — the
+  word "authoritative" was declined because it suppresses the consumer's review reflex on a
+  defeatable mechanism and implies an SLA the lib can't staff.
+- **ReDoS hardening (Security, fixed in the same change — `/security` pass).** The two
+  `rm`-root super-destructive patterns used three consecutive unbounded quantifiers
+  (`[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*`); a flagless run (`rm -rfrfrf…`) with a failing `\s+`
+  tail backtracked catastrophically (n=2000 → 21 s) — a single agent-emitted string could
+  hang the gate (runtime-wide DoS, since every action passes through `check()`). Rewritten
+  with **non-consuming lookaheads** (`-(?=[a-z]*r)(?=[a-z]*f)[a-z]+`) → linear (21 s → ~1 ms;
+  1 MB → ~16 ms), outcomes preserved, regression-guarded. Note the defense-in-depth shape:
+  classify runs at the ask step (4) **after** the deny floor (1–3), so it can only escalate
+  to an ask, never downgrade a deny.
+- **Still pre-1.0 — the §19 HOLD stands.** Additive; lands clean on the SemVer surface
+  (new exports + `bash.*` keys + event fields below), no API regret.
+
 ### bareguard 1.0 — stabilize
 
 - Lock the API. SemVer commitments.
@@ -920,10 +952,14 @@ done — locking before the bench run is the one scenario that risks an early 2.
   treated as allow.
 
 **What the 1.0 promise covers when cut** (the SemVer surface): exports (`Gate`,
-`redact`, `Budget` errors, `defaultAuditPath`, `globToRegex`/`matchAny`), config keys
-(incl. the new `flags`), **rule strings** (adopters and the seam contract test match on
-them — incl. `flags.<field>`, now live in litectx's write-gate seam), the audit JSONL
-line format, the budget file format, and the `humanChannel` event/decision contract.
+`redact`, `Budget` errors, `defaultAuditPath`, `globToRegex`/`matchAny`, `classifyCommand`,
+`DESTRUCTIVE_PATTERNS`/`SUPER_DESTRUCTIVE_PATTERNS`), config keys
+(incl. `flags` and `bash.classify`/`bash.extraDestructive`/`bash.extraSuperDestructive`/
+`bash.reclassify`/`bash.platform`), **rule strings** (adopters and the seam contract test
+match on them — incl. `flags.<field>`, now live in litectx's write-gate seam, and
+`bash.classify`), the audit JSONL line format, the budget file format, and the
+`humanChannel` event/decision contract (incl. the `event.classification`/`event.tier`
+fields the classifier attaches).
 
 **Pending/future work index while holding** (so nothing lives only in chat): this
 section (1.0 gate) · §19 future candidates above (Budget, Audit, tamper-evident — all

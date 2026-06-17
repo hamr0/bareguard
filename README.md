@@ -24,13 +24,15 @@
 
 ---
 
-## What this is
+## What it is
 
-bareguard is a runtime policy library every agent action passes through. One `Gate` class, three call sites (`redact`, `check`, `record`), thirteen primitives — each a small file you can read in a sitting.
+One chokepoint between your agent and the world. Every action the agent takes — a shell command, a file write, a network call, a spend — passes through one `Gate` and comes back **allow**, **deny**, or **ask a human**. You get a hard floor under a probabilistic agent, and a single audit log of everything it tried.
 
-Same patterns as [bareagent](https://www.npmjs.com/package/bare-agent), [barebrowse](https://www.npmjs.com/package/barebrowse), and [baremobile](https://www.npmjs.com/package/baremobile) — embed it, don't run it. No daemon, no SaaS, no telemetry.
+That floor is **Axis A** of a [floor + harness](docs/01-product/harness-prd.md) model: you can't make a probabilistic agent deterministic, so you fence where the dice can do damage. **Axis B** (opt-in) is the complement — it reconciles what came *back* against what you asked for. Both are shown below.
 
-It owns exactly one layer. Not a content guardrail (use `guardrails-ai` for toxicity / PII / schema). Not a sandbox (Docker / gVisor for containment). Not authn (caller's concern — see [Identity and the gate](docs/00-context/harness-research.md#identity-and-the-gate) — Part III of the harness research). The five-layer split: system prompt → guardrails-ai → **bareguard** → sandbox → OS perms.
+Small on purpose: one `Gate`, three call sites (`redact` · `check` · `record`), thirteen primitives you can each read in a sitting. Embed it like the rest of the [bare suite](#the-bare-ecosystem) — no daemon, no SaaS, no telemetry.
+
+**What it isn't** — bareguard owns one layer and is honest about the rest. It's not a content filter (toxicity / PII / schema → `guardrails-ai`), not a sandbox (containment → Docker / gVisor), and not auth (who the actor *is* → upstream; per-principal policy rides `action._ctx`). It decides the action; it never runs it. The deliberate non-goals are listed once in the [NO-GO list](docs/04-process/non-roadmap.md).
 
 ## Install
 
@@ -68,6 +70,19 @@ if (decision.outcome === "allow") {
 // via humanChannel and gives you a terminal allow/deny.
 ```
 
+## The trio in one loop
+
+The [Core](#the-bare-ecosystem) is three modules: **bareagent** drives the think→act loop, **litectx** supplies ranked context, and **bareguard** gates every action between them. A loop looks like:
+
+```js
+const ctx      = await memory.recall(goal);    // litectx   → ranked context
+const action   = await agent.next(goal, ctx);  // bareagent → a proposed action
+const decision = await gate.check(action);     // bareguard → allow / deny / ask-a-human
+if (decision.outcome === "allow") await run(action);
+```
+
+And it gates on *meaning*, not text: when the agent writes a memory, litectx emits the fact's **source** and bareguard's `flags` primitive decides on that field directly — `flags: { provenance: { web: "ask" }, injectionRisk: { high: "deny" } }` — no brittle regex over a serialized blob.
+
 **Wiring it into a real agent?** Hand your AI assistant the integration guide and describe what you want:
 
 ```
@@ -77,52 +92,34 @@ then wire a Gate into my agent. Here's my setup: <describe loop, tools, budget>.
 
 That file has the `humanChannel` patterns, shared-budget-across-processes setup, eval order, audit format, and 10 wiring recipes.
 
-## The thirteen primitives
+## The primitives
 
-Every primitive is one file (~30–180 LOC). The gate evaluates them in a fixed order (`deny > ask > scope > default`, first match wins — see the [Usage Guide](docs/02-features/usage-guide.md#how-it-works)).
+Thirteen small files — each ~30–180 lines. The gate runs them in a fixed order (**deny → ask → scope → default**, first match wins) and they compose into [harness bundles](docs/02-features/harness-cookbook.md): tighten-only capability presets an agent picks at runtime, never load-bearing for safety — pick the wrong one and the floor still holds. (In *code-mode*, the agent writes a code body over a typed tool menu and the gate stays in the parent process; the agent never holds a raw tool.)
 
-| Primitive | What it does |
-|---|---|
-| **bash** | Command allowlist + `denyPatterns` when `action.type === "bash"`. With `allow` set, shell metacharacters (`;` `\|` `&` `$` `` ` `` `()` `<>`) are denied — a prefix allowlist can't bound chaining. |
-| **fs** | `writeScope` / `readScope` / `deny` for `read` / `write` / `edit`. Paths normalized (`.`/`..` collapsed) + segment-boundary matched — no traversal escapes. |
-| **net** | Egress domain allowlist + private-IP deny for `fetch` (IPv4/IPv6, link-local incl. cloud metadata). `denyPrivateIps` matches the **literal host** — it doesn't resolve DNS, so it's defense-in-depth, not an SSRF boundary; use `allowDomains` (fail-closed) to bound egress. |
-| **budget** | Tokens + cost USD, **halt severity** (escalates to human). Shared across processes via `proper-lockfile`. Also caps **arbitrary countable resources** — `resources: { writes: 100, rows: 10000 }`, accrued from `result.counts`, same cumulative halt (rule `budget.resource.<name>`); optional `softRatio` emits a non-blocking `budget_warn` before the cap. |
-| **limits** | `maxTurns` (halt), `maxToolRounds` (halt), `maxChildren` / `maxDepth` (action), `timeoutSeconds` (halt). |
-| **tools** | Tool-name `allowlist` / `denylist` (glob-matched) + per-tool `denyArgPatterns`. Allowlist is **scope-only** — does not silence asks. |
-| **content** | Pattern matches over the serialized action. Universal `denyPatterns` + `askPatterns`. **Safe defaults shipped.** |
-| **flags** | Gates on a **structured field's value** read directly off the action (`provenance`, `injectionRisk`), not a regex over the serialized form: `flags: { provenance: { web: "ask" }, injectionRisk: { high: "deny" } }`. Deny/ask only, both **before** the allowlist (floor supremacy). Lets a memory adopter pass a structured verdict without encoding it as text. **Blanket per-tool confirm:** gate the always-present `type` field — `flags: { type: { bash: "ask" } }` asks the human before *every* `bash` action, even an allowlisted one. One `humanChannel` owns the confirmation — no separate approval channel. |
-| **secrets** | Redacts known env-var values + cred patterns. When configured, the gate auto-redacts `action` / `result` / `reason` on every audit line (eval still sees the real action). Tags with name (`[REDACTED:ANTHROPIC_API_KEY]`). |
-| **audit** | One JSONL file per family. Phases: `gate`, `record`, `approval`, `halt`, `topup`, `terminate`, `budget_warn`. Every line of one eval shares a correlation id (`aid`) so a request joins to its outcome even when two actions are identical. |
-| **approval** | Routes ask / halt events to the runner-supplied `humanChannel` callback. |
-| **defer-rate** | Caps `defer` actions per minute (default 15). Counted from the audit log; per-family. |
-| **spawn-rate** | Caps `spawn` actions per minute (default 10). Composes with `maxChildren` / `maxDepth`. |
+- **Scope what runs** — `tools` is a closed allowlist (deny-by-default); `bash` / `fs` / `net` bound which commands, paths, and domains are even reachable.
+- **Tier what's dangerous** — `bash.classify` ranks a command **safe → destructive → super-destructive** across Linux / macOS / Windows and routes the severity to your human channel; `content` ships safe defaults (`rm -rf /`, `DROP TABLE` denied outright; destructive verbs ask).
+- **Bound what accumulates** — `budget` caps spend, tokens, *or any countable resource*, and `limits` caps turns / children / depth — both **halt with a human in the loop**, not silently, and the cap is shared across processes.
+- **Gate on meaning, not text** — `flags` reads a structured field's value (a memory engine's `provenance` / `injectionRisk`) straight off the action, no regex; the same channel can also confirm before *every* call of a tool.
+- **Prove what happened** — `secrets` auto-redacts every audit line, and one `audit` JSONL joins each request to its outcome and its approval, even when two actions look identical.
 
-**Safe defaults** ship in `content`: `rm -rf /`, `DROP TABLE`, `TRUNCATE` denied outright; destructive verbs (`delete`, `revoke`, `force-push`, destructive HTTP methods) escalate to the human. Override with empty arrays for pure-allow.
+Full per-primitive reference lives in the **[Usage Guide](docs/02-features/usage-guide.md)** and **[Integration Guide](bareguard.context.md)** — not here.
 
-178 tests pass on the CI matrix: **Linux + macOS + Windows × Node 20 + 22** — including real-subprocess shared-budget contention, halt cascades, single-file audit atomicity, and `parent_run_id` / `spawn_depth` stitching across a 3-deep tree.
+Tested across **Linux + macOS + Windows × Node 20 + 22**: real-subprocess shared-budget contention, halt cascades, single-file audit atomicity, and family-tree stitching across a 3-deep spawn tree.
 
-## Axis B — return-time annotations (opt-in)
+## Axis B — reconcile the return (facts, never spin)
 
-The primitives above gate the **action** (what the agent is about to *do*). `gate.annotate` is the complementary surface: it carries a return-time **fact** about whether a result **honored** the user's request, so a human approval shows independent facts, not the agent's spin. bareguard **never runs an LLM and never decides** — you compute the fact (a deterministic check, or your own caller-side judge); bareguard buffers it, audits it, and lets it **ride the next human ask**. It never blocks alone.
+Axis A (everything above) gates what the agent is about to *do*. **Axis B** is the complement: after a result comes back, it carries a **fact** about whether that result *honored* the request, so a human approval shows independent facts instead of the agent's own summary. It's a detector, never an enforcer — it annotates an Axis-A stop, it never blocks alone.
+
+The line bareguard holds is **facts, not judgments**. A *fact* is something you computed deterministically — a membership test, a number comparison (`booking €400 > your €300 cap`; `this memory is agent-authored, you asked for human-only`). bareguard carries facts; it **never runs an LLM and never decides**. A soft "this feels off-topic" is a *non-fact* — a judgment — and stays on your side of the line, because a model's guess must never auto-pass or auto-block an action.
 
 ```js
-const gate = new Gate({
-  flags: { needsReview: { yes: "ask" } },
-  axisB: { reversibleEscalation: "strict", reversible: ["recall", "search"] }, // operator declares undoable TYPES
-  humanChannel: async (event) => {
-    if (event.annotations) console.log("Heads up:", event.annotations); // facts ride the ask
-    return { decision: "allow" };
-  },
-});
-await gate.init();
-
-// after a result comes back, your judge returns honored/broke:
+// you compute the fact (a deterministic check); bareguard buffers it and rides the next ask
 await gate.annotate({ surface: true, verdict: "broke", where: "you said under €300; the booking is €400" });
-await gate.check({ type: "book", needsReview: "yes" }); // the buffered fact rides this ask
-const facts = gate.drainAnnotations(); // and/or feed them back to the agent
+await gate.check({ type: "book", needsReview: "yes" }); // the fact surfaces as event.annotations
+const facts = gate.drainAnnotations();                  // and/or feed them back to the agent
 ```
 
-Reversibility is read from the **gated action's type** (your `axisB.reversible` list) — never the fact, the agent, or the model. The knob (`strict` default | `relaxed`) is pure noise control on the reversible path, never safety.
+You declare undoable action types via `axisB: { reversible: [...] }`; reversibility is read from the **gated action's type**, never the fact, the agent, or the model. The knob (`strict` default | `relaxed`) is pure noise control on the reversible path, never safety.
 
 ## Docs
 

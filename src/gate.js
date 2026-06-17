@@ -8,6 +8,7 @@ import { Budget } from "./primitives/budget.js";
 import { Limits } from "./primitives/limits.js";
 import { redact } from "./primitives/secrets.js";
 import { bashCheck } from "./primitives/bash.js";
+import { bashClassifyCheck } from "./primitives/classify.js";
 import { fsCheck } from "./primitives/fs.js";
 import { netCheck } from "./primitives/net.js";
 import {
@@ -232,6 +233,12 @@ export class Gate {
     }
     if (d3) return d3;
 
+    // 4. bash.classify → tiered askHuman. Runs BEFORE content.askPatterns so a
+    // bash command carries its severity tier (classification + tier) on the
+    // event; a generic content ask would lose that detail. (harness §7.1.)
+    const d4b = bashClassifyCheck(action, this.cfg.bash);
+    if (d4b) return d4b;
+
     // 4. content.askPatterns → askHuman
     const d4 = contentAskCheck(action, c);
     if (d4) return d4;
@@ -308,6 +315,9 @@ export class Gate {
       // PRE-EVAL: halt, else the 6-step eval. `_stepEval` always returns a
       // terminal decision, so `??` makes `decision` provably non-null.
       const decision = this._haltCheck() ?? await this._stepEval(action);
+      // bash.classify (harness §7.1) may attach a severity tier; read it via a
+      // widened view since not every decision shape carries these optionals.
+      const cls = /** @type {{classification?: ("destructive"|"super_destructive"), tier?: (2|3)}} */ (decision);
 
       // Terminal allow/deny → audit and return.
       if (decision.outcome === "allow" || decision.outcome === "deny") {
@@ -326,6 +336,9 @@ export class Gate {
         phase: "gate", action,
         decision: "askHuman", severity: decision.severity,
         rule: decision.rule, reason: decision.reason,
+        ...(cls.classification
+          ? { classification: cls.classification, tier: cls.tier }
+          : {}),
       });
 
       // Halt: also emit dedicated halt line for operator grep.
@@ -378,6 +391,15 @@ export class Gate {
         reason: decision.reason,
         context: await this.haltContext(),
       };
+
+      // bash.classify (harness §7.1): surface the severity tier so the
+      // humanChannel maps severity → ceremony. Additive — absent for every
+      // event that didn't come from the classifier, so non-bash/non-classify
+      // callers see a byte-identical event.
+      if (cls.classification) {
+        event.classification = cls.classification;
+        event.tier = cls.tier;
+      }
 
       // Axis B (§6.6): a buffered judge fact rides THIS ask if it should surface
       // and the knob doesn't downgrade it to log-only. Reversibility is read from

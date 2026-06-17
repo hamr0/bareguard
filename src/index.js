@@ -34,6 +34,11 @@ export {
   SAFE_DEFAULT_DENY_PATTERNS,
   SAFE_DEFAULT_ASK_PATTERNS,
 } from "./primitives/content.js";
+export {
+  classifyCommand,
+  DESTRUCTIVE_PATTERNS,
+  SUPER_DESTRUCTIVE_PATTERNS,
+} from "./primitives/classify.js";
 export { BudgetUnavailableError } from "./primitives/budget.js";
 export { defaultAuditPath } from "./primitives/audit.js";
 export { globToRegex, matchAny } from "./glob.js";

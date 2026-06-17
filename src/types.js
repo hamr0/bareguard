@@ -78,6 +78,11 @@ export {};
  * @property {Annotation[]} [annotations]  Axis-B facts riding this ask (§6.6);
  *   absent when none buffered or none should surface (so the event is unchanged
  *   for callers that never use `annotate()`).
+ * @property {"destructive"|"super_destructive"} [classification]  Severity tier
+ *   from `bash.classify` (harness §7.1); absent unless the classifier raised this
+ *   ask. The humanChannel maps this → ceremony; it is NOT a security guarantee.
+ * @property {2|3} [tier]  Numeric form of `classification` (2 = destructive,
+ *   3 = super_destructive).
  */
 
 /**
@@ -146,6 +151,17 @@ export {};
  *   metacharacter (`; & | < > $ \` ( ) newline`) is denied — a prefix
  *   allowlist can't bound chaining.
  * @property {RegExp[]} [denyPatterns]
+ * @property {boolean} [classify]  When true, classify each `bash` command by
+ *   severity (harness §7.1). Tiers 2–3 raise an askHuman event carrying
+ *   `classification` + `tier`. Best-effort, defeatable, NOT a sandbox — UX
+ *   tiering, never enforcement. Off by default.
+ * @property {"linux"|"darwin"|"win32"} [platform]  Platform hint for the pattern
+ *   set; auto-detected from `process.platform` when omitted.
+ * @property {RegExp[]} [extraDestructive]       Consumer tier-2 additions (merged, not replaced).
+ * @property {RegExp[]} [extraSuperDestructive]  Consumer tier-3 additions (merged, not replaced).
+ * @property {(command: string, tier: "safe"|"destructive"|"super_destructive") =>
+ *   ("safe"|"destructive"|"super_destructive")} [reclassify]  Final per-command
+ *   override hook (e.g. for app-specific commands); an invalid return is ignored.
  */
 
 /**

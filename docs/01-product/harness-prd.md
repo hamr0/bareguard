@@ -550,6 +550,7 @@ the harness *reshapes overlaps* rather than inventing wholesale.
 | Spine piece | bareguard today | Verdict |
 |---|---|---|
 | Floor: irreversible → ask | `content.askPatterns` (§8 #12) + `approval`/`humanChannel` (#6) | **reuse** |
+| Floor: **command severity tiering** (multis) | `content.askPatterns` exists but single-axis (ask/no-ask), sparse, SQL-heavy, Linux-thin | **reuse + extend** → §7.1 (`bash.classify`: tier the ask floor with a full cross-platform list, best-effort) |
 | Floor: closed allowlist, deny-by-default | `tools.allowlist` (scope-only, §9.2) | **reuse** |
 | Floor: cumulative limits | `budget` (#2, cumulative + shared-file) + `limits` (#5) | **reuse / extend** (generalize "cumulative spend" to other countable resources) |
 | Floor: deny/ask refusal as structured error | `gate.run()` returns `{error:{type:"policy_denied",…}}` | **reuse** |
@@ -560,7 +561,93 @@ the harness *reshapes overlaps* rather than inventing wholesale.
 
 **Where it lives:** selection + code-mode execution belong to the **runner**
 (bareagent), which *uses* bareguard. bareguard never runs code — it decides. The only
-net-new bareguard surface this PRD introduces is Axis-B reconciliation.
+net-new bareguard *surface* this PRD introduces is Axis-B reconciliation (§8); the
+`bash.classify` severity tiering (§7.1) is an **extension of the existing ask floor**,
+not a new surface.
+
+---
+
+### 7.1 Command severity classification — `bash.classify` (multis-driven, settled 2026-06-17)
+
+**Problem (multis).** Every shell-capable consumer hand-rolls a danger list (`rm -rf /`,
+`dd`-to-device, `mkfs`, fork bomb, `shutdown`, …) and inevitably gets macOS/Windows coverage
+wrong. Today's `SAFE_DEFAULT_ASK/DENY_PATTERNS` are sparse, SQL-heavy, **single-axis** (ask *or*
+deny), and Linux-thin. Drift across consumers is guaranteed — the opposite of "governance =
+bareguard."
+
+**Decision.** bareguard owns the **classification mechanism** + a **full cross-platform tiered
+pattern list**, shipped **in-lib**, framed **best-effort** (not "authoritative"). The consumer owns
+the ceremony. This *extends the existing irreversible→ask floor* (table row 1) with a severity axis;
+it is not a new auth surface.
+
+Two axes were teased apart at sign-off — **coverage** (skimpy ↔ full) and **framing** (best-effort
+↔ authoritative) — which the original ask collapsed into the one word "seed." The chosen cell is
+**full + best-effort**:
+
+- **Coverage = full.** A thin seed leaves every consumer extending differently → no drift reduction;
+  a shared *full* list is the only thing that kills drift. A regex table is **data, not logic** —
+  Appendix-C #4 bounds *behavioral* complexity, and §11 already ships `SAFE_DEFAULT_*` in-lib, so a
+  bigger table is an extension of what bareguard already does, not a new category.
+- **Framing = best-effort.** "Authoritative" buys **zero** extra drift reduction and costs two
+  things: (a) **false confidence** — an authoritative label suppresses the consumer's review reflex,
+  which is the actual control, so the guaranteed miss (`base64 -d | sh`, a renamed binary, a novel
+  subcommand) lands as a breach *with bareguard's label on it*; and (b) an **SLA bareguard can't
+  staff** — the OS surface is unbounded and moving. Rot + "authoritative" is the worst cell; rot +
+  "best-effort, PRs welcome" is fine. Ship the full list, decline the word (~95% of the ask; only
+  the word is declined).
+- **In-lib, not a separate data package.** A package boundary only earns itself with a *different
+  maintainer or cadence* — exactly the "authoritative, separately-reviewed" model we dropped. Same
+  maintainer + same cadence + **coupled tier semantics** (mechanism and patterns share the tier
+  contract) ⇒ one auditable home alongside `SAFE_DEFAULT_*`. Splitting would invent a
+  version-compatibility matrix (`classifyCommand` v? × corpus v?) to solve a drift problem the in-lib
+  option already solves identically.
+
+**Mechanism (no auth in the lib).** With `bash.classify` on, the Gate classifies each `bash` action
+at the **ask step** (step 4, beside `content.askPatterns`). Tiers 2–3 raise the *existing* askHuman
+event with the tier attached — **`event.classification: 'destructive' | 'super_destructive'`** and
+**`event.tier: 2 | 3`**, with `event.action`/`_ctx` intact. bareguard never bakes in PIN/CONFIRM/2FA
+and never hard-denies tiers 2–3; the `humanChannel` reads the tier, applies its ceremony, and returns
+allow/deny. A consumer wanting "never" auto-denies that tier in its own channel.
+
+> **Naming note (load-bearing).** The event's existing `severity` field is the internal
+> `halt | action` control axis — branched on throughout `gate.js`. The consumer-facing tier rides a
+> **new** `classification`/`tier` field; it does **not** overload `severity`. (The original ask
+> said `event.severity: 'destructive'|…`; renamed to avoid clobbering the control axis.)
+
+**API shape.**
+- `classifyCommand(command, { platform }) → 'safe' | 'destructive' | 'super_destructive'` — pure,
+  exported, unit-testable. `platform` is a hint; auto-detect via `process.platform` when omitted.
+- `bash: { classify: true, extraDestructive?, extraSuperDestructive?, reclassify? }` — the consumer
+  *tunes*, never reimplements. `reclassify(command, tier) → tier` handles app-specific overrides.
+- Exported per-tier-per-platform pattern sets (`DESTRUCTIVE_PATTERNS`, `SUPER_DESTRUCTIVE_PATTERNS`,
+  keyed by platform) **supersede** — but do not remove — the single-axis `SAFE_DEFAULT_*` (kept for
+  back-compat).
+
+**Honest scope (in-contract consumption).** Best-effort pattern matching, defense-in-depth —
+**defeatable by obfuscation; NOT a sandbox.** The classification is **UX tiering, not enforcement**
+(same status as injection-detection being log-only): the fs/exec scope stays the hard boundary, and
+`event.tier` is never treated as a security guarantee. Documented as a speed bump + HITL trigger.
+
+**Appendix-C self-assessment** (cf. §8's table — this one *clears* the bar):
+
+| Appendix C test | `bash.classify` | Note |
+|---|---|---|
+| 1. Constrains action against the world? | **yes** | bash commands; tiers the irreversible→ask floor |
+| 2. Rule over action *shape*? | **yes** | regex over the command string — same shape as `content` / `bash.denyPatterns` |
+| 3. Works without network/infra/server? | **yes** | pure local match |
+| 4. ≤150 LOC + one dep? | **yes** | the *mechanism* is ~60–80 LOC; the pattern list is **data**, not logic |
+| 5. Opt-in, safe default? | **yes** | off unless `bash.classify` is set; ships a safe default list when on |
+
+**Acceptance.** With `bash.classify` on: `rm -rf /` (Linux), `dd of=/dev/sda`, macOS
+`diskutil eraseDisk`, Windows `format C:` → tier-3 askHuman event with
+`classification:'super_destructive'`, `tier:3`, `_ctx` intact; `rm file.txt`, `sudo apt update` →
+tier-2; `ls`, `git status` → no event. The `humanChannel` decides allow/deny; bareguard holds
+**zero** auth logic; a consumer reclassifies without forking.
+
+**Status: SHIPPED 0.8.0** (2026-06-17; bareguard-prd §19 "0.8" milestone) —
+`src/primitives/classify.js` (`classifyCommand` + the cross-platform corpus + `bashClassifyCheck`),
+wired at gate step 4, `classification`/`tier` on the event, exports + types, `test/classify.test.js`
+(+16, suite → 196, typecheck clean). This section remains the spec of record.
 
 ---
 

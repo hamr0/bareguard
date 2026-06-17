@@ -144,6 +144,31 @@ new Gate({
 // per-tool checkpoint: one humanChannel owns confirmation, no local drift.
 ```
 
+**Tier command severity → map to ceremony (`bash.classify`).** Stop hand-rolling a
+danger list. `bash.classify` tiers each command across Linux/macOS/Windows and rides
+the **same `humanChannel`** with the tier attached — your gate maps `severity → ceremony`,
+nothing more. bareguard holds zero auth logic and never hard-denies a tier; *you* decide:
+```js
+new Gate({
+  ...FLOOR,
+  bash: {
+    classify: true,                                   // off by default; opt in
+    extraSuperDestructive: [/\bcompanyctl\s+wipe-prod\b/],  // your app-specific tier-3
+    // reclassify: (cmd, tier) => tier,               // final per-command override hook
+  },
+  humanChannel: async (event) => {                    // event.kind === "ask", _ctx intact
+    if (event.tier === 3) return { decision: await pinConfirm(event.action) ? "allow" : "deny" };
+    if (event.tier === 2) return { decision: await tapConfirm(event.action) ? "allow" : "deny" };
+    return { decision: "allow" };                     // (no classify ask reaches here)
+  },
+});
+// `dd of=/dev/sda` → tier 3 (PIN); `rm report.txt` / `sudo apt update` → tier 2 (tap);
+// `ls` / `git status` → no event. The deny FLOOR still wins: `rm -rf /` is denied by the
+// safe-default content.denyPatterns at step 2, before classify runs at step 4.
+// HONEST SCOPE: best-effort, DEFEATABLE (base64 -d | sh, renamed binary) — UX tiering,
+// NOT a sandbox. Keep fs/exec scope as the hard boundary; never trust event.tier as one.
+```
+
 ### 5. `code-mode-sandbox` — agent writes the body, gate stays in the parent
 The harness PRD's north star as a bundle (validated by POC gates E1 + E4): instead of
 one-by-one tool calls, the agent **writes a code body** over a typed tool menu. The
