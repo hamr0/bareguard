@@ -28,7 +28,7 @@
 
 One chokepoint between your agent and the world. Every action the agent takes — a shell command, a file write, a network call, a spend — passes through one `Gate` and comes back **allow**, **deny**, or **ask a human**. You get a hard floor under a probabilistic agent, and a single audit log of everything it tried.
 
-That floor is **Axis A** of a [floor + harness](docs/01-product/harness-prd.md) model: you can't make a probabilistic agent deterministic, so you fence where the dice can do damage. **Axis B** (opt-in) is the complement — it reconciles what came *back* against what you asked for. Both are shown below.
+That floor is **Axis A** of a [floor + harness](docs/01-product/bareguard-prd.md) model: you can't make a probabilistic agent deterministic, so you fence where the dice can do damage. **Axis B** (opt-in) is the complement — it reconciles what came *back* against what you asked for. Both are shown below.
 
 Small on purpose: one `Gate`, three call sites (`redact` · `check` · `record`), thirteen primitives you can each read in a sitting. Embed it like the rest of the [bare suite](#the-bare-ecosystem) — no daemon, no SaaS, no telemetry.
 

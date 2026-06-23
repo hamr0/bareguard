@@ -3,7 +3,7 @@
 > The unified research/context behind the harness (Axis A floor + Axis B return
 > reconciliation). Three previously-separate docs are merged here because they are **one
 > argument**: the agentic-web problem space, the A2A experiment that probed it, and where the
-> gate's authority stops. Cross-referenced from [`../01-product/harness-prd.md`](../01-product/harness-prd.md).
+> gate's authority stops. Cross-referenced from [`../01-product/bareguard-prd.md` (Part 2)](../01-product/bareguard-prd.md).
 >
 > - **Part I — Agentic-web problem space.** The #1–#4 layering, the egress gate, and the live
 >   IETF/standards landscape. *Research write-up.*
@@ -16,7 +16,7 @@
 > The throughline: bareguard owns **#4 (intent fidelity)** at the action boundary; **#3
 > (identity + authorization + the unforgeable payment number)** is upstream and is what the IETF
 > drafts + payment rails are building. The two interlock; neither absorbs the other
-> (harness-prd §6.8).
+> (bareguard-prd Part 2 §6.8).
 
 ---
 

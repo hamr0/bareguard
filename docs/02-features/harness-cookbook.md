@@ -1,6 +1,6 @@
 # Harness cookbook — operator-vetted capability bundles
 
-> The recipe library promised by [`harness-prd.md`](../01-product/harness-prd.md) §5.2.
+> The recipe library promised by [`bareguard-prd.md`](../01-product/bareguard-prd.md) Part 2 §5.2.
 > A **harness bundle** is a named preset of `{ tool menu + extra restrictions }` for a
 > situation. It is **ergonomics, not a guard** (D2): a bundle can only **tighten** the
 > floor — smaller menu, more asks — never loosen it. If the agent picks the wrong
@@ -224,7 +224,7 @@ for.
 ### 8. `detect-and-feed-A` — Axis B as a recipe (no bareguard change)
 The E2 pattern (`harness-code-mode/run-e2.mjs`), generalized. Your constraint stays
 **your code** (~10 lines) — no DSL, no new primitive; this recipe is also the demand
-sensor for the deferred public format (harness-prd OQ1, §6.5).
+sensor for the deferred public format (bareguard-prd Part 2 OQ1, §6.5).
 ```js
 const constraint = { maxPrice: 300 };          // per-request, USER-authored (never the agent)
 const returns = [];                             // record authoritative tool returns

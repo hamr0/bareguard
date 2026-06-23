@@ -12,7 +12,7 @@ Resolved during design; should not be re-litigated unless explicitly asked.
   the SemVer surface list: PRD §19 "bareguard 1.0". Walk-away doctrine after 1.0
   reaffirmed.
 - **All pending/future work lives in docs, not chat.** Index: PRD §19 (1.0 gate +
-  future candidates) · harness-prd §0.1.1 (pre-litectx backlog) · §9.3.4
+  future candidates) · bareguard-prd Part 2 §0.1.1 (pre-litectx backlog) · §9.3.4
   (waits-on-litectx) · §10 OQ1/OQ2.
 
 ## v0.4 (original PRD)

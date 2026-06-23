@@ -12,7 +12,7 @@ import { toWriteAction } from "litectx";
 // ---------------------------------------------------------------------------
 // SEAM CONTRACT TEST — "gate-zero". Now exercised against litectx's REAL emitter.
 //
-// Settles the harness-prd §9.3.1 "memory.write gating" row. The action is minted
+// Settles the bareguard-prd Part 2 §9.3.1 "memory.write gating" row. The action is minted
 // by litectx's `toWriteAction` (writegate.js), so these assertions hold against
 // the actual producer — not a hand-built stand-in. They either stay green
 // (coverage confirmed end-to-end) or fail at the exact line that names what to

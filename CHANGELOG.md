@@ -4,6 +4,9 @@ All notable changes to bareguard are documented here. Format: [Keep a Changelog]
 
 ## [Unreleased]
 
+### Documentation
+- **PRD consolidation — `harness-prd.md` folded into `bareguard-prd.md` as Part 2; `litectx`/`barecontext` PRDs removed (docs-only, no library change).** `docs/01-product/` was four PRDs; it is now one authority, `bareguard-prd.md`, organized as **two parts** (mirroring litectx's same-day merge): **Part 1 — Core bareguard** (the thirteen primitives, complete-mediation architecture, the 6-step eval order, audit/budget specs, release history + 1.0 HOLD + future-feature candidates) and **Part 2 — The harness** (the floor+harness / Axis-A-B design, POC gates E1–E6, the seam contract test, the litectx integration bench — the former `harness-prd.md`, verbatim). Each part keeps its own section numbering; a bare `§N` is that part's section, cross-part refs are written `Part 1 §N` / `Part 2 §N`. The overlapping top-level framing was de-duplicated, but every decision, POC finding, and validation from both docs is preserved. `litectx-prd.md` (canonical now in the litectx repo) and `barecontext-prd.md` (archived in the litectx repo; its load-bearing boundary↔economy sorting rule survives in Part 2 §10.1) were deleted. All cross-references repointed across the doc set (`README.md`, `docs/README.md`, `harness-research.md`, `harness-cookbook.md`, `decisions-log.md`, `seam-contract.test.js` comment); the never-shipped `harness-code-mode/*.mjs` POC comments and the CHANGELOG/`.claude/` history keep their original `harness-prd` references as the record.
+
 ## [0.8.0] — 2026-06-17
 
 ### Added
