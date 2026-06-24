@@ -33,6 +33,14 @@ export {};
  * @property {number} [tokens]   Tokens consumed by this action.
  * @property {Object<string,number>} [counts]  Per-resource deltas accrued against
  *   `budget.resources` caps, e.g. `{ writes: 1, rows: 50 }` (OQ3).
+ * @property {"priced"|"unpriced"} [pricing]  Cost-contract signal from the meter:
+ *   `"priced"` (or absent) ⇒ `costUsd` is authoritative and accrues normally;
+ *   `"unpriced"` ⇒ cost could NOT be computed (no model / no rate-table entry) — it
+ *   is UNKNOWN, not free. An unpriced round accrues NO cost (accruing 0 is the
+ *   silent-zero footgun), still accrues `tokens`/`counts`, and emits an `unpriced`
+ *   audit phase. Under `budget.failClosedOnUnpriced` + a finite `maxCostUsd` cap it
+ *   makes the budget axis halt (cost is unenforceable). See bareagent eval-assist
+ *   PRD §3.7/§3.8.
  */
 
 /**
@@ -202,6 +210,12 @@ export {};
  *   audit line — observability only, never halts. Default off. (OQ3.)
  * @property {boolean} [strict]     Pre-flight halt using a trailing-average
  *   projection (needs >=3 samples). Default `false`.
+ * @property {boolean} [failClosedOnUnpriced]  When `true` AND a finite `maxCostUsd`
+ *   cap is set, an `unpriced` round (see {@link Result}.pricing) makes `check()`
+ *   return a halt (rule `budget.unpriced`) — the cost axis is unenforceable, so fail
+ *   closed instead of silently passing. Per-instance/sticky; does NOT touch the
+ *   shared budget-file format. Default `false` (default behavior is a non-blocking
+ *   `unpriced` audit line). (Cost contract, eval-assist PRD §3.8.)
  * @property {string|null} [sharedFile]  Path to the cross-process budget file.
  *   Falls back to `BAREGUARD_BUDGET_FILE`.
  */

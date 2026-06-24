@@ -509,6 +509,8 @@ Every decision carries `severity: "action" | "halt"`.
   `humanChannel`; the runner only sees the post-human terminal allow/deny.
 
 **Halt-severity rules:** `budget.maxCostUsd`, `budget.maxTokens`,
+`budget.resource.<name>` (OQ3), `budget.unpriced` (v0.9, only when
+`budget.failClosedOnUnpriced` is set and a finite `maxCostUsd` cap is active),
 `limits.maxTurns`, `limits.timeoutSeconds` (v0.2), `gate.terminated`. Every
 other rule is action severity.
 
@@ -547,7 +549,8 @@ Children inherit via env var `BAREGUARD_AUDIT_PATH` set by the parent.
 | `phase` | When emitted | Phase-specific fields |
 |---|---|---|
 | `gate` | every `gate.check()` decision | `action`, `decision`, `severity`, `rule`, `reason` |
-| `record` | every `gate.record()` after a successful execute | `action`, `result` (incl. `costUsd`, `tokens`) |
+| `record` | every `gate.record()` after a successful execute | `action`, `result` (incl. `costUsd`, `tokens`, optional `pricing`) |
+| `unpriced` | (v0.9) a `record()` whose cost could not be priced (`result.pricing === "unpriced"`, or a present-but-non-finite `costUsd`) | `action`, `aid`, `reason` |
 | `approval` | `humanChannel` returned a decision | `decision`, `reason`, `newCap` |
 | `halt` | dedicated grep target on halt | `dimension`, `spent`, `cap`, `rule`, `awaiting` |
 | `topup` | runner / humanChannel raised a cap | `dimension`, `oldCap`, `newCap` |
@@ -559,9 +562,13 @@ Children inherit via env var `BAREGUARD_AUDIT_PATH` set by the parent.
   contain action-side secrets.
 - **Caller is responsible for redacting tool results** before passing to
   `gate.record`. bareguard ships the `redact()` helper — apply to results too.
-- Budget remaining = `initial - sum(record.result.costUsd)` over the log.
+- Budget remaining = `initial - accrued(record lines)` over the log.
   Reconstructable from the audit log on cold start (used when the budget
-  file is missing/corrupt).
+  file is missing/corrupt). **(v0.9)** The reconstruction accrues each
+  `record` line through the *same* sanitizer as live accrual (`sanitizeSpend`:
+  clamp negative deltas, skip unpriced/non-finite costs) — so a cold-start
+  rebuild can never diverge from live spend (a raw sum would re-apply negatives
+  the live path rejects and under-enforce the cap after a restart).
 - Monotonic `seq` per gate instance. Helps detect gaps within a process.
 - **Truncation:** lines > 3.5KB (safety margin under PIPE_BUF) get truncated
   with explicit `_truncated: true` boolean at line root for downstream
@@ -1012,10 +1019,12 @@ done — locking before the bench run is the one scenario that risks an early 2.
 **What the 1.0 promise covers when cut** (the SemVer surface): exports (`Gate`,
 `redact`, `Budget` errors, `defaultAuditPath`, `globToRegex`/`matchAny`, `classifyCommand`,
 `DESTRUCTIVE_PATTERNS`/`SUPER_DESTRUCTIVE_PATTERNS`), config keys
-(incl. `flags` and `bash.classify`/`bash.extraDestructive`/`bash.extraSuperDestructive`/
-`bash.reclassify`/`bash.platform`), **rule strings** (adopters and the seam contract test
-match on them — incl. `flags.<field>`, now live in litectx's write-gate seam, and
-`bash.classify`), the audit JSONL line format, the budget file format, and the
+(incl. `flags`, `bash.classify`/`bash.extraDestructive`/`bash.extraSuperDestructive`/
+`bash.reclassify`/`bash.platform`, and `budget.failClosedOnUnpriced` (v0.9)), the
+`Result.pricing` field (v0.9), **rule strings** (adopters and the seam contract test
+match on them — incl. `flags.<field>`, now live in litectx's write-gate seam,
+`bash.classify`, and `budget.unpriced` (v0.9)), the audit JSONL line format (incl. the
+`unpriced` phase, v0.9), the budget file format, and the
 `humanChannel` event/decision contract (incl. the `event.classification`/`event.tier`
 fields the classifier attaches).
 
