@@ -380,10 +380,24 @@ export class Budget {
     // single transient unpriced round doesn't wedge the whole run into per-action
     // HITL. (A non-cost record, e.g. a pure tool action with pricing absent, counts
     // as priced and clears it — there is nothing unpriceable about it.)
-    const unpriced = result?.pricing === "unpriced";
+    // A round is "unpriced" (cost unknown) when the meter says so OR when it handed
+    // us a cost that is PRESENT but not a usable finite number (null / NaN / ±Inf /
+    // non-number). That is "couldn't price", not "free" — accruing 0 would re-open
+    // the #3 silent-zero, and a NaN would poison `spentUsd` so `spent >= cap` is
+    // false and the cap is DISABLED. The floor derives this from the value, never
+    // trusting the meter to remember the flag. Absent costUsd (undefined) is a
+    // non-cost action, NOT an unpriced round.
+    const c = result?.costUsd;
+    const unpriced = result?.pricing === "unpriced" || (c !== undefined && !Number.isFinite(c));
     this._unpricedSeen = unpriced;
-    const dUsd = unpriced ? 0 : (result?.costUsd ?? 0);
-    const dTok = result?.tokens ?? 0;
+    // Accrue only a NON-NEGATIVE finite cost. A negative delta is rejected (spend is
+    // monotonic — you can't un-spend), closing the same "refund" cap-evasion the
+    // counts axis already guards. In the priced branch c is undefined or finite.
+    const dUsd = unpriced ? 0 : Math.max(0, c ?? 0);
+    // Tokens get the same monotonic, finite, non-negative guard as counts (a NaN
+    // would otherwise poison the token wall the same way).
+    const t = result?.tokens;
+    const dTok = (typeof t === "number" && Number.isFinite(t) && t > 0) ? t : 0;
     // Sanitize generic counts: accrue only POSITIVE deltas for CONFIGURED
     // resources. Counts are monotonic (you can't un-write) so a negative delta
     // is rejected — closing a "refund" evasion of the cumulative cap — and
