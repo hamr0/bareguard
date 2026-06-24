@@ -49,6 +49,31 @@ const STRICT_MIN_SAMPLES = 3;
 const roundUsd = (x) => (isFinite(x) ? Number(x.toFixed(9)) : x);
 
 /**
+ * Single source of truth for "what the cumulative cap counts" from a raw result —
+ * called by BOTH live {@link Budget#record} and the gate's cold-start audit rebuild
+ * so the two can NEVER diverge. (They did: the rebuild re-applied negatives the live
+ * path clamps → cap under-counted after a restart; and ignored the pricing flag →
+ * over-counted. One helper makes both impossible by construction.)
+ *
+ * A round is `unpriced` (cost unknown) when the meter flags it OR hands a cost that
+ * is present-but-not-a-finite-number (null / NaN / ±Inf / non-number) — "couldn't
+ * price", not "free". Unpriced accrues no cost; otherwise the cost is clamped
+ * non-negative (monotonic spend — you can't un-spend). Tokens get the same finite,
+ * positive guard as the counts axis. Absent `costUsd` is a non-cost action (0, not
+ * unpriced).
+ * @param {import("../types.js").Result} [result]
+ * @returns {{ unpriced: boolean, dUsd: number, dTok: number }}
+ */
+export function sanitizeSpend(result) {
+  const c = result?.costUsd;
+  const unpriced = result?.pricing === "unpriced" || (c !== undefined && !Number.isFinite(c));
+  const dUsd = unpriced ? 0 : Math.max(0, c ?? 0);
+  const t = result?.tokens;
+  const dTok = (typeof t === "number" && Number.isFinite(t) && t > 0) ? t : 0;
+  return { unpriced, dUsd, dTok };
+}
+
+/**
  * Tracks USD/token spend against caps, optionally persisted to a shared cross-process file.
  */
 export class Budget {
@@ -368,36 +393,14 @@ export class Budget {
    * @throws {BudgetUnavailableError} if the shared file can't be read under the held lock
    */
   async record(result) {
-    // Cost contract (PRD §3.7/§3.8): an explicitly `unpriced` round has an UNKNOWN
-    // cost. Accruing `costUsd ?? 0` would silently treat unknown as free — the exact
-    // #3 footgun — so an unpriced round accrues NO cost and instead trips the sticky
-    // `_unpricedSeen` flag (which check() honors under failClosedOnUnpriced). Tokens
-    // and counts are provider-exact even when cost can't be priced, so they accrue
-    // normally — the token wall is unaffected. `pricing` absent ⇒ priced (back-compat).
-    // Per-round (PRD §3.8 frames it "unenforceable for THAT round"): the flag
-    // tracks the LATEST round's pricing, so a fail-closed halt persists exactly
-    // while pricing stays broken and clears once a priced round records again — a
-    // single transient unpriced round doesn't wedge the whole run into per-action
-    // HITL. (A non-cost record, e.g. a pure tool action with pricing absent, counts
-    // as priced and clears it — there is nothing unpriceable about it.)
-    // A round is "unpriced" (cost unknown) when the meter says so OR when it handed
-    // us a cost that is PRESENT but not a usable finite number (null / NaN / ±Inf /
-    // non-number). That is "couldn't price", not "free" — accruing 0 would re-open
-    // the #3 silent-zero, and a NaN would poison `spentUsd` so `spent >= cap` is
-    // false and the cap is DISABLED. The floor derives this from the value, never
-    // trusting the meter to remember the flag. Absent costUsd (undefined) is a
-    // non-cost action, NOT an unpriced round.
-    const c = result?.costUsd;
-    const unpriced = result?.pricing === "unpriced" || (c !== undefined && !Number.isFinite(c));
+    // Derive what the cap counts via the shared sanitizer (same logic the cold-start
+    // rebuild uses — see sanitizeSpend). An unpriced round accrues no cost but trips
+    // the sticky `_unpricedSeen` flag (honored by check() under failClosedOnUnpriced);
+    // it is PER-ROUND — the flag tracks the LATEST round's pricing, so a fail-closed
+    // halt persists while pricing stays broken and clears once a priced round records
+    // again (a transient unpriced round doesn't wedge the run into per-action HITL).
+    const { unpriced, dUsd, dTok } = sanitizeSpend(result);
     this._unpricedSeen = unpriced;
-    // Accrue only a NON-NEGATIVE finite cost. A negative delta is rejected (spend is
-    // monotonic — you can't un-spend), closing the same "refund" cap-evasion the
-    // counts axis already guards. In the priced branch c is undefined or finite.
-    const dUsd = unpriced ? 0 : Math.max(0, c ?? 0);
-    // Tokens get the same monotonic, finite, non-negative guard as counts (a NaN
-    // would otherwise poison the token wall the same way).
-    const t = result?.tokens;
-    const dTok = (typeof t === "number" && Number.isFinite(t) && t > 0) ? t : 0;
     // Sanitize generic counts: accrue only POSITIVE deltas for CONFIGURED
     // resources. Counts are monotonic (you can't un-write) so a negative delta
     // is rejected — closing a "refund" evasion of the cumulative cap — and

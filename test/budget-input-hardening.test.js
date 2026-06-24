@@ -51,3 +51,52 @@ test("regression: absent costUsd (a non-cost action) is NOT treated as unpriced"
   assert.equal(unpriced, false, "undefined costUsd = non-cost action, not an unpriced round");
   assert.equal(b.check(), null, "must not arm fail-closed for ordinary non-cost actions");
 });
+
+// The cold-start rebuild path must apply the SAME sanitization as live accrual,
+// or the two diverge: live clamps a negative delta, the rebuild re-applies it, and
+// the reconstructed spend ends up LOWER than the true accrued spend — the cap is
+// under-enforced after a budget-file loss / restart. (Caught by /security on the
+// hardening; the live-path clamp alone left this door open.)
+import { Gate } from "../src/index.js";
+import { promises as fsp } from "node:fs";
+import { makeTmpDir, cleanup } from "./_helpers.js";
+import path from "node:path";
+
+test("cold-start rebuild clamps negatives — no post-restart cap under-count", async () => {
+  const dir = await makeTmpDir();
+  try {
+    const audit = path.join(dir, "a.jsonl"), bf = path.join(dir, "b.json");
+    const g = new Gate({ audit: { path: audit }, budget: { maxCostUsd: 1, maxTokens: 1000, sharedFile: bf } });
+    await g.init();
+    await g.record({ type: "llm" }, { costUsd: 0.5, tokens: 200 });
+    await g.record({ type: "llm" }, { costUsd: -0.3, tokens: -100 }); // refund attempt — live clamps
+    assert.equal(g.budget.spentUsd, 0.5, "live: negative cost clamped");
+    assert.equal(g.budget.spentTokens, 200, "live: negative tokens clamped");
+
+    await fsp.rm(bf); // budget file lost → next init reconstructs from the audit log
+    const g2 = new Gate({ audit: { path: audit }, budget: { maxCostUsd: 1, maxTokens: 1000, sharedFile: bf } });
+    await g2.init();
+    assert.equal(g2.budget.spentUsd, 0.5, "rebuild must match live — not 0.2 (negative re-applied)");
+    assert.equal(g2.budget.spentTokens, 200, "rebuild must match live — not 100");
+  } finally {
+    await cleanup(dir);
+  }
+});
+
+test("cold-start rebuild honors the pricing flag — full parity with live accrual", async () => {
+  const dir = await makeTmpDir();
+  try {
+    const audit = path.join(dir, "a.jsonl"), bf = path.join(dir, "b.json");
+    const g = new Gate({ audit: { path: audit }, budget: { maxCostUsd: 1, sharedFile: bf } });
+    await g.init();
+    // contract-violating round: flagged unpriced but carrying a finite cost (meter bug)
+    await g.record({ type: "llm" }, { costUsd: 0.5, pricing: "unpriced" });
+    assert.equal(g.budget.spentUsd, 0, "live: the pricing flag suppresses the cost");
+    await fsp.rm(bf);
+    const g2 = new Gate({ audit: { path: audit }, budget: { maxCostUsd: 1, sharedFile: bf } });
+    await g2.init();
+    assert.equal(g2.budget.spentUsd, 0, "rebuild must match live — not 0.5 (pricing flag ignored)");
+  } finally {
+    await cleanup(dir);
+  }
+});

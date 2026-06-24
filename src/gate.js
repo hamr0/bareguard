@@ -4,7 +4,7 @@
 
 import { randomUUID } from "node:crypto";
 import { Audit, defaultAuditPath } from "./primitives/audit.js";
-import { Budget } from "./primitives/budget.js";
+import { Budget, sanitizeSpend } from "./primitives/budget.js";
 import { Limits } from "./primitives/limits.js";
 import { redact } from "./primitives/secrets.js";
 import { bashCheck } from "./primitives/bash.js";
@@ -176,8 +176,13 @@ export class Gate {
     let spentUsd = 0, spentTokens = 0, capUsd = null, capTokens = null, turns = 0, toolRounds = 0;
     for (const l of lines) {
       if (l.phase === "record" && l.result) {
-        spentUsd    += l.result.costUsd ?? 0;
-        spentTokens += l.result.tokens  ?? 0;
+        // Reconstruct spend through the SAME sanitizer live accrual uses, so the
+        // rebuild can't diverge: it clamps negatives (else the cap under-counts after
+        // a restart) and honors pricing/non-finite (else it over-counts an unpriced
+        // round). One source of truth — sanitizeSpend.
+        const { dUsd, dTok } = sanitizeSpend(l.result);
+        spentUsd    += dUsd;
+        spentTokens += dTok;
         turns++;
         if (l.action && l.action.type !== "llm") toolRounds++;
       }
