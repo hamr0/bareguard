@@ -38,6 +38,16 @@ export class BudgetUnavailableError extends Error {
 const STRICT_BUF_SIZE = 5;
 const STRICT_MIN_SAMPLES = 3;
 
+// Quantize accrued USD to nanodollar (1e-9) precision. Raw IEEE-754 addition grows
+// a ~1e-16 tail (0.7 + 0.1 = 0.7999999999999999) that can drift accrued spend just
+// under a cap, making `spent >= cap` false and silently bypassing the halt — a cap
+// bypass via numeric error (the class that got the rate-window optimization
+// reverted). Rounding the running total after each add keeps the boundary decision
+// exact at money precision. Nanodollars sit far below any real per-round cost
+// (per-token cache reads are ~1e-7), so no genuine spend is lost. `toFixed(9)` is
+// magnitude-safe (no `x * 1e9` MAX_SAFE_INTEGER overflow for large caps).
+const roundUsd = (x) => (isFinite(x) ? Number(x.toFixed(9)) : x);
+
 /**
  * Tracks USD/token spend against caps, optionally persisted to a shared cross-process file.
  */
@@ -54,6 +64,10 @@ export class Budget {
    *   never halts). Default null = off.
    * @param {string|null} [cfg.sharedFile] path to the shared budget JSON file (null = local in-memory)
    * @param {boolean} [cfg.strict] enable trailing-average pre-flight halts (default false)
+   * @param {boolean} [cfg.failClosedOnUnpriced] when true AND a finite `maxCostUsd`
+   *   cap is set, an `unpriced` round (cost couldn't be computed) makes `check()`
+   *   halt (rule `budget.unpriced`) instead of silently passing. Per-instance/sticky
+   *   to the latest round; never touches the shared file format. Default false. (§3.8)
    */
   constructor(cfg = {}) {
     this.capUsd = cfg.maxCostUsd ?? Infinity;
@@ -85,6 +99,14 @@ export class Budget {
     this.strict = cfg.strict ?? false;
     this._costBuf = [];
     this._tokenBuf = [];
+    // Cost contract (PRD §3.7/§3.8): an `unpriced` round carries an UNKNOWN cost,
+    // not a free one. Default behavior is a loud audit line (the gate emits an
+    // `unpriced` phase). With failClosedOnUnpriced AND a finite cost cap, the cost
+    // axis is unenforceable once an unpriced round lands, so check() halts. Sticky
+    // and per-instance (like the strict buffers above) — it never enters the shared
+    // budget file, so the v2 format is untouched.
+    this.failClosedOnUnpriced = cfg.failClosedOnUnpriced ?? false;
+    this._unpricedSeen = false;
   }
 
   /**
@@ -119,7 +141,10 @@ export class Budget {
       if (err.code === "ENOENT" || err instanceof SyntaxError) {
         if (rebuildFromAudit) {
           const rebuilt = await rebuildFromAudit();
-          this.spentUsd    = rebuilt.spentUsd ?? 0;
+          // Round the reconstructed total too: the cold-start rebuild sums per-record
+          // costs with the same raw `+`, so the float-drift cap bypass would re-enter
+          // through this door if left unquantized.
+          this.spentUsd    = roundUsd(rebuilt.spentUsd ?? 0);
           this.spentTokens = rebuilt.spentTokens ?? 0;
           if (rebuilt.capUsd != null)    this.capUsd    = rebuilt.capUsd;
           if (rebuilt.capTokens != null) this.capTokens = rebuilt.capTokens;
@@ -248,6 +273,15 @@ export class Budget {
         };
       }
     }
+    // 1c. Cost-contract fail-closed (PRD §3.8): an unpriced round leaves the cost
+    // axis unenforceable. Only meaningful under a finite cost cap — with no cap
+    // there is nothing to fail closed on, so it stays a pure audit signal.
+    if (this.failClosedOnUnpriced && this._unpricedSeen && isFinite(this.capUsd)) {
+      return {
+        outcome: "askHuman", severity: "halt", rule: "budget.unpriced",
+        reason: `cost unenforceable: an unpriced round occurred under cap $${this.capUsd.toFixed(2)} (failClosedOnUnpriced)`,
+      };
+    }
     // 2. Strict pre-flight: project next action via trailing avg; halt if
     // projection would exceed cap. Requires ≥3 samples to avoid cold-start
     // false halts. Per-dimension; runs after post-fact so reason strings
@@ -327,11 +361,28 @@ export class Budget {
    * @param {number} [result.costUsd] USD spent (default 0)
    * @param {number} [result.tokens] tokens spent (default 0)
    * @param {Object<string,number>} [result.counts] per-resource deltas (e.g. `{ writes: 1 }`), accrued against `resources` caps (OQ3)
-   * @returns {Promise<{warnings: Array<{dimension:string,spent:number,cap:number,ratio:number}>}>} soft-tier warnings crossed by this delta (empty when softRatio is off)
+   * @param {"priced"|"unpriced"} [result.pricing] cost-contract signal; `"unpriced"`
+   *   accrues NO cost (unknown ≠ free) but still accrues tokens/counts and trips the
+   *   sticky fail-closed flag (PRD §3.8)
+   * @returns {Promise<{warnings: Array<{dimension:string,spent:number,cap:number,ratio:number}>, unpriced: boolean}>} soft-tier warnings crossed by this delta (empty when softRatio is off) and whether this round was unpriced
    * @throws {BudgetUnavailableError} if the shared file can't be read under the held lock
    */
   async record(result) {
-    const dUsd = result?.costUsd ?? 0;
+    // Cost contract (PRD §3.7/§3.8): an explicitly `unpriced` round has an UNKNOWN
+    // cost. Accruing `costUsd ?? 0` would silently treat unknown as free — the exact
+    // #3 footgun — so an unpriced round accrues NO cost and instead trips the sticky
+    // `_unpricedSeen` flag (which check() honors under failClosedOnUnpriced). Tokens
+    // and counts are provider-exact even when cost can't be priced, so they accrue
+    // normally — the token wall is unaffected. `pricing` absent ⇒ priced (back-compat).
+    // Per-round (PRD §3.8 frames it "unenforceable for THAT round"): the flag
+    // tracks the LATEST round's pricing, so a fail-closed halt persists exactly
+    // while pricing stays broken and clears once a priced round records again — a
+    // single transient unpriced round doesn't wedge the whole run into per-action
+    // HITL. (A non-cost record, e.g. a pure tool action with pricing absent, counts
+    // as priced and clears it — there is nothing unpriceable about it.)
+    const unpriced = result?.pricing === "unpriced";
+    this._unpricedSeen = unpriced;
+    const dUsd = unpriced ? 0 : (result?.costUsd ?? 0);
     const dTok = result?.tokens ?? 0;
     // Sanitize generic counts: accrue only POSITIVE deltas for CONFIGURED
     // resources. Counts are monotonic (you can't un-write) so a negative delta
@@ -348,11 +399,11 @@ export class Budget {
     const hasCounts = Object.keys(counts).length > 0;
     this._pushBuf(dUsd, dTok);
     if (dUsd === 0 && dTok === 0 && !hasCounts && !this.sharedFile) {
-      return { warnings: [] }; // nothing to do
+      return { warnings: [], unpriced }; // nothing to accrue (still report unpriced)
     }
     const warnings = [];
     const accrue = (beforeUsd, beforeTok, beforeRes) => {
-      this.spentUsd    = beforeUsd + dUsd;
+      this.spentUsd    = roundUsd(beforeUsd + dUsd);
       this.spentTokens = beforeTok + dTok;
       this._maybeWarn("costUsd", beforeUsd, this.spentUsd, this.capUsd, warnings);
       this._maybeWarn("tokens",  beforeTok, this.spentTokens, this.capTokens, warnings);
@@ -365,7 +416,7 @@ export class Budget {
     };
     if (!this.sharedFile) {
       accrue(this.spentUsd, this.spentTokens, this.resourceSpent);
-      return { warnings };
+      return { warnings, unpriced };
     }
     const sharedFile = this.sharedFile; // non-null past the guard above
     await this._withLock(async () => {
@@ -390,7 +441,7 @@ export class Budget {
       accrue(s.spent_usd ?? 0, s.spent_tokens ?? 0, s.resource_spent ?? {});
       await this._write();
     });
-    return { warnings };
+    return { warnings, unpriced };
   }
 
   /**

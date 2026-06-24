@@ -550,11 +550,23 @@ export class Gate {
     const aid = opts.aid ?? randomUUID().slice(0, 8);
     this.limits.tick(action);
     if (action?.type === "spawn") this.limits.noteSpawn();
-    const { warnings } = await this.budget.record(result);
+    const { warnings, unpriced } = await this.budget.record(result);
     await this.audit.emit({
       phase: "record", action, aid,
       decision: null, severity: null, rule: null, reason: null, result,
     });
+    // Cost contract (PRD §3.7/§3.8): an unpriced round means the cost axis could not
+    // be priced this round. Surface it LOUDLY as its own phase — never a silent zero
+    // — so the budget being unenforceable for this round is observable. (The halt,
+    // if failClosedOnUnpriced is set, comes from budget.check() on the next preEval.)
+    if (unpriced) {
+      await this.audit.emit({
+        phase: "unpriced", action, aid,
+        reason: this.budget.failClosedOnUnpriced && isFinite(this.budget.capUsd)
+          ? "cost unpriced under an active cap — budget axis will fail closed (failClosedOnUnpriced)"
+          : "cost unpriced this round — budget axis unenforceable for this action",
+      });
+    }
     // OQ3 soft tier: surface each crossed warning as a non-blocking observability
     // line (the decision/halt path is untouched — a warn never stops the run).
     for (const w of warnings) {
