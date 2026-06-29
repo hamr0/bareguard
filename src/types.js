@@ -258,15 +258,27 @@ export {};
  */
 
 /**
- * `secrets` config — when set, the gate auto-redacts `action` / `result` /
- * `reason` on every audit line (eval still sees the real action).
+ * `secrets` config — the gate auto-redacts `action` / `result` / `reason` on
+ * every audit line (eval still sees the real action). The key-aware backstop
+ * (BG-1) is DEFAULT-ON, so redaction runs even with no `secrets` config; the
+ * fields below layer on top.
  *
  * @typedef {object} SecretsConfig
  * @property {string[]} [envVars]   Env-var names whose values are redacted.
  *   Values shorter than 8 characters are skipped (to avoid masking incidental
  *   short strings like port numbers), so very short secrets are NOT redacted —
  *   use `patterns` for those.
- * @property {RegExp[]} [patterns]  Credential patterns; forced global at match time.
+ * @property {RegExp[]} [patterns]  Credential value patterns; forced global at
+ *   match time. Layered on top of the default-on `Bearer …` / `sk-…` patterns.
+ * @property {string[]} [keys]      Additional secret field NAMES, blanked by
+ *   key regardless of value (case-insensitive; a `*suffix` spec like `*_token`
+ *   matches any key ending in `suffix`). Extends the narrow default-on set
+ *   (`apiKey` / `api_key` / `authorization`). The defaults deliberately omit
+ *   `*_token` / `*_secret` globs — those false-positive on `page_token` etc.;
+ *   add them here when your audit shape needs them.
+ * @property {boolean} [redactKeys] Default `true`. Set `false` to disable the
+ *   entire default-on backstop (default key set + default value patterns);
+ *   explicitly-configured `envVars` / `patterns` / `keys` still apply.
  */
 
 /**

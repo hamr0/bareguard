@@ -217,7 +217,7 @@ halt-vs-action distinction).
 | 5  | **limits**           | mixed    | `maxTurns` (**halt**, ticks on every `gate.record`), `maxToolRounds` (**halt**, ticks only on non-`"llm"` records — v0.4.2), `maxChildren` (action), `maxDepth` (action), `timeoutSeconds` (**halt**, v0.2). |
 | 6  | **approval**         | n/a      | Routes ask events to the runner's `humanChannel` callback. No callback storage in v0.6.                                  |
 | 7  | **tools**            | action   | Tool name allowlist / denylist (glob-matched) + per-tool `denyArgPatterns` (regex over args). Allowlist is **scope-only** — does NOT silence asks. |
-| 8  | **secrets**          | n/a      | Redaction of `action` / `result` / `reason`. Env-var matches → `[REDACTED:VAR_NAME]`. Pattern matches → `[REDACTED:pattern=<short prefix>...]`. When `secrets` is configured the gate auto-redacts every audit line at write time (v0.4.5) — eval runs on the unredacted action so matching is never weakened. `redact()` also exported for ad-hoc use. |
+| 8  | **secrets**          | n/a      | Redaction of `action` / `result` / `reason` on every audit line at write time — eval runs on the *unredacted* action so matching is never weakened; redaction is non-mutating (the caller's object is untouched). Three layers: **key-aware** (BG-1, **default-on**) blanks a field by *name* → `[REDACTED:key=<name>]` (narrow default `apiKey`/`api_key`/`authorization` + value patterns `Bearer …`/`sk-…`; extend via `secrets.keys`, disable via `secrets.redactKeys:false`); **env-var** values → `[REDACTED:VAR_NAME]`; **pattern** matches → `[REDACTED:pattern=<short prefix>...]` (both opt-in via `secrets.envVars`/`secrets.patterns`, v0.4.5). `redact()` also exported for ad-hoc use. |
 | 9  | **audit**            | n/a      | Append-only JSONL of every gated decision. **One file per agent family** via POSIX `O_APPEND` atomicity (Windows uses lock fallback). Includes `parent_run_id` and `spawn_depth` for multi-agent stitching. |
 | 10 | **defer-rate**       | action   | _(v0.2)_ Caps `defer()` calls per minute. Re-validates the deferred action's gate decision on emit AND on fire (defense in depth). |
 | 11 | **spawn-rate**       | action   | _(v0.2)_ Caps `spawn()` calls per minute and per parent's lifetime. Composed with `limits.maxChildren` and `limits.maxDepth`. |
@@ -387,8 +387,13 @@ const gate = new Gate({
     },
   },
   secrets: {
+    // Key-aware redaction is DEFAULT-ON (BG-1) even with no `secrets` block:
+    // case-insensitive keys apiKey / api_key / authorization + value patterns
+    // `Bearer …` / `sk-…` are blanked on every audit line. These layer on top:
     envVars:  ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GITHUB_TOKEN"],
     patterns: [/sk-[A-Za-z0-9]{40,}/, /ghp_[A-Za-z0-9]{36}/],
+    keys:     ["X-Api-Key", "*_token"], // extend the default key set (suffix glob ok)
+    // redactKeys: false,               // opt out of the default-on backstop entirely
   },
   content: {
     // omit to keep safe defaults from §11; or override:

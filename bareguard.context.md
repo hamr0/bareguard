@@ -37,7 +37,7 @@ One entry point:
 | Egress allowlist / private-IP block | `net.allowDomains`, `net.denyPrivateIps: true` |
 | Share budget across parent + child processes | `budget.sharedFile: "/path/budget.json"` (uses `proper-lockfile`) |
 | Reconstruct family tree from audit | one file at `$XDG_STATE_HOME/bareguard/<root-run-id>.jsonl`; grep `parent_run_id` |
-| Redact API keys from actions before audit | `secrets.envVars: ["ANTHROPIC_API_KEY"]`, `secrets.patterns: [/sk-[A-Za-z0-9]{40,}/]` |
+| Keep secrets out of the audit log | **Default-on (BG-1):** keys `apiKey`/`api_key`/`authorization` + `Bearer …`/`sk-…` values are blanked on every audit line with no config. Extend with `secrets.keys: ["X-Api-Key", "*_token"]`; add value rules with `secrets.envVars: ["ANTHROPIC_API_KEY"]` / `secrets.patterns: [/sk-[A-Za-z0-9]{40,}/]`; opt out with `secrets.redactKeys: false` |
 | Ask the human before destructive verbs | safe-default `content.askPatterns` ship; provide `humanChannel` callback |
 | Deny/ask on a structured field (e.g. a memory adopter's verdict) | `flags: { provenance: { web: "ask" }, injectionRisk: { high: "deny" } }` — reads `action[field]` directly, before the allowlist |
 | Confirm the human before *every* call of a tool (e.g. every `bash`) | `flags: { type: { bash: "ask" } }` — gates the always-present `type` field; fires even when the tool is allowlisted, routes through the one `humanChannel` (no separate approval channel) |
@@ -168,33 +168,44 @@ grep '"parent_run_id":"<parent-run-id>"' run.jsonl
 
 ## Wiring secrets redaction
 
-Caller is responsible for redacting **results** before `gate.record(action, result)`.
-bareguard's `redact()` helper handles both actions and results.
+**Redaction is DEFAULT-ON (BG-1).** Even with no `secrets` block, the gate blanks
+a narrow set on every audit line: case-insensitive keys `apiKey` / `api_key` /
+`authorization` (by *name*, regardless of value) plus value patterns `Bearer …`
+and `sk-…`. This is the backstop for the unknowing adopter who threads a live
+provider into `_ctx` — `action._ctx.provider.apiKey` never lands raw on disk.
+Redaction is **audit-only and non-mutating**: eval/execute see the real action
+(policy matching is never weakened) and the caller's object is untouched.
+
+The default is **deliberately narrow** — it excludes `*_token` / `*_secret`
+globs because those false-positive on `page_token` / `csrf_token` and would
+corrupt the audit. Extend or opt out via config:
 
 ```javascript
-import { redact } from "bareguard";
-
 const gate = new Gate({
   secrets: {
-    envVars:  ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GITHUB_TOKEN"],
-    patterns: [/sk-[A-Za-z0-9]{40,}/, /ghp_[A-Za-z0-9]{36}/],
+    keys:     ["X-Api-Key", "*_token"],          // extend default-on key set (suffix glob ok)
+    envVars:  ["ANTHROPIC_API_KEY", "GITHUB_TOKEN"], // also blank these env *values*
+    patterns: [/ghp_[A-Za-z0-9]{36}/],           // and these value patterns
+    // redactKeys: false,                        // disable the default-on backstop entirely
+    //                                           // (explicit envVars/patterns/keys still apply)
   },
   // ...
 });
 
-// That's it. When `secrets` is configured, the gate auto-redacts the
-// action, result, and reason on every audit line at write time (v0.4.5).
-// You do NOT pre-redact before check() — eval runs on the real action so
-// policy matching is never weakened; only the persisted log is redacted.
+// No pre-redaction. Eval runs on the real action; only the persisted log is masked.
 await gate.check(rawAction);
 await gate.record(rawAction, rawResult);
 
-// `redact()` is still exported for ad-hoc redaction outside the gate.
+// `redact()` is exported for ad-hoc redaction outside the gate (also default-on).
 import { redact } from "bareguard";
 const masked = redact(anyObject, { patterns: [/sk-[A-Za-z0-9]{40,}/] });
 ```
 
-Format: `[REDACTED:ANTHROPIC_API_KEY]` for env-var matches, `[REDACTED:pattern=sk-...]` for unknown-source pattern matches. **Never** shows full secrets, **never** shows the suffix. Redaction needs values ≥ 8 chars (short env vars like a port aren't redacted).
+Format: `[REDACTED:key=apiKey]` for key-name matches, `[REDACTED:ANTHROPIC_API_KEY]`
+for env-var matches, `[REDACTED:pattern=sk-...]` for pattern matches. **Never**
+shows full secrets or the suffix. Env-var redaction needs values ≥ 8 chars (a
+short env var like a port isn't redacted). Caller is still responsible for the
+shape of **results** before `gate.record` — but the same redactor runs over them.
 
 ## Eval order in detail
 
@@ -339,7 +350,7 @@ These are deliberately NOT in bareguard. Don't look for them — build them or u
 2. **Budget caps are SOFT.** Cross-process budget can be exceeded by one action's spend before next refresh. Halt fires reliably on the next check after a record. Don't rely on hard cents-precision enforcement.
 3. **Audit line size capped at 3.5KB.** POSIX `O_APPEND` atomicity requires < PIPE_BUF (4KB). Larger `action.args` are auto-truncated with `[TRUNCATED:...]` markers. Don't put 10MB blobs in your action.
 4. **Glob is `*`-only in v0.1.** No `?`, no `[abc]`, no escapes. `mcp:*/admin_*` matches anything in the middle, including `/`. v0.2 may add `**`.
-5. **Secrets redaction needs values ≥ 8 chars.** Short env vars (e.g., `PORT=5432`) are not redacted because they're likely not secrets and would over-match.
+5. **Secrets redaction is default-on but narrow.** Key-aware redaction (BG-1) fires with no config for `apiKey`/`api_key`/`authorization` + `Bearer …`/`sk-…` values — but NOT for `*_token`/`*_secret`-named keys (false-positive risk on `page_token`); add those via `secrets.keys`. **Env-var** redaction additionally needs values ≥ 8 chars (a short env var like `PORT=5432` isn't redacted — likely not a secret and would over-match). Disable the whole default-on backstop with `secrets.redactKeys: false`.
 6. **`gate.allows()` is a catalog pre-filter, NOT an authorization gate.** It returns `true` for askHuman actions (so ask-gated tools still show in a catalog and the human is prompted at invoke time) — it only returns `false` for outright `deny`/halt. **Always call `gate.check()` before executing**; never use `allows()` as the security decision.
 7. **`gate.run(action, executor)` returns the executor's result on allow, OR `{ error: { type: "policy_denied", rule, reason, action_summary } }` on deny.** Doesn't throw. Halt severity inside `run` returns the same error shape with `severity: "halt"`.
 8. **Topup loop max 5 iterations.** If humanChannel returns topup but the new cap still halts, bareguard re-calls humanChannel up to 5 times before forcing a deny+halt with reason `"topup loop exceeded 5 iterations"`. Defensive guard against runaway humans.
@@ -351,7 +362,7 @@ These are deliberately NOT in bareguard. Don't look for them — build them or u
 14. **fs scope/deny is lexically normalized, not symlink-resolved.** `.`/`..` segments are collapsed before matching, and scopes/deny entries match on path segments (so `/app/data` does NOT cover `/app/data-secrets`) — traversal like `/app/data/../../etc/passwd` can't escape `readScope: ["/app/data"]`. But a symlink *inside* an allowed scope that points outside it is not caught; canonicalize (`fs.realpath`) before the gate if your filesystem has untrusted symlinks.
 15. **`net.denyPrivateIps` is hostname-based, not post-DNS.** It blocks IPv4 private/loopback/link-local (incl. cloud-metadata `169.254.169.254` and `0.0.0.0`), IPv6 loopback/ULA/link-local (brackets stripped), and IPv4-mapped IPv6. It does NOT resolve DNS, so a public hostname that resolves to a private address (DNS rebinding) is not caught — resolve-then-check upstream if that's in your threat model. Pair with `net.allowDomains` for a positive egress allowlist.
 16. **`bash.allow` fails closed on shell metacharacters** (v0.4.5). When `bash.allow` is set, any command containing `;`, `|`, `&`, `$`, `` ` ``, `(`, `)`, `<`, `>`, or a newline is **denied** (rule `bash.allow.shellMeta`) — a prefix allowlist can't bound what runs after a chain/pipe/substitution. This also denies legitimate pipes like `git log | head`. If you need chaining, don't rely on `bash.allow` as the boundary — use `content.denyPatterns` (which scans the whole command) or `bash.denyPatterns`.
-17. **Audit auto-redacts when `secrets` is configured** (v0.4.5). The gate redacts `action`, `result`, and `reason` on every audit line at write time. Eval runs on the *unredacted* action (matching is never weakened); only the persisted log is masked. Don't pre-redact before `check()`/`record()` — it's redundant and pre-redaction would weaken policy matching.
+17. **Audit auto-redacts on every line — DEFAULT-ON (BG-1)**, not just when `secrets` is configured. Key-aware redaction (`apiKey`/`api_key`/`authorization` + `Bearer …`/`sk-…`) runs with zero config; `secrets.envVars`/`patterns`/`keys` layer on top; `secrets.redactKeys: false` disables the default-on backstop. The gate redacts `action`, `result`, `reason`, `where`, and `meta` at write time. Eval runs on the *unredacted* action (matching is never weakened) and the redactor is non-mutating (the caller's object is untouched); only the persisted log is masked. Don't pre-redact before `check()`/`record()` — it's redundant and would weaken policy matching.
 18. **`bash.classify` patterns are ReDoS-safe (linear-time)**. The shipped severity corpus avoids catastrophic backtracking — a crafted command string (e.g. `rm -rfrfrf…`) classifies in linear time (1 MB ≈ 16 ms), so a hostile/confused agent can't hang the gate via the classifier. If you add your own `extraDestructive` / `extraSuperDestructive` patterns, keep them linear too: avoid multiple consecutive unbounded quantifiers over the same class (`[a-z]*x[a-z]*y[a-z]*`); prefer non-consuming lookaheads. **Defense-in-depth:** classify runs at the ask step (4), after the deny floor (steps 1–3) — it can only escalate to a human ask, never downgrade a deny. It is best-effort UX tiering, **not** a sandbox.
 
 ## Recipes
