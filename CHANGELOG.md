@@ -4,6 +4,11 @@ All notable changes to bareguard are documented here. Format: [Keep a Changelog]
 
 ## [Unreleased]
 
+## [0.10.1] — 2026-06-29
+
+### Docs
+- **Trimmed the README to value-over-internals.** Removed the `## Docs` table and the inline links to repo-internal planning docs (PRD, NO-GO list, decisions log, harness research, harness cookbook) from the public README — these leaked internal process docs onto the npm package page. Kept the value content (what it is / what it isn't, install, quick start, the trio-in-one-loop, the primitives overview, Axis B) and the bare-ecosystem skeleton; the user-facing Usage Guide / Integration Guide pointers remain. No code, config, type, or API change — published package contents are byte-identical apart from `README.md`.
+
 ## [0.10.0] — 2026-06-29
 
 ### Added

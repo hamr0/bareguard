@@ -28,11 +28,11 @@
 
 One chokepoint between your agent and the world. Every action the agent takes — a shell command, a file write, a network call, a spend — passes through one `Gate` and comes back **allow**, **deny**, or **ask a human**. You get a hard floor under a probabilistic agent, and a single audit log of everything it tried.
 
-That floor is **Axis A** of a [floor + harness](docs/01-product/bareguard-prd.md) model: you can't make a probabilistic agent deterministic, so you fence where the dice can do damage. **Axis B** (opt-in) is the complement — it reconciles what came *back* against what you asked for. Both are shown below.
+That floor is **Axis A** of a floor + harness model: you can't make a probabilistic agent deterministic, so you fence where the dice can do damage. **Axis B** (opt-in) is the complement — it reconciles what came *back* against what you asked for. Both are shown below.
 
 Small on purpose: one `Gate`, three call sites (`redact` · `check` · `record`), thirteen primitives you can each read in a sitting. Embed it like the rest of the [bare suite](#the-bare-ecosystem) — no daemon, no SaaS, no telemetry.
 
-**What it isn't** — bareguard owns one layer and is honest about the rest. It's not a content filter (toxicity / PII / schema → `guardrails-ai`), not a sandbox (containment → Docker / gVisor), and not auth (who the actor *is* → upstream; per-principal policy rides `action._ctx`). It decides the action; it never runs it. The deliberate non-goals are listed once in the [NO-GO list](docs/04-process/non-roadmap.md).
+**What it isn't** — bareguard owns one layer and is honest about the rest. It's not a content filter (toxicity / PII / schema → `guardrails-ai`), not a sandbox (containment → Docker / gVisor), and not auth (who the actor *is* → upstream; per-principal policy rides `action._ctx`). It decides the action; it never runs it.
 
 ## Install
 
@@ -94,7 +94,7 @@ That file has the `humanChannel` patterns, shared-budget-across-processes setup,
 
 ## The primitives
 
-Thirteen small files — each ~30–180 lines. The gate runs them in a fixed order (**deny → ask → scope → default**, first match wins) and they compose into [harness bundles](docs/02-features/harness-cookbook.md): tighten-only capability presets an agent picks at runtime, never load-bearing for safety — pick the wrong one and the floor still holds. (In *code-mode*, the agent writes a code body over a typed tool menu and the gate stays in the parent process; the agent never holds a raw tool.)
+Thirteen small files — each ~30–180 lines. The gate runs them in a fixed order (**deny → ask → scope → default**, first match wins) and they compose into harness bundles: tighten-only capability presets an agent picks at runtime, never load-bearing for safety — pick the wrong one and the floor still holds. (In *code-mode*, the agent writes a code body over a typed tool menu and the gate stays in the parent process; the agent never holds a raw tool.)
 
 - **Scope what runs** — `tools` is a closed allowlist (deny-by-default); `bash` / `fs` / `net` bound which commands, paths, and domains are even reachable.
 - **Tier what's dangerous** — `bash.classify` ranks a command **safe → destructive → super-destructive** across Linux / macOS / Windows and routes the severity to your human channel; `content` ships safe defaults (`rm -rf /`, `DROP TABLE` denied outright; destructive verbs ask).
@@ -120,18 +120,6 @@ const facts = gate.drainAnnotations();                  // and/or feed them back
 ```
 
 You declare undoable action types via `axisB: { reversible: [...] }`; reversibility is read from the **gated action's type**, never the fact, the agent, or the model. The knob (`strict` default | `relaxed`) is pure noise control on the reversible path, never safety.
-
-## Docs
-
-| | |
-|---|---|
-| **[Integration Guide](bareguard.context.md)** | LLM-optimized wiring — hand it to your AI assistant. |
-| **[Usage Guide](docs/02-features/usage-guide.md)** | Eval order, common gotchas, and 8 deployment recipes. |
-| **[Harness cookbook](docs/02-features/harness-cookbook.md)** | Vetted capability bundles — tighten-only presets over one floor. |
-| **[PRD](docs/01-product/bareguard-prd.md)** | Unified design spec + future-feature candidates. |
-| **[Harness research](docs/00-context/harness-research.md)** | Problem space, the A2A intent-drift experiment, and identity/the gate (auth is upstream; per-principal policy via `_ctx`) — three merged. |
-| **[NO-GO list](docs/04-process/non-roadmap.md)** | What bareguard deliberately won't do. |
-| **[Decisions log](docs/04-process/decisions-log.md)** · **[CHANGELOG](CHANGELOG.md)** | Design calls and release history. |
 
 ## The bare ecosystem
 
