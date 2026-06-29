@@ -6,7 +6,7 @@ import { randomUUID } from "node:crypto";
 import { Audit, defaultAuditPath } from "./primitives/audit.js";
 import { Budget, sanitizeSpend } from "./primitives/budget.js";
 import { Limits } from "./primitives/limits.js";
-import { redact } from "./primitives/secrets.js";
+import { redact, makeRedactor } from "./primitives/secrets.js";
 import { bashCheck } from "./primitives/bash.js";
 import { bashClassifyCheck } from "./primitives/classify.js";
 import { fsCheck } from "./primitives/fs.js";
@@ -134,10 +134,12 @@ export class Gate {
       filePath: auditPath, runId: this.runId,
       parentRunId: this.parentRunId, spawnDepth: this.spawnDepth,
       rootRunId: this.rootRunId, clock: this._clock,
-      // Auto-redact persisted action/result when secrets are configured, so
-      // the audit log never carries raw secrets — without the caller having
-      // to remember to pre-redact (which would also weaken policy matching).
-      redact: config.secrets ? (x) => redact(x, config.secrets) : null,
+      // Auto-redact persisted action/result. The key-aware backstop (BG-1) is
+      // DEFAULT-ON, so even a caller that never sets `secrets` won't leak a
+      // `_ctx.provider.apiKey` to disk; explicit `secrets` layers on top. Eval
+      // still sees the real action (redaction is audit-only). `null` only when
+      // the backstop is explicitly disabled with no other secrets config.
+      redact: makeRedactor(config.secrets),
     });
 
     const sharedFile = config.budget?.sharedFile ?? process.env.BAREGUARD_BUDGET_FILE ?? null;

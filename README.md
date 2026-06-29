@@ -61,7 +61,7 @@ const gate = new Gate({
 await gate.init();
 
 // In your agent loop:
-const decision = await gate.check(action);   // audit auto-redacts if `secrets` is set
+const decision = await gate.check(action);   // audit auto-redacts secrets (default-on)
 if (decision.outcome === "allow") {
   const result = await yourExecutor(action);
   await gate.record(action, result);  // result.costUsd / result.tokens
@@ -100,7 +100,7 @@ Thirteen small files — each ~30–180 lines. The gate runs them in a fixed ord
 - **Tier what's dangerous** — `bash.classify` ranks a command **safe → destructive → super-destructive** across Linux / macOS / Windows and routes the severity to your human channel; `content` ships safe defaults (`rm -rf /`, `DROP TABLE` denied outright; destructive verbs ask).
 - **Bound what accumulates** — `budget` caps spend, tokens, *or any countable resource*, and `limits` caps turns / children / depth — both **halt with a human in the loop**, not silently, and the cap is shared across processes.
 - **Gate on meaning, not text** — `flags` reads a structured field's value (a memory engine's `provenance` / `injectionRisk`) straight off the action, no regex; the same channel can also confirm before *every* call of a tool.
-- **Prove what happened** — `secrets` auto-redacts every audit line, and one `audit` JSONL joins each request to its outcome and its approval, even when two actions look identical.
+- **Prove what happened** — `secrets` auto-redacts every audit line **by default** (API keys / `Bearer …` tokens never hit disk, even with no config), and one `audit` JSONL joins each request to its outcome and its approval, even when two actions look identical.
 
 Full per-primitive reference lives in the **[Usage Guide](docs/02-features/usage-guide.md)** and **[Integration Guide](bareguard.context.md)** — not here.
 
