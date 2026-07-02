@@ -1121,6 +1121,45 @@ JSONL phases.
   this is the audit shape it feeds — but it must not wait for, or assume, Axis B.
 - *Origin / relation:* Part 2 §10 **OQ4**; a2a-intent-drift §12.2.
 
+**Trial-first: dry-run routing for uncertain / irreversible actions (PROPOSED 2026-07-02; not built).**
+A third lane beside allow/deny/ask: for an action whose type is *uncertain or unclassified*
+**and** whose effect is *contained and diffable*, route it to a **try-first** pass — the
+harness runs the action's dry-run form, and its result comes back as a deterministic **fact**
+the gate then decides on. It is the *empirical* answer to "what happens if I do this": **measure**
+the consequence instead of **predicting** it (contrast a learned world-model / JEPA, whose output
+is a guess — the model-drives-a-decision case Appendix C bar 2 and §6 rule out). bareguard **never
+runs the dry-run** — that would make it the executor/sandbox it explicitly is NOT (§4); it only
+(a) routes the type and (b) reads the trial result back.
+
+- *Shape (sketched, not settled):* three pieces, each in its existing home. **Which types need a
+  trial** = operator config, per-type (parallel to `axisB.reversible`): `trial: { requireBefore:
+  ["terraform.apply", "sql.write", "k8s.apply"] }`. **Running the dry-run** = the *harness/adopter*
+  (`terraform plan`, `kubectl --dry-run=server`, `helm --dry-run`, SQL `BEGIN…ROLLBACK`, `git apply
+  --check`, `rsync -n`) — bareguard owns no command strings. **The trial result as a fact** = reuse
+  **Axis B** (`gate.annotate` carrying the plan-diff), so the operator gates deterministically on the
+  *measured* consequence (`allow if plan destroys 0, else ask`) — Axis A gating on an Axis-B fact, no
+  model. Handshake: an action of a `requireBefore` type arriving *without* an attached trial result
+  fails **closed** (deny-to-prod + a "run the trial" signal); the harness runs it, re-submits with the
+  result attached, and the gate proceeds on the now-known action.
+- *Why parked:* (1) **no adopter ask** — nothing automates infra/DB through the gate yet (idle-by-design;
+  Appendix E). (2) **Honest scope is narrow** — it only helps actions with a faithful, contained, diffable
+  dry-run (infra `plan`, DB snapshot/rollback, code worktree, bulk-FS `-n`); the *external* irreversible
+  band (send email / charge card / third-party POST) **cannot** be sandboxed — the trial *is* the side
+  effect — so those stay `ask-human`. It is not "sandbox the unknowns," it is "dry-run the diffable slice."
+  (3) **Mostly a recipe, not a primitive** — routing (`flags` / a type rule) + fail-closed (deny-to-prod)
+  + result-as-fact (`annotate`, Part 2 §8) are all shipped; the only genuinely new surface is a first-class
+  **`trial` decision outcome** so the harness gets a clean signal instead of overloading `ask`, and a new
+  outcome is 1.0-SemVer surface (§19 bareguard 1.0) — it clears the bar only when a real DevOps adopter hits
+  the recipe's clumsiness. (4) A **predefined dry-run table baked into the core is a NO** (bareguard claiming
+  it knows your toolchain + owning command strings = the "authoritative" overreach declined for `bash.classify`,
+  §19 0.8); a **best-effort, override-me reference list in the harness cookbook** is the right home.
+- *Origin / relation:* this-session design arc off a JEPA ("predict the future state in latent space") read,
+  reframed to **measure, don't predict** — which fits the deterministic floor where a learned predictor fights
+  it (§6). Composes Axis B (Part 2 §8; facts-not-judgments + reversibility-by-type trust model) and the
+  `bash.classify` best-effort framing (§19 0.8). First likely user: an infra/DB automation agent whose tools
+  already ship a native dry-run, so "try-first" = route to the tool's own `--dry-run`, no VM. **Cookbook recipe
+  first; `trial` outcome on demand.**
+
 ## 20. POC retrospective (what we built, why)
 
 bareguard v0.1 was developed via three POC phases (per the original v0.4
