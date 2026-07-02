@@ -14,7 +14,7 @@
 ```
 
 > One chokepoint between your agent and the world. Bounds what the agent **does**, not what it **says**.
-> Single audit log. Hard caps that halt with a human in the loop. ~3,000 lines, one production dep.
+> Single audit log. Hard caps that halt with a human in the loop. Small, one production dep.
 
 <p align="center">
   <a href="https://github.com/hamr0/bareguard/actions/workflows/ci.yml"><img src="https://github.com/hamr0/bareguard/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
@@ -94,7 +94,7 @@ That file has the `humanChannel` patterns, shared-budget-across-processes setup,
 
 ## The primitives
 
-Thirteen small files — most under ~200 lines. The gate runs them in a fixed order (**deny → ask → scope → default**, first match wins) and they compose into harness bundles: tighten-only capability presets an agent picks at runtime, never load-bearing for safety — pick the wrong one and the floor still holds. (In *code-mode*, the agent writes a code body over a typed tool menu and the gate stays in the parent process; the agent never holds a raw tool.)
+Thirteen small files, each readable in a sitting. The gate runs them in a fixed order (**deny → ask → scope → default**, first match wins) and they compose into harness bundles: tighten-only capability presets an agent picks at runtime, never load-bearing for safety — pick the wrong one and the floor still holds. (In *code-mode*, the agent writes a code body over a typed tool menu and the gate stays in the parent process; the agent never holds a raw tool.)
 
 - **Scope what runs** — `tools` is a closed allowlist (deny-by-default); `bash` / `fs` / `net` bound which commands, paths, and domains are even reachable.
 - **Tier what's dangerous** — `bash.classify` ranks a command **safe → destructive → super-destructive** across Linux / macOS / Windows and routes the severity to your human channel; `content` ships safe defaults (`rm -rf /`, `DROP TABLE` denied outright; destructive verbs ask).
