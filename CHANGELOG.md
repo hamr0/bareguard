@@ -4,6 +4,8 @@ All notable changes to bareguard are documented here. Format: [Keep a Changelog]
 
 ## [Unreleased]
 
+## [0.10.2] — 2026-07-02
+
 ### Docs
 - **PRD §19 — new future-feature candidate: "Trial-first" (dry-run routing for uncertain / irreversible actions).** Captured, not built. A third lane beside allow/deny/ask: an action whose type is uncertain *and* whose effect is contained/diffable routes to a try-first pass — the harness runs the action's dry-run form (`terraform plan`, `kubectl --dry-run`, SQL `BEGIN…ROLLBACK`, `git apply --check`, `rsync -n`), and the result rides Axis B as a deterministic fact the gate decides on (measure the consequence, don't predict it). bareguard **routes and reads back, never runs the dry-run** (preserves the §4 "not a sandbox" non-goal). Parked: no adopter ask; scope is narrow (external side-effects still `ask-human`); mostly a cookbook recipe over `flags` + `annotate`, with a first-class `trial` outcome demand-gated (1.0-SemVer surface) and a predefined dry-run table kept out of core (best-effort reference list in the cookbook instead — the `bash.classify` framing lesson).
 - **README — removed line-count claims.** Dropped the inaccurate "~1,000 lines" total and the per-file line figure; the copy now just implies the library is small ("Small, one production dep" / "Thirteen small files, each readable in a sitting") rather than quoting a count. Copy-only, no code change.
