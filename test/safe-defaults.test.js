@@ -75,6 +75,54 @@ test("safe defaults — git push --force is denied", async () => {
   assert.equal(dec.rule, "content.denyPatterns");
 });
 
+// BG-3/F35 — content patterns scan the OPERATION, not the write payload.
+// Acceptance triad: DROP TABLE / rm -rf in args.contents → allow; same in a
+// command → deny; a structural "method":"DELETE" field → still ask.
+
+test("BG-3 — destructive verbs in a write payload (args.contents) do NOT deny", async () => {
+  const gate = new Gate({});
+  await gate.init();
+  const dec = await gate.check({
+    type: "write",
+    path: "migrations/001.sql",
+    args: { path: "migrations/001.sql", contents: "DROP TABLE users;\n-- also rm -rf / in a comment" },
+  });
+  assert.equal(dec.outcome, "allow", "payload bytes must not trigger content.denyPatterns");
+  assert.equal(dec.rule, "default");
+});
+
+test("BG-3 — code vocabulary in a write payload (args.content) does NOT ask", async () => {
+  const gate = new Gate({});
+  await gate.init();
+  const dec = await gate.check({
+    type: "write",
+    path: "src/read.js",
+    args: { path: "src/read.js", content: "// remove the dropped filter; delete stale entries\nfunction purge(){}" },
+  });
+  assert.equal(dec.outcome, "allow", "payload code vocab must not trigger content.askPatterns");
+  assert.equal(dec.rule, "default");
+});
+
+test("BG-3 — the SAME destructive command in a command field still denies", async () => {
+  const gate = new Gate({});
+  await gate.init();
+  const dec = await gate.check({ type: "bash", cmd: "psql -c 'DROP TABLE users'" });
+  assert.equal(dec.outcome, "deny");
+  assert.equal(dec.rule, "content.denyPatterns");
+});
+
+test("BG-3 — a structural method:DELETE field still asks (payload strip does not blind it)", async () => {
+  const gate = new Gate({});
+  await gate.init();
+  const dec = await gate.check({
+    type: "http",
+    url: "https://api.x/records/42",
+    args: { method: "DELETE", contents: "harmless body text" },
+  });
+  assert.equal(dec.outcome, "deny", "no humanChannel → ask escalates to halt-deny");
+  assert.equal(dec.rule, "content.askPatterns");
+});
+
 test("safe defaults — overridable with empty patterns", async () => {
   const gate = new Gate({
     content: { denyPatterns: [], askPatterns: [] },
