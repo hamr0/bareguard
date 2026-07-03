@@ -4,6 +4,14 @@ All notable changes to bareguard are documented here. Format: [Keep a Changelog]
 
 ## [Unreleased]
 
+## [0.11.0] — 2026-07-03
+
+### Changed
+- **BG-3 — `content` deny/ask patterns now scan the OPERATION, not a write's payload (F35; relayfact upstream ask).** `content.denyPatterns` / `askPatterns` matched against `JSON.stringify(action)` — the **entire** action, including a file-write's `args.content` / `args.contents` payload. The destructive-verb default (`/\b(delete|drop|revoke|truncate|destroy|remove|purge)\b/i`) therefore false-fired on ordinary **code vocabulary**: a benign edit whose text said "remove"/"drop" escalated to `askHuman`, and a migration file whose *bytes* contained `DROP TABLE` was hard-**denied** (unrecoverable). This hit essentially **every coding-agent file-write, permanently**, and under an auto-deny `humanChannel` the caller's retry loop burned its whole budget with the sensor never reached (surfacing as a misleading `incomplete`; the retry-not-short-circuit half is bareagent's, tracked there as BA-11). **Fix:** `serializeForMatch` strips `PAYLOAD_FIELDS` (`content`, `contents`) from a non-mutating `args` copy before matching, for **both** deny and ask. Rationale — `content` targets destructive *operations* (`DROP TABLE`, `rm -rf /`, HTTP DELETE); a write payload is inert data guarded by `fs.writeScope`, and dangerous bytes are caught when they are *executed* as a `bash` action, not when written. Payload/value inspection is `secrets`' job, not `content`'s. **Fail-loud polarity:** the strip is a narrow blocklist of known payload fields, not an operation-field allowlist — an unregistered action shape can only regress to a visible false-fire, never a silent miss. Extend via the exported `PAYLOAD_FIELDS` only when a real write primitive adds a distinct payload field (today's complete set across callers: `shell_write`→`content`, `edit_file`→`contents`). **1.0-surface note** (logged): a change to default gate behavior — actions previously denied/asked on payload text now allow; the SemVer-cheap pre-1.0 moment to correct the floor's default (same logic as BG-1). `PAYLOAD_FIELDS` is a new export.
+
+### Tests
+- **+4 (suite 224 → 228; typecheck clean):** `test/safe-defaults.test.js` — the acceptance triad plus a code-vocab case: `DROP TABLE`/`rm -rf` in `args.contents` → **allow** (`default` rule, not `content.denyPatterns`); `delete`/`remove`/`drop`/`purge` code vocab in `args.content` → **allow**; the *same* `DROP TABLE` in a `cmd` field → still **deny** (`content.denyPatterns`); a structural `"method":"DELETE"` field → still **ask** (`content.askPatterns`, payload strip does not blind it).
+
 ## [0.10.2] — 2026-07-02
 
 ### Docs
