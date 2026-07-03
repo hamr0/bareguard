@@ -1,6 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { Gate } from "../src/index.js";
+import { Gate, PAYLOAD_FIELDS } from "../src/index.js";
+
+// BG-4 — PAYLOAD_FIELDS is re-exported from the package entry (the 0.11.0
+// changelog claimed it was; it was only exported from the primitive module) and
+// is frozen so it reads as introspection, not a mutate-the-global extension knob.
+test("BG-4 — PAYLOAD_FIELDS is exported from the package entry, frozen, complete", () => {
+  assert.deepEqual([...PAYLOAD_FIELDS], ["content", "contents"]);
+  assert.ok(Object.isFrozen(PAYLOAD_FIELDS), "must be frozen (read-only introspection, not a mutation point)");
+  assert.throws(() => { PAYLOAD_FIELDS.push("body"); }, "mutating the shared default must fail loudly");
+});
 
 test("safe defaults — DROP TABLE denied without any user config", async () => {
   const gate = new Gate({});
