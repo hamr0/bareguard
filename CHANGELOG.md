@@ -4,6 +4,14 @@ All notable changes to bareguard are documented here. Format: [Keep a Changelog]
 
 ## [Unreleased]
 
+## [0.11.1] — 2026-07-03
+
+### Fixed
+- **BG-4 — `PAYLOAD_FIELDS` is now actually exported from the package entry, and frozen (F35 follow-up).** The 0.11.0 changelog stated *"`PAYLOAD_FIELDS` is a new export"*, but it was only exported from `src/primitives/content.js` — **not** re-exported from `src/index.js` — so `import { PAYLOAD_FIELDS } from "bareguard"` threw in 0.11.0. Added it to the existing `content.js` re-export block (alongside `SAFE_DEFAULT_DENY_PATTERNS` / `SAFE_DEFAULT_ASK_PATTERNS`). Also **froze** the array (`Object.freeze`) and reworded its docs: it is exported **for read-only introspection** (read it to see what `content` excludes from matching), **not** as a mutate-the-global extension knob — the earlier "extend via the exported `PAYLOAD_FIELDS`" wording implied per-process global mutation (the advertised-but-dead-config class, cf. BG-2/F7). A future write primitive with a distinct payload field is a **one-line lib addition** (fix-at-the-lib), not a runtime config key; a consumer needing different behavior scopes `content.{ask,deny}Patterns`, which they already fully control. No gate-behavior change; type of `PAYLOAD_FIELDS` narrowed to `readonly string[]`.
+
+### Tests
+- **+1 (suite 228 → 229; typecheck clean):** `test/safe-defaults.test.js` — `PAYLOAD_FIELDS` imports from the package entry, equals `["content","contents"]`, is frozen, and a `push` throws (mutate-the-global fails loudly).
+
 ## [0.11.0] — 2026-07-03
 
 ### Changed
