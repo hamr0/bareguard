@@ -12,18 +12,23 @@
 // action, not when written), and duplicates the wrong layer — payload/value
 // inspection is `secrets`' job, not `content`'s. Exclusion is fail-LOUD: unknown
 // fields are still matched, so a new action shape can only regress to a visible
-// false-fire, never a silent miss. Extend PAYLOAD_FIELDS if a write primitive
-// adds a distinct payload field.
+// false-fire, never a silent miss. If a future write primitive ships a distinct
+// payload field, adding it here is a one-line lib change (fix-at-the-lib) — it
+// is NOT a runtime knob: the array is frozen and read only from the default set,
+// never merged with per-Gate config (a consumer needing different behavior scopes
+// `content.{ask,deny}Patterns`, which they already fully control).
 
 /**
  * Field names under `action.args` that carry a file-write payload (the written
- * document, not the operation). Stripped before pattern matching. Today's
- * complete set across the callers: `content` (shell_write) + `contents`
- * (edit_file). Fail-loud polarity: absent entries regress to a false-fire, not
- * a silent hole — extend only when a real payload field is added.
- * @type {string[]}
+ * document, not the operation), stripped before pattern matching. Exported
+ * **frozen, for introspection** — read it to see what `content` excludes; do not
+ * mutate it (frozen so an accidental push fails loudly instead of silently
+ * changing every Gate in the process). Complete set across the shipping callers:
+ * `content` (shell_write) + `contents` (edit_file). Fail-loud polarity: an
+ * unlisted field regresses to a visible false-fire, never a silent hole.
+ * @type {readonly string[]}
  */
-export const PAYLOAD_FIELDS = ["content", "contents"];
+export const PAYLOAD_FIELDS = Object.freeze(["content", "contents"]);
 
 /**
  * Patterns denied outright when `content.denyPatterns` is not configured:

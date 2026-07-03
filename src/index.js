@@ -33,6 +33,7 @@ export { redact } from "./primitives/secrets.js";
 export {
   SAFE_DEFAULT_DENY_PATTERNS,
   SAFE_DEFAULT_ASK_PATTERNS,
+  PAYLOAD_FIELDS,
 } from "./primitives/content.js";
 export {
   classifyCommand,
