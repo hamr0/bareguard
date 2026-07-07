@@ -21,6 +21,49 @@
 
 const TIER_NUM = { safe: 1, destructive: 2, super_destructive: 3 };
 
+// Path predicate for a super-destructive `rm` target — the location half only;
+// it is AND-ed with an `rm -rf` anchor below (so `ls /etc` is never super, only
+// `rm -rf /etc` is). Matches, in order of specificity:
+//   • a system root OR ANY descendant  (`/etc`, `/usr/local/bin`, `/boot/…`) —
+//     no legitimate through-a-bot recursive delete lives under these;
+//   • a home/mount root or EXACTLY ONE level below it (`/home`, `/home/alice`,
+//     `/var`, `/Users/bob`) — a whole account/mount, but NOT a deeper nested
+//     path: `[^\/…]+` can't cross a `/`, so `rm -rf /home/alice/project/build`
+//     and `rm -rf /var/tmp/x` fall through to tier 2 (a routine build-clean can
+//     never become un-runnable) — the crux invariant of BG-1;
+//   • `~`, `$HOME`, `${HOME}`, plus single/double-quoted forms of any of these;
+//   • the bare filesystem root `/` (or `/*`).
+// No nested unbounded quantifier over overlapping classes → linear, no ReDoS.
+const SUPER_RM_TARGET =
+  '(?:["\']?)' + // optional opening quote (`rm -rf "$HOME"`)
+  "(?:" +
+  '\\/(?:etc|usr|bin|sbin|lib64|lib|boot|sys|proc|dev|root)(?:\\/[^\\s"\']*)?' + // system root + any descendant
+  '|\\/(?:var|opt|srv|mnt|media|home|Users)(?:\\/[^\\/\\s"\']+)?' + // home/mount root or exactly one level
+  "|~\\/?" + // ~ or ~/
+  "|\\$\\{?HOME\\}?" + // $HOME or ${HOME}
+  "|\\/" + // bare /
+  ")" +
+  '(?:["\']?)(?:\\s|\\*|$)'; // optional closing quote, then a token boundary
+
+// The two ReDoS-safe `rm -rf` anchors (combined `-rf` / split `-r -f`) share the
+// target predicate above via composition so BG-1's location list stays DRY. The
+// flag-detection prefixes are byte-identical to the audited originals; r and f
+// are tested with non-consuming LOOKAHEADS (`(?=[a-z]*r)(?=[a-z]*f)`), never a
+// sequence of consuming `[a-z]*r[a-z]*f[a-z]*` stars (which redistributes a long
+// flagless run across three quantifiers on a failing tail → catastrophic
+// backtracking). Lookaheads each scan once and don't backtrack.
+const SUPER_RM_COMBINED = new RegExp(
+  "\\brm\\s+(?:-\\S+\\s+)*-(?=[a-zA-Z]*r)(?=[a-zA-Z]*f)[a-zA-Z]+\\s+(?:-\\S+\\s+)*" +
+    SUPER_RM_TARGET,
+  "i",
+);
+// split flags: `rm -r -f /` (≥2 flag tokens then a root target). Linear — each
+// `-[a-zA-Z]+\s+` is bounded by a required `-` and `\s+`.
+const SUPER_RM_SPLIT = new RegExp(
+  "\\brm\\s+(?:-[a-zA-Z]+\\s+){2,}" + SUPER_RM_TARGET,
+  "i",
+);
+
 /**
  * Super-destructive (tier 3): machine / irrecoverable. Keyed by platform; the
  * `common` set applies everywhere and is merged with the active platform's set.
@@ -28,16 +71,9 @@ const TIER_NUM = { safe: 1, destructive: 2, super_destructive: 3 };
  */
 export const SUPER_DESTRUCTIVE_PATTERNS = {
   common: [
-    // rm with recursive+force flags targeting filesystem root, home, or a root
-    // glob — NOT a named subdir (`rm -rf ./build` is tier 2). r and f are tested
-    // with non-consuming LOOKAHEADS (`(?=[a-z]*r)(?=[a-z]*f)`), never a sequence
-    // of consuming `[a-z]*r[a-z]*f[a-z]*` stars: the latter redistributes a long
-    // flagless run across three quantifiers on a failing tail → catastrophic
-    // backtracking (ReDoS). Lookaheads each scan once and don't backtrack.
-    /\brm\s+(?:-\S+\s+)*-(?=[a-zA-Z]*r)(?=[a-zA-Z]*f)[a-zA-Z]+\s+(?:-\S+\s+)*(?:\/|~\/?|\$HOME)(?:\s|\*|$)/i,
-    // split flags: `rm -r -f /` (≥2 flag tokens then a root target). Linear —
-    // each `-[a-zA-Z]+\s+` is bounded by a required `-` and `\s+`.
-    /\brm\s+(?:-[a-zA-Z]+\s+){2,}(?:\/|~\/?|\$HOME)(?:\s|\*|$)/i,
+    // `rm -rf` of a filesystem/system/home root — see SUPER_RM_TARGET (BG-1).
+    SUPER_RM_COMBINED,
+    SUPER_RM_SPLIT,
     /--no-preserve-root\b/i,
     // dd writing to a raw block device.
     /\bdd\b[^\n]*\bof=\/dev\/(?:disk|rdisk|sd|nvme|hd|mmcblk|vd)/i,
@@ -82,6 +118,14 @@ export const DESTRUCTIVE_PATTERNS = {
   common: [
     /\brm\b/,
     /\bmv\b/,
+    // find as a deletion/execution vector (BG-2): a `-delete` action, or
+    // `-exec`/`-execdir` running an arbitrary command. `-exec(?:dir)?` matches
+    // plain `-exec` too (not just `-execdir`), so `find . -exec <cmd>` is caught
+    // on its own, not incidentally via a payload that happens to contain `rm`.
+    // find is POSIX → common tier; win32 `find` (string search) carries neither
+    // flag, so no cross-platform false positive.
+    /\bfind\b[^\n]*\s-delete\b/i,
+    /\bfind\b[^\n]*\s-exec(?:dir)?\b/i,
     /\b(?:chmod|chown|chgrp)\b/,
     /\b(?:kill|killall|pkill)\b/,
     /\bsudo\b/,
@@ -109,6 +153,34 @@ export const DESTRUCTIVE_PATTERNS = {
     /\bStop-(?:Process|Service)\b/i,
   ],
 };
+
+/**
+ * Inline-interpreter code payloads (BG-3) — OPT-IN, never in the default sets.
+ *
+ * `python3 -c "…"`, `node -e "…"`, `perl -e`, `ruby -e`, `node --eval`, `php -r`
+ * can do anything a regex can't read (`shutil.rmtree('/')`, `fs.rmSync(…)`), so
+ * they classify `safe` by default — and CANNOT be reliably gated, because the
+ * identical action via `python3 script.py` (or a heredoc, or base64|sh) stays
+ * `safe` too. This is the module's HONEST SCOPE boundary made explicit rather
+ * than silent: inline interpreter code is out of scope for the default floor;
+ * the hard boundary stays fs/exec scoping, not command text.
+ *
+ * A consumer that nonetheless wants a coarse HITL speed-bump on inline code
+ * (e.g. a governed bot that rarely runs `-c`/`-e` at all) opts in:
+ *   `classifyCommand(cmd, { extraDestructive: INTERPRETER_PATTERNS })`
+ * bareguard owns the canonical pattern shape (Principle 8); the array is frozen
+ * so it is read-only introspection, never a mutable module-global. `reclassify`
+ * can still tier any specific invocation back down.
+ * @type {readonly RegExp[]}
+ */
+export const INTERPRETER_PATTERNS = Object.freeze([
+  // python -c, node -e, perl -e/-E, ruby -e
+  /\b(?:python[0-9.]*|node|perl|ruby)\b[^\n]*\s-(?:c|e|E)\b/i,
+  // node/deno --eval
+  /\b(?:node|deno)\b[^\n]*\s--eval\b/i,
+  // php inline code flag
+  /\bphp\b[^\n]*\s-r\b/i,
+]);
 
 const PLATFORMS = new Set(["linux", "darwin", "win32"]);
 

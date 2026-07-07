@@ -4,7 +4,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { Gate, classifyCommand } from "../src/index.js";
+import { Gate, classifyCommand, INTERPRETER_PATTERNS } from "../src/index.js";
 import { makeHumanChannel } from "./_helpers.js";
 
 // ─── unit: classifyCommand (pure) ──────────────────────────────────────────
@@ -115,6 +115,113 @@ test("classify unit — ReDoS regression: a flagless rm-flag run does not backtr
   const ms = Number(process.hrtime.bigint() - t0) / 1e6;
   assert.equal(tier, "destructive"); // matches the tier-2 `rm`, not super (no root target)
   assert.ok(ms < 1000, `classifyCommand took ${ms.toFixed(1)}ms on a flagless rm run (ReDoS regression)`);
+});
+
+// ─── BG-1: super-tier for whole system roots / home accounts / quoted $HOME ──
+
+test("classify unit — BG-1 super: rm -rf of a system root or any descendant", () => {
+  for (const cmd of [
+    "rm -rf /etc",
+    "rm -rf /usr",
+    "rm -rf /boot",
+    "rm -rf /lib64",
+    "rm -rf /root",
+    "rm -rf /usr/local/bin", // descendant of a system root is still super
+    "sudo rm -rf /etc/nginx",
+  ]) {
+    assert.equal(classifyCommand(cmd, { platform: "linux" }), "super_destructive", cmd);
+  }
+});
+
+test("classify unit — BG-1 super: rm -rf of a whole home/mount root or exactly one level", () => {
+  for (const [cmd, plat] of [
+    ["rm -rf /home", "linux"],
+    ["rm -rf /home/alice", "linux"],
+    ["rm -rf /var", "linux"],
+    ["rm -rf /opt", "linux"],
+    ["rm -rf /mnt/backup", "linux"],
+    ["rm -rf /Users/bob", "darwin"],
+    ["rm -r -f /srv", "linux"], // split flags
+  ]) {
+    assert.equal(classifyCommand(cmd, { platform: plat }), "super_destructive", cmd);
+  }
+});
+
+test("classify unit — BG-1 super: quoted / braced $HOME and ~", () => {
+  for (const cmd of ['rm -rf "$HOME"', "rm -rf ${HOME}", 'rm -rf "${HOME}"', "rm -rf $HOME", "rm -rf ~"]) {
+    assert.equal(classifyCommand(cmd, { platform: "linux" }), "super_destructive", cmd);
+  }
+});
+
+test("classify unit — BG-1 invariant: a path one level deeper stays destructive (not super)", () => {
+  // The crux — a routine build-clean must never become un-runnable.
+  for (const cmd of [
+    "rm -rf /home/alice/project/build",
+    "rm -rf /var/tmp/x",
+    "rm -rf /opt/app/cache",
+    "rm -rf /Users/bob/Downloads/tmp",
+  ]) {
+    assert.equal(classifyCommand(cmd, { platform: "linux" }), "destructive", cmd);
+  }
+});
+
+test("classify unit — BG-1 does not over-match: reads and lookalike names stay put", () => {
+  assert.equal(classifyCommand("ls /etc", { platform: "linux" }), "safe");
+  assert.equal(classifyCommand("cat /etc/hosts", { platform: "linux" }), "safe");
+  assert.equal(classifyCommand("rm -rf /etcfoo", { platform: "linux" }), "destructive"); // not /etc
+  assert.equal(classifyCommand("rm -rf $HOMEDIR", { platform: "linux" }), "destructive"); // not $HOME
+});
+
+// ─── BG-2: find as a deletion / execution vector ────────────────────────────
+
+test("classify unit — BG-2 destructive: find -delete and -exec/-execdir", () => {
+  for (const cmd of [
+    "find /path -delete",
+    "find . -type f -delete",
+    "find . -exec rm {} +", // caught directly, not incidentally via rm
+    "find . -execdir rm {} +",
+    "find /var/log -name '*.gz' -exec shred {} +",
+  ]) {
+    assert.equal(classifyCommand(cmd, { platform: "linux" }), "destructive", cmd);
+  }
+});
+
+test("classify unit — BG-2: a read-only find stays safe", () => {
+  assert.equal(classifyCommand("find . -name '*.log'", { platform: "linux" }), "safe");
+  assert.equal(classifyCommand("find /src -type d", { platform: "linux" }), "safe");
+});
+
+// ─── BG-3: interpreter payloads — opt-in only, default unchanged ─────────────
+
+test("classify unit — BG-3: inline interpreter code is SAFE by default (boundary is explicit)", () => {
+  for (const cmd of [
+    'python3 -c "import shutil; shutil.rmtree(\'/\')"',
+    "node -e \"require('fs').rmSync('/x',{recursive:true})\"",
+    'perl -e "unlink glob q{*}"',
+  ]) {
+    assert.equal(classifyCommand(cmd, { platform: "linux" }), "safe", cmd);
+  }
+});
+
+test("classify unit — BG-3: INTERPRETER_PATTERNS is an opt-in tier-2 escalation via extraDestructive", () => {
+  const opt = { platform: "linux", extraDestructive: INTERPRETER_PATTERNS };
+  for (const cmd of [
+    'python3 -c "x"',
+    'node -e "x"',
+    'perl -e "x"',
+    'ruby -e "x"',
+    'node --eval "x"',
+    'php -r "x"',
+  ]) {
+    assert.equal(classifyCommand(cmd, opt), "destructive", cmd);
+  }
+  // running a script file is NOT inline code — stays safe even opted-in
+  assert.equal(classifyCommand("python3 script.py", opt), "safe");
+});
+
+test("classify unit — BG-3: INTERPRETER_PATTERNS is frozen (read-only introspection)", () => {
+  assert.ok(Object.isFrozen(INTERPRETER_PATTERNS));
+  assert.throws(() => INTERPRETER_PATTERNS.push(/x/));
 });
 
 // ─── integration: the gate wiring ──────────────────────────────────────────

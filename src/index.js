@@ -39,6 +39,7 @@ export {
   classifyCommand,
   DESTRUCTIVE_PATTERNS,
   SUPER_DESTRUCTIVE_PATTERNS,
+  INTERPRETER_PATTERNS,
 } from "./primitives/classify.js";
 export { BudgetUnavailableError } from "./primitives/budget.js";
 export { defaultAuditPath } from "./primitives/audit.js";
