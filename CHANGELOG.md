@@ -4,6 +4,8 @@ All notable changes to bareguard are documented here. Format: [Keep a Changelog]
 
 ## [Unreleased]
 
+## [0.12.0] — 2026-07-07
+
 ### Added
 - **BG-3 — `INTERPRETER_PATTERNS`, an opt-in tier-2 escalation for inline-interpreter code (multis ask, 2026-07-07).** New frozen export: canonical regexes for `python -c`, `node -e`, `perl -e`/`-E`, `ruby -e`, `node`/`deno --eval`, `php -r`. **Not** in any default set — inline interpreter code (`python3 -c "shutil.rmtree('/')"`) stays `safe` by default and *cannot* be reliably gated (the identical action via `python3 script.py`, a heredoc, or `base64 | sh` is invisible to any regex), so a default escalation would be a false-positive flip for every consumer that buys almost no safety. Instead the boundary is now **explicit** in `classify.js` (this is the module's honest-scope limit, made discoverable at the call site rather than silent), and a consumer that wants a coarse HITL speed-bump opts in: `classifyCommand(cmd, { extraDestructive: INTERPRETER_PATTERNS })`. bareguard owns the canonical pattern shape (Principle 8); the array is `Object.freeze`d — read-only introspection, never a mutable module-global. Type: `readonly RegExp[]`.
 
