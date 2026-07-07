@@ -4,6 +4,18 @@ All notable changes to bareguard are documented here. Format: [Keep a Changelog]
 
 ## [Unreleased]
 
+## [0.12.0] — 2026-07-07
+
+### Added
+- **BG-3 — `INTERPRETER_PATTERNS`, an opt-in tier-2 escalation for inline-interpreter code (multis ask, 2026-07-07).** New frozen export: canonical regexes for `python -c`, `node -e`, `perl -e`/`-E`, `ruby -e`, `node`/`deno --eval`, `php -r`. **Not** in any default set — inline interpreter code (`python3 -c "shutil.rmtree('/')"`) stays `safe` by default and *cannot* be reliably gated (the identical action via `python3 script.py`, a heredoc, or `base64 | sh` is invisible to any regex), so a default escalation would be a false-positive flip for every consumer that buys almost no safety. Instead the boundary is now **explicit** in `classify.js` (this is the module's honest-scope limit, made discoverable at the call site rather than silent), and a consumer that wants a coarse HITL speed-bump opts in: `classifyCommand(cmd, { extraDestructive: INTERPRETER_PATTERNS })`. bareguard owns the canonical pattern shape (Principle 8); the array is `Object.freeze`d — read-only introspection, never a mutable module-global. Type: `readonly RegExp[]`.
+
+### Changed
+- **BG-1 — `rm -rf` of a whole system root or home account is now `super_destructive` (multis ask, 2026-07-07).** The tier-3 `rm` patterns matched only `/`, `~`, and a bare `$HOME`; `rm -rf /etc`, `/usr`, `/boot`, `/home/alice`, `/Users/bob`, `"$HOME"`, `${HOME}` all classified merely `destructive` even though each is as irrecoverable as `rm -rf /`. A shared `SUPER_RM_TARGET` path predicate (AND-ed with the existing ReDoS-safe `rm -rf` anchors) now also matches: **a system root OR any descendant** (`/etc /usr /bin /sbin /lib /lib64 /boot /sys /proc /dev /root`); **a home/mount root or exactly ONE level below** (`/var /opt /srv /mnt /media /home/<user> /Users/<user>`); and quoted/braced `$HOME`/`${HOME}`/`~`. **Crux invariant:** a path *one level deeper* stays `destructive` — `rm -rf /home/alice/project/build` and `rm -rf /var/tmp/x` are **not** super (a routine build-clean can never become un-runnable). Reads (`ls /etc`, `cat /etc/hosts`) and lookalikes (`/etcfoo`, `$HOMEDIR`) are untouched. **1.0-surface note:** a default-classification change (some commands move `destructive → super_destructive`) — a strengthening, and the SemVer-cheap pre-1.0 moment to correct the floor.
+- **BG-2 — `find … -delete` / `-exec` / `-execdir` now classify `destructive` (multis ask, 2026-07-07).** `find /path -delete` recursively deletes but classified `safe` (no `rm` token); `find . -exec <cmd>` only matched incidentally when the payload happened to contain a denylisted word. Added two `common`-tier patterns; `-exec(?:dir)?` matches plain `-exec` too (multis's reference `-execdir?` matched only `-execdir`), so `find . -exec <any-cmd>` is caught on its own. Read-only `find` (`find . -name '*.log'`) stays `safe`. POSIX → `common` tier; win32 `find` (string search) carries neither flag, so no cross-platform false positive.
+
+### Tests
+- **+10 (suite 229 → 239; typecheck clean):** `test/classify.test.js` — BG-1 system-root/home-root/quoted-`$HOME` super cases + the one-level-deeper invariant + no-over-match reads; BG-2 `-delete`/`-exec`/`-execdir` destructive + read-only `find` safe; BG-3 default-`safe` boundary, opt-in escalation via `extraDestructive`, and `INTERPRETER_PATTERNS` frozen.
+
 ## [0.11.1] — 2026-07-03
 
 ### Fixed

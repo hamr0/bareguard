@@ -983,6 +983,18 @@ boundary, and shared-budget lock hardening (fail-loud on corrupt read).
   to an ask, never downgrade a deny.
 - **Still pre-1.0 — the §19 HOLD stands.** Additive; lands clean on the SemVer surface
   (new exports + `bash.*` keys + event fields below), no API regret.
+- **Coverage widening (BG-1/BG-2/BG-3, 0.12, multis ask 2026-07-07):** additive to the
+  same mechanism, no design change. **BG-1** — `rm -rf` of a whole system root
+  (`/etc`…`/root` + any descendant) or home/mount account (`/home/<user>`, `/var`,
+  `/Users/<user>`, quoted/braced `$HOME`) now tiers `super_destructive`; a path one level
+  deeper stays `destructive` (build-clean stays runnable). **BG-2** — `find … -delete` /
+  `-exec` / `-execdir` now tier `destructive`. **BG-3** — new frozen `INTERPRETER_PATTERNS`
+  export: OPT-IN tier-2 escalation for inline interpreter code (`python -c` / `node -e` /
+  …), *never* a default (inline code is unreadable by regex and equally reachable via
+  `script.py`/heredoc/`base64|sh`, so a default escalation is a false-positive flip that
+  buys ~no safety) — the honest-scope boundary made explicit at the call site. The new
+  super patterns compose onto the **same non-consuming-lookahead** `rm` anchors, so the
+  ReDoS-safe shape below is preserved (re-timed linear, worst ~2 ms at 50 KB).
 
 ### bareguard 1.0 — stabilize
 
