@@ -17,3 +17,8 @@ src/**/*.d.ts
 # Throwaway A2A intent-drift bench (code only). Never committed, never shipped.
 # The durable findings live in docs/00-context/a2a-intent-drift-prd.md (tracked).
 notes/smol/a2a-intent/
+
+# Agent / IDE scratch — never commit (per hamr0 LIBRARY_CONVENTIONS §7)
+.claude/
+.litectx/
+.idea/
