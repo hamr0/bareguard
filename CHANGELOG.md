@@ -4,6 +4,9 @@ All notable changes to bareguard are documented here. Format: [Keep a Changelog]
 
 ## [Unreleased]
 
+### Docs
+- **pico-type fit assessment — the secrets-seam premise is REFUTED by measurement, not deferred on taste** (`docs/01-product/pico-type-fit-assessment.md`). Evaluated `eulogik/pico-type` (byte-level NN content classifier, 7 heads incl. a risk/secrets head) as a candidate `secrets` / file-type detector. A falsifiable POC — real ONNX weights, freshly-generated real-format secrets as positives, benign near-misses as negatives — measured **risk-head recall 0.46 on embedded secrets**, against the author's same-generator synthetic AP=1.0. Root cause is structural: it is a **whole-blob classifier, not a span detector**, so a key inside an `.env` line, a code comment, or past the 1024-byte window goes silent — which is exactly the gate's input shape. A 5-line regex catches what it misses, so it does **not** beat the deterministic pattern floor, and compose-as-recall-aid is dead too (its misses are a superset of the easy regex cases). Coarse file-type routing scored 5/10 on real files; latency ~38 ms/call (not the 5.5 ms README headline, which is `batch_size=64` amortized). **Verdict: SEED/NOT-NOW** — no `src/` change, no adopter ask. The only surviving use is zero-code bareagent type-routing via MCP (nice-to-have).
+
 ## [0.12.0] — 2026-07-07
 
 ### Added
