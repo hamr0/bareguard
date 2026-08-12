@@ -1967,13 +1967,26 @@ gate.annotate({ surface: verdict !== "honored", verdict, where })
 // bareguard reads reversibility from the action it rides, then routes per §6.6 + the knob.
 ```
 
-**Field bounds are part of this contract** (shipped; see the `Annotation` typedef, which
-is the citable authority because it cannot drift from the code): `verdict` ≤80 chars,
-`where` ≤300 chars **clipped silently with no marker** — keep it a one-line address, never
-bulk evidence — and `meta` ≤1000 **bytes**, **all-or-nothing**: over the cap the whole
-object is replaced by `{_truncated:true, bytes}`, so bulky evidence takes
-`field`/`stated`/`returned` down with it. Bound free text *before* it reaches `meta`. The
-caps hold PIPE_BUF headroom for post-redaction expansion and are not to be raised.
+**Field bounds are part of this contract, and there are TWO of them** (shipped; the
+`Annotation` typedef carries the full statement and is the citable authority, because it
+ships in the `.d.ts` and cannot drift from the code):
+
+1. **Source bound** — on the drained fact and the `humanChannel` event. `verdict` ≤80 and
+   `where` ≤300 **characters** (UTF-16 code units, *not* bytes), `where` clipped with **no
+   marker**; `meta` ≤1000 **bytes**, **all-or-nothing** — over the cap the whole object
+   becomes `{_truncated:true, bytes}`, so bulky evidence takes `field`/`stated`/`returned`
+   with it (an unserializable `meta` becomes `{_unserializable:true}`, same total loss).
+2. **Audit-sink bound** — applied **after redaction**, on the persisted line only. Redaction
+   *expands* fields, so a line built from in-budget values can still exceed the ~3500-byte
+   atomic-append cap; the row then re-clips `where` to ~200 bytes **with** a `[TRUNCATED]`
+   suffix and a root `_truncated:true`, and **replaces `meta` even when the source `meta`
+   was legal** (measured: a 355-byte `meta` persisted as `{_truncated:true,bytes:6977}`).
+
+**Consequence for a judge author:** sizing to the source budget does **not** guarantee the
+mechanical fields survive into the audit row once a redactor is configured. Bound free text
+before it reaches `meta`, and keep `where` a one-line address. The byte-level audit backstop
+— not the character-counted source caps — is what actually preserves append atomicity; the
+caps are not to be raised.
 
 **Why one open call is good enough — and why it is not a safety bet.** B **never decides
 outcome**, so a wrong call costs only a *missed annotation* or *a little HITL noise* — never

@@ -196,8 +196,58 @@ test("where clips silently — the clipped fact carries no truncation marker", a
   const fact = gate.drainAnnotations()[0];
   assert.equal(fact.where.length, 300, "clipped to exactly the cap");
   assert.ok(!fact.where.includes("TRUNCAT"), "no marker is appended");
-  assert.equal(fact._truncated, undefined, "no flag anywhere on the fact");
-  assert.ok(!addresses.startsWith(fact.where) === false, "it is a prefix — the tail is simply gone");
+  assert.ok(addresses.startsWith(fact.where), "it is a prefix — the tail is simply gone");
+});
+
+// The SOURCE cap counts UTF-16 code units, not bytes, so `where` is not a byte
+// budget: 300 CJK chars is 900 bytes. Append atomicity is preserved by the audit
+// sink's own BYTE backstop (next test), never by this cap — documented so nobody
+// sizes a byte budget against a character count.
+test("the source caps count CHARACTERS, not bytes (300 CJK chars = 900 bytes)", async () => {
+  const gate = new Gate({ audit: { path: null } });
+  await gate.init();
+  await gate.annotate({ surface: true, where: "危".repeat(400) });
+  const { where } = gate.drainAnnotations()[0];
+  assert.equal(where.length, 300, "clipped by code units");
+  assert.equal(Buffer.byteLength(where, "utf8"), 900, "…which is 3x the byte count the cap implies");
+});
+
+// The SECOND bound, and the one a judge author gets burned by: redaction EXPANDS
+// fields, so an in-budget meta can still be replaced wholesale in the persisted
+// row. Sizing to the source cap does NOT guarantee field/stated/returned survive.
+test("the audit sink re-bounds AFTER redaction: a LEGAL meta is still replaced in the row", async () => {
+  const dir = await makeTmpDir();
+  try {
+    const { auditPath } = uniquePaths(dir);
+    const gate = new Gate({ audit: { path: auditPath }, secrets: { patterns: [/a/] } });
+    await gate.init();
+    const meta = { field: "price", stated: 300, returned: 400, note: "a".repeat(300) };
+    assert.ok(Buffer.byteLength(JSON.stringify(meta), "utf8") < 1000, "meta is LEGAL at the source cap");
+    await gate.annotate({ surface: true, verdict: "broke", where: "a".repeat(250), meta });
+    const raw = await readFile(auditPath, "utf8");
+    const row = raw.split("\n").filter(Boolean).map((l) => JSON.parse(l)).find((l) => l.phase === "annotate");
+    assert.equal(row.meta._truncated, true, "a source-legal meta is replaced in the persisted row");
+    assert.equal(row.meta.field, undefined, "the mechanical fields do not survive the audit bound");
+    assert.ok(row.where.endsWith("[TRUNCATED]"), "the AUDIT clip DOES carry a marker (unlike the source clip)");
+    assert.equal(row._truncated, true, "and flags the row");
+    assert.ok(Buffer.byteLength(JSON.stringify(row), "utf8") < 3500, "still atomic");
+  } finally {
+    await cleanup(dir);
+  }
+});
+
+// A third loss mode with its own marker — a consumer testing only `_truncated`
+// reads an unserializable meta as intact.
+test("an unserializable meta becomes {_unserializable}, a DIFFERENT marker", async () => {
+  const gate = new Gate({ audit: { path: null } });
+  await gate.init();
+  const circular = { field: "price", stated: 300 };
+  circular.self = circular;
+  await gate.annotate({ surface: true, meta: circular });
+  const { meta } = gate.drainAnnotations()[0];
+  assert.equal(meta._unserializable, true, "distinct from _truncated");
+  assert.equal(meta._truncated, undefined, "a consumer checking only _truncated reads this as intact");
+  assert.equal(meta.field, undefined, "same total loss of the mechanical fields");
 });
 
 // `meta` is ALL-OR-NOTHING: over the cap the WHOLE object is replaced, so bulky
@@ -255,6 +305,22 @@ test("a non-object fact is ignored entirely and annotate never throws", async ()
     await gate.annotate(junk); // must not throw into the agent loop
   }
   assert.equal(gate.drainAnnotations().length, 0, "nothing buffered from junk");
+});
+
+// KNOWN FAIL-OPEN, pinned as current behavior (not endorsed): `typeof [] === "object"`,
+// so the non-object guard does NOT catch an array. A judge returning `[fact]` instead of
+// `fact` — an easy shape to get wrong — buffers a DEAD fact that routes as `honored`.
+// Hardening this is a gate-behavior change and is the operator's call; until then the
+// typedef says "pass one fact object, never an array" and this test says why.
+test("an ARRAY is NOT ignored — it buffers a dead fact and fails open", async () => {
+  const gate = new Gate({ audit: { path: null } });
+  await gate.init();
+  await gate.annotate([{ surface: true, verdict: "broke", where: "a real violation" }]);
+  const facts = gate.drainAnnotations();
+  assert.equal(facts.length, 1, "the array passed the non-object guard");
+  assert.equal(facts[0].surface, false, "and the real fact inside it was dropped — fail-open");
+  assert.equal(facts[0].where, null);
+  assert.equal(routeAnnotation(facts[0].surface, true, "strict"), "pass", "routes as honored");
 });
 
 // honored facts (surface=false) never reach the human, even on an ask.

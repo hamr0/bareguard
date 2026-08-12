@@ -101,19 +101,36 @@ export {};
  * `surface` is the one load-bearing field — the caller sets it (e.g. to
  * `verdict !== "honored"`); the rest is carried, not interpreted.
  *
- * FIELD BOUNDS — enforced at the source by `annotate()`, which normalizes and
- * NEVER throws, so an over-long or misnamed field is dropped/clipped SILENTLY
- * rather than reported. The caps keep an audit line under PIPE_BUF so appends to
- * a shared file stay atomic, with headroom for redaction (which EXPANDS a field).
- * They are load-bearing; do not design around raising them:
+ * FIELD BOUNDS — there are TWO, and sizing to the first does NOT guarantee
+ * survival past the second. `annotate()` normalizes and NEVER throws, so every
+ * loss below is silent at the call site.
+ *
+ * (1) SOURCE bound, on the fact you get back from `drainAnnotations()` and on
+ * the `humanChannel` event. Limits are CHARACTERS (UTF-16 code units), not bytes:
  *   - `verdict` — clipped to 80 chars.
- *   - `where`   — clipped to 300 chars, SILENTLY (no marker). Keep it a ONE-LINE
+ *   - `where`   — clipped to 300 chars with NO marker. Keep it a ONE-LINE
  *                 address; it is not a place for bulk evidence.
- *   - `meta`    — 1000 BYTES serialized, and ALL-OR-NOTHING: over the cap the
- *                 whole object is REPLACED by `{_truncated: true, bytes}`, so
- *                 bulky evidence takes `field`/`stated`/`returned` down with it.
- *                 Bound anything free-text BEFORE putting it here.
- * A fact that is not an object is ignored entirely; unknown keys are dropped.
+ *   - `meta`    — 1000 BYTES serialized, ALL-OR-NOTHING: over the cap the whole
+ *                 object is REPLACED by `{_truncated: true, bytes}`, so bulky
+ *                 evidence takes `field`/`stated`/`returned` down with it. A
+ *                 `meta` that cannot be serialized at all (circular, BigInt)
+ *                 becomes `{_unserializable: true}` — a DIFFERENT marker, same
+ *                 total loss. Bound free text BEFORE it reaches `meta`.
+ *
+ * (2) AUDIT-SINK bound, applied AFTER redaction, on the persisted line only.
+ * Redaction EXPANDS a field (each match becomes a longer `[REDACTED:…]` tag), so
+ * a line built from in-budget fields can still exceed the ~3500-byte atomic-append
+ * cap. When it does, the row re-bounds: `where` is re-clipped to ~200 bytes WITH a
+ * `[TRUNCATED]` suffix and a root `_truncated: true`, and `meta` is replaced by
+ * `{_truncated, bytes}` EVEN IF the source `meta` was well under 1000 bytes
+ * (measured: a legal 355-byte meta persisted as `{_truncated:true,bytes:6977}`).
+ * So under a configured redactor the mechanical fields can survive the drain and
+ * still vanish from the audit row. It is this byte-level backstop — not the source
+ * caps, which count characters — that actually preserves append atomicity.
+ *
+ * Unknown keys are dropped. A non-object fact is ignored — but note `typeof [] ===
+ * "object"`, so an ARRAY is NOT ignored: it buffers a dead fact with `surface:false`
+ * that routes as `honored`. Pass one fact object, never an array of them.
  *
  * @typedef {object} Annotation
  * @property {boolean} surface  true ⇒ the answer did NOT honor the request (show the human).
