@@ -101,11 +101,25 @@ export {};
  * `surface` is the one load-bearing field — the caller sets it (e.g. to
  * `verdict !== "honored"`); the rest is carried, not interpreted.
  *
+ * FIELD BOUNDS — enforced at the source by `annotate()`, which normalizes and
+ * NEVER throws, so an over-long or misnamed field is dropped/clipped SILENTLY
+ * rather than reported. The caps keep an audit line under PIPE_BUF so appends to
+ * a shared file stay atomic, with headroom for redaction (which EXPANDS a field).
+ * They are load-bearing; do not design around raising them:
+ *   - `verdict` — clipped to 80 chars.
+ *   - `where`   — clipped to 300 chars, SILENTLY (no marker). Keep it a ONE-LINE
+ *                 address; it is not a place for bulk evidence.
+ *   - `meta`    — 1000 BYTES serialized, and ALL-OR-NOTHING: over the cap the
+ *                 whole object is REPLACED by `{_truncated: true, bytes}`, so
+ *                 bulky evidence takes `field`/`stated`/`returned` down with it.
+ *                 Bound anything free-text BEFORE putting it here.
+ * A fact that is not an object is ignored entirely; unknown keys are dropped.
+ *
  * @typedef {object} Annotation
  * @property {boolean} surface  true ⇒ the answer did NOT honor the request (show the human).
- * @property {string|null} [verdict]  decisive hint, e.g. `"honored"` | `"broke"` (carried text).
- * @property {string|null} [where]  human-readable description of the mismatch.
- * @property {object|null} [meta]  optional structured detail (e.g. field/stated/returned).
+ * @property {string|null} [verdict]  decisive hint, e.g. `"honored"` | `"broke"` (carried text). ≤80 chars.
+ * @property {string|null} [where]  human-readable one-line description of the mismatch. ≤300 chars, clipped silently.
+ * @property {object|null} [meta]  optional structured detail (e.g. field/stated/returned). ≤1000 bytes serialized, else replaced wholesale by a truncation marker.
  */
 
 /**

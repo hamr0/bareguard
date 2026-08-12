@@ -178,6 +178,85 @@ test("annotate audit line stays atomic when redaction expands where/meta (file p
   }
 });
 
+// The bounds above cap SIZE. These four pin the LOSS SHAPE the `Annotation` typedef
+// documents — how a caller finds out (or doesn't) that a field was cut. A judge author
+// sizes their output against these, so a doc claim that drifts from the code is a
+// silent data-loss path, not a typo.
+
+// `where` clips SILENTLY: the fact carries no marker, so an over-long `where` is
+// indistinguishable from one that always fit. This is why `where` is documented as a
+// one-line ADDRESS and never a place for bulk evidence.
+test("where clips silently — the clipped fact carries no truncation marker", async () => {
+  const gate = new Gate({ audit: { path: null } });
+  await gate.init();
+  const addresses = Array.from({ length: 8 }, (_, i) =>
+    `src/backup.js(${56 + i},48): error TS1016: A required parameter cannot follow an optional parameter.`).join(" ");
+  assert.ok(addresses.length > 300, "fixture must exceed the cap or the test proves nothing");
+  await gate.annotate({ surface: true, where: addresses });
+  const fact = gate.drainAnnotations()[0];
+  assert.equal(fact.where.length, 300, "clipped to exactly the cap");
+  assert.ok(!fact.where.includes("TRUNCAT"), "no marker is appended");
+  assert.equal(fact._truncated, undefined, "no flag anywhere on the fact");
+  assert.ok(!addresses.startsWith(fact.where) === false, "it is a prefix — the tail is simply gone");
+});
+
+// `meta` is ALL-OR-NOTHING: over the cap the WHOLE object is replaced, so bulky
+// evidence takes field/stated/returned down with it. This is the clause BA-20's
+// judge contract depends on; the boundary is asserted from both sides.
+test("meta over the cap loses EVERY key, not just the bulky one", async () => {
+  const gate = new Gate({ audit: { path: null } });
+  await gate.init();
+  await gate.annotate({
+    surface: true,
+    meta: { field: "price", stated: 300, returned: 400, evidence: "x".repeat(1200) },
+  });
+  const fact = gate.drainAnnotations()[0];
+  assert.equal(fact.meta._truncated, true, "replaced by a marker (loud, unlike where)");
+  assert.equal(fact.meta.field, undefined, "the mechanical fields are collateral damage");
+  assert.equal(fact.meta.stated, undefined);
+  assert.equal(fact.meta.returned, undefined);
+});
+
+test("the meta cap boundary: at 1000 bytes it survives, one byte over loses everything", async () => {
+  const gate = new Gate({ audit: { path: null } });
+  await gate.init();
+  const sized = (bytes) => {
+    const meta = { e: "x".repeat(bytes - Buffer.byteLength(JSON.stringify({ e: "" }), "utf8")) };
+    assert.equal(Buffer.byteLength(JSON.stringify(meta), "utf8"), bytes, "fixture sized exactly");
+    return meta;
+  };
+  await gate.annotate({ surface: true, meta: sized(1000) });
+  await gate.annotate({ surface: true, meta: sized(1001) });
+  const [at, over] = gate.drainAnnotations();
+  assert.equal(at.meta._truncated, undefined, "exactly at the cap rides intact");
+  assert.equal(over.meta._truncated, true, "one byte over is replaced wholesale");
+});
+
+// The fail-open that BA-20's criterion 7 exists to catch, pinned from bareguard's side:
+// annotate() normalizes strictly and NEVER throws, so a fact built to the retired
+// pre-E6 sketch shape has every key dropped and `surface` defaults false — the fact
+// then routes as `honored` and no human ever sees it.
+test("a sketch-shaped fact fails OPEN: unknown keys dropped, surface defaults false", async () => {
+  const gate = new Gate({ audit: { path: null } });
+  await gate.init();
+  await gate.annotate({ kind: "violation", field: "price", stated: 300, returned: 400, text: "€400 exceeds €300" });
+  const fact = gate.drainAnnotations()[0];
+  assert.equal(fact.surface, false, "surface defaults false — this is the fail-open");
+  assert.equal(fact.verdict, null, "`kind` is not a field and carries nothing");
+  assert.equal(fact.where, null, "`text` is not the field name; `where` is");
+  assert.equal(fact.meta, null, "top-level field/stated/returned do not reach meta");
+  assert.equal(routeAnnotation(fact.surface, true, "strict"), "pass", "routes as honored — invisible");
+});
+
+test("a non-object fact is ignored entirely and annotate never throws", async () => {
+  const gate = new Gate({ audit: { path: null } });
+  await gate.init();
+  for (const junk of [null, undefined, "broke", 42, true]) {
+    await gate.annotate(junk); // must not throw into the agent loop
+  }
+  assert.equal(gate.drainAnnotations().length, 0, "nothing buffered from junk");
+});
+
 // honored facts (surface=false) never reach the human, even on an ask.
 test("a honored fact (surface=false) is not attached to the ask", async () => {
   const channel = makeHumanChannel([{ decision: "allow" }]);

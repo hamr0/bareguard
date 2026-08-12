@@ -1831,10 +1831,19 @@ consumer has shown which 10% of it they need.
 surface would ever ship:**
 1. **Tap point** — reads the *authoritative tool return*, never the agent's claim.
 2. **Timing** — after the return, before the next action.
-3. **Fact envelope** — one output shape regardless of domain:
-   `{kind, field, stated, returned, text}` where `kind ∈ violation|deviation` (§6.6);
-   a deviation needs only `kind` + `text` (e.g. `{kind:"violation", field:"price",
-   stated:300, returned:400, text:"€400, exceeds your stated max of €300"}`).
+3. **Fact envelope** — one output shape regardless of domain, **as SHIPPED in 0.7.0**:
+   `{surface, verdict, where, meta}` — `surface` (bool) is the only load-bearing field,
+   `where` is a one-line string, and `{field, stated, returned}` ride under `meta`
+   (e.g. `{surface:true, verdict:"broke", where:"price: stated 300, returned 400",
+   meta:{field:"price", stated:300, returned:400}}`).
+   > **Superseded shape — do not emit.** This skeleton originally specified
+   > `{kind, field, stated, returned, text}` with `kind ∈ violation|deviation`. **`kind`
+   > was retired by E6e** (§9.2.6 — the axis measured unreliable, 6/9, every miss an
+   > over-call) and the field is **`where`, never `text`**. The retired shape is kept
+   > visible because it was cited downstream as if current: `annotate()` normalizes
+   > strictly and **never throws**, so a sketch-shaped fact has every key dropped,
+   > `surface` defaults `false`, and the fact routes as `honored` — **fail-open and
+   > invisible** (pinned by `axis-b-annotate.test.js`).
 4. **Routing** — facts go to the three §6.3 sinks: the human-ask annotation, agent
    feedback (in-band context), and the audit line.
 5. **The prohibition** — never blocks, never modifies, never decides (D7).
@@ -1951,9 +1960,20 @@ judge is **not** asked violation-vs-deviation — E6e showed that axis is unreli
   "where": "you said under €300; the booking is €400" }
 ```
 ```js
-gate.annotate({ surface: verdict !== "honored", verdict, text: where })
+gate.annotate({ surface: verdict !== "honored", verdict, where })
+// the field is `where` — an earlier draft of this line said `text`, which annotate()
+// silently DROPS (it normalizes and never throws), leaving where:null. Structured
+// detail rides `meta: {field, stated, returned}`.
 // bareguard reads reversibility from the action it rides, then routes per §6.6 + the knob.
 ```
+
+**Field bounds are part of this contract** (shipped; see the `Annotation` typedef, which
+is the citable authority because it cannot drift from the code): `verdict` ≤80 chars,
+`where` ≤300 chars **clipped silently with no marker** — keep it a one-line address, never
+bulk evidence — and `meta` ≤1000 **bytes**, **all-or-nothing**: over the cap the whole
+object is replaced by `{_truncated:true, bytes}`, so bulky evidence takes
+`field`/`stated`/`returned` down with it. Bound free text *before* it reaches `meta`. The
+caps hold PIPE_BUF headroom for post-redaction expansion and are not to be raised.
 
 **Why one open call is good enough — and why it is not a safety bet.** B **never decides
 outcome**, so a wrong call costs only a *missed annotation* or *a little HITL noise* — never
@@ -2153,19 +2173,22 @@ format must make user-authored constraints the only input B reconciles against.
 
 ## 8.1 Concrete spec — `recall`-provenance & `impact`-risk (settled 2026-06-14, design-only)
 
-The §6.5 skeleton (tap → `{kind, field, stated, returned, text}` envelope → sinks → never-decide) is
-fixed. This section fills in the **variable check** for litectx's two real return shapes (grounded at
+The §6.5 skeleton (tap → `{surface, verdict, where, meta}` envelope → sinks → never-decide) is
+fixed. *(The envelopes in this section pre-date E6 and are rewritten to the shipped shape —
+`kind` was retired by E6e and `text` is not a field; see §6.5.)* This section fills in the **variable check** for litectx's two real return shapes (grounded at
 file:line, litectx HEAD), and shows the declaration format (OQ1) they imply. **Still unbuilt** — this
 is the spec for *if* a consumer asks; none has. It replaces the retired `assemble`/scenario-2 sensor
 (§0.2 #5: `assemble` self-enforces its budget, so there is no honest violation to reconcile).
 
 > **#2 RESOLVED (2026-06-15) — thin primitive.** bareguard ships `gate.annotate` (the §6.5 skeleton:
-> envelope + `kind × reversible` routing per §6.6); the **check stays the caller's**, so OQ1's format
-> is not frozen by the surface. Both litectx checks below are **deterministic → `kind:"violation"`**;
-> the soft **`deviation`** path (LLM-judged) is caller/runner-side only (§6.7) and needs no litectx
-> change. Routing is now **violation always → HITL** (§6.6), which tightens Case R below.
+> envelope + `surface × reversible` routing per §6.6); the **check stays the caller's**, so OQ1's
+> format is not frozen by the surface. Both litectx checks below are **deterministic →
+> `surface:true` (`verdict:"broke"`)**; the soft LLM-judged path is caller/runner-side only (§6.7)
+> and needs no litectx change. Routing is now **surfaced always → HITL** (§6.6), which tightens
+> Case R below. *(Written pre-E6 as `kind:"violation"` vs `deviation`; `kind` was retired by E6e —
+> the shipped envelope routes on `surface`, and the decisive verdict is `honored`/`broke`.)*
 
-**Case R — recall provenance** *(deterministic membership → `kind:"violation"`; reversible read)*
+**Case R — recall provenance** *(deterministic membership → `surface:true`; reversible read)*
 - **Return:** `recall(q)` → `Hit[]`; memory hits carry `provenance` via `attachMemMeta`
   (`litectx/src/index.js:332`). Values **today `human | agent`, `null` for indexed files** (`:120`).
 - **Constraint:** `{recall:{provenanceIn:["human","doc"]}}` (or `provenanceNotIn:[…]`).
@@ -2175,7 +2198,7 @@ is the spec for *if* a consumer asks; none has. It replaces the retired `assembl
   earlier draft routed reversible reads to feedback+audit only; a hard provenance breach now asks. A
   soft "this memory feels off-topic" would be a `deviation` and, being reversible, would pass silently —
   but that judgment is not what this deterministic check produces.)*
-- **Envelope:** `{kind:"violation", field:"provenance", stated:["human","doc"], returned:"agent", text:"fact:x is agent-authored; you restricted to human/doc"}`.
+- **Envelope:** `{surface:true, verdict:"broke", where:"provenance: stated human/doc, returned agent", meta:{field:"provenance", stated:["human","doc"], returned:"agent"}}`.
 
 **Case I — impact risk** *(the genuine detect-and-feed-A case — rides the edit's existing A-stop)*
 - **Return:** `impact(symbol)` → `{usedBy, risk, callers, callees}`, `risk ∈ low|med|high`
@@ -2185,7 +2208,7 @@ is the spec for *if* a consumer asks; none has. It replaces the retired `assembl
 - **Sink:** an edit *is* an irreversible A-action; the `violation` rides the edit's existing A-stop,
   which now carries "editing `foo`, impact=high (12 callers), you capped at med." Human sees blast
   radius, not spin. (Routing unchanged by §6.6 — irreversible violation was always HITL.)
-- **Envelope:** `{kind:"violation", field:"risk", stated:"med", returned:"high", text:"foo: impact=high (12 callers), exceeds your stated max of med"}`.
+- **Envelope:** `{surface:true, verdict:"broke", where:"risk: stated med, returned high (foo, 12 callers)", meta:{field:"risk", stated:"med", returned:"high"}}`.
 
 **What this pins about OQ1 — the format is tiny.** The two consumers need exactly two operator kinds:
 ```
