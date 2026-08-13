@@ -111,7 +111,9 @@ export {};
  *   - `where`   — clipped to 300 chars with NO marker. Keep it a ONE-LINE
  *                 address; it is not a place for bulk evidence.
  *   - `meta`    — carried as a DECOUPLED COPY (mutating your object after the call
- *                 cannot move the bound or split the sinks), capped at
+ *                 cannot move the bound or split the sinks) with any `__proto__`
+ *                 KEY dropped at every depth, so merging the fact into another
+ *                 object cannot shift that object's prototype. Capped at
  *                 1000 BYTES serialized, ALL-OR-NOTHING: over the cap the whole
  *                 object is REPLACED by `{_truncated: true, bytes}`, so bulky
  *                 evidence takes `field`/`stated`/`returned` down with it. A

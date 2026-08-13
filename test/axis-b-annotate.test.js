@@ -438,6 +438,27 @@ test("`verdict` and `where` are read once too — no validate-vs-store divergenc
   assert.equal(facts[0].verdict, "broke", "the validated string is what was stored");
 });
 
+// Prototype safety: `meta` is reply-derived — the least trusted data the gate
+// carries. A `__proto__` KEY (what JSON.parse of a hostile reply produces) is inert
+// while it sits on the fact, but a consumer merging the fact — `Object.assign({}, meta)`
+// or a spread — turns that key back into a real prototype set. Dropped at copy time,
+// at every depth, the same treatment `safeAction()` gives an action.
+test("a `__proto__` key in meta cannot shift a consumer's prototype", async () => {
+  const gate = new Gate({ audit: { path: null } });
+  await gate.init();
+  const hostile = JSON.parse('{"__proto__":{"polluted":true},"field":"price","deep":{"__proto__":{"polluted":true},"k":1}}');
+  await gate.annotate({ surface: true, meta: hostile });
+  const meta = gate.drainAnnotations()[0].meta;
+
+  assert.deepEqual(Object.getOwnPropertyNames(meta), ["field", "deep"], "the key is gone at the top level");
+  assert.deepEqual(Object.getOwnPropertyNames(meta.deep), ["k"], "and at depth");
+  const merged = Object.assign({}, meta);
+  assert.equal(Object.getPrototypeOf(merged), Object.prototype, "merging the fact does not shift the prototype");
+  assert.equal(merged.polluted, undefined);
+  assert.equal(({}).polluted, undefined, "and nothing global was ever polluted");
+  assert.equal(meta.field, "price", "legitimate content is untouched");
+});
+
 // Atomicity: redaction EXPANDS a field, and it runs pattern-by-pattern over text a
 // previous pattern already rewrote — so a later pattern matching the `[REDACTED:…]`
 // marker compounds. Any field added to the redactor MUST also be re-bounded in the

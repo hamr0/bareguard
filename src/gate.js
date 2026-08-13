@@ -182,7 +182,13 @@ function boundMeta(meta) {
     // while the audit row (serialized at emit time) kept the small version — so the
     // two sinks silently disagreed. A round-trip through the JSON we already
     // computed costs nothing extra and makes the bound a fact, not a request.
-    const copy = JSON.parse(json);
+    // Drop any `__proto__` KEY while copying, at every depth. `JSON.parse` creates
+    // it as an ordinary own property rather than setting the prototype, so it is
+    // inert here — but it stays inert only until a consumer merges the fact
+    // (`Object.assign({}, fact.meta)`, a spread), which DOES set the prototype of
+    // the merged object. `meta` is reply-derived, i.e. the least trusted data in
+    // the gate, so it gets the same treatment `safeAction()` gives an action.
+    const copy = JSON.parse(json, (k, v) => (k === "__proto__" ? undefined : v));
     // A `meta` whose toJSON yields a scalar (e.g. a bare Date) cannot be carried
     // structurally at all; that is the existing total-loss marker, not a new one.
     return copy !== null && typeof copy === "object" ? copy : { _unserializable: true };
