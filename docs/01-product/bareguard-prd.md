@@ -561,7 +561,7 @@ Children inherit via env var `BAREGUARD_AUDIT_PATH` set by the parent.
 | `topup` | runner / humanChannel raised a cap | `dimension`, `oldCap`, `newCap` |
 | `terminate` | gate terminated (graceful) | `reason` |
 | `annotate` | (v0.7) every well-formed `gate.annotate()` fact (Part 2 §8.2) | `surface`, `verdict`, `where`, `meta` |
-| `annotate_malformed` | (Unreleased) a `gate.annotate()` call whose fact could not be read — no `surface` boolean, or the read itself threw (Part 2 §8.2.1). Nothing buffered; no decision changed | `reason` (`not-an-object` \| `array` \| `missing-surface` \| `unreadable`) |
+| `annotate_malformed` | (v0.13) a `gate.annotate()` call whose fact could not be read — no `surface` boolean, or the read itself threw (Part 2 §8.2.1). Nothing buffered; no decision changed | `reason` (`not-an-object` \| `array` \| `missing-surface` \| `unreadable`) |
 
 **Properties:**
 
@@ -1043,8 +1043,8 @@ done — locking before the bench run is the one scenario that risks an early 2.
 `Result.pricing` field (v0.9), **rule strings** (adopters and the seam contract test
 match on them — incl. `flags.<field>`, now live in litectx's write-gate seam,
 `bash.classify`, and `budget.unpriced` (v0.9)), the audit JSONL line format (incl. the
-`unpriced` phase, v0.9, and the `annotate_malformed` phase, Unreleased), the
-`gate.annotate` fact contract (`surface` must be an explicit boolean — Unreleased), the
+`unpriced` phase, v0.9, and the `annotate_malformed` phase, v0.13), the
+`gate.annotate` fact contract (`surface` must be an explicit boolean — v0.13), the
 budget file format, and the
 `humanChannel` event/decision contract (incl. the `event.classification`/`event.tier`
 fields the classifier attaches).
@@ -1845,7 +1845,7 @@ surface would ever ship:**
    > was retired by E6e** (§9.2.6 — the axis measured unreliable, 6/9, every miss an
    > over-call) and the field is **`where`, never `text`**. The retired shape is kept
    > visible because it was cited downstream as if current. It carries no `surface`,
-   > so **as of the Unreleased malformed-rejection rule it is MALFORMED**: nothing is buffered and an `annotate_malformed`
+   > so **as of v0.13 it is MALFORMED**: nothing is buffered and an `annotate_malformed`
    > audit row records `reason: "missing-surface"`. (Before that rule it normalized
    > into a fact with every key dropped and `surface` defaulting `false`, routing as
    > `honored` — **fail-open and invisible**.) The CURRENT state is pinned by
@@ -2326,7 +2326,7 @@ gate.annotate({
   **default `strict`**. Binary (the decisive verdict left no middle to split — §6.6). Governs
   the whole reversible-`broke` set. Pure noise control, never safety.
 - **Safe default / opt-in:** no `annotate()` call ⇒ no facts ⇒ no behavior change. B is additive.
-- **Malformed is rejected, not normalized (Unreleased).** `surface` must be an **explicit
+- **Malformed is rejected, not normalized (v0.13).** `surface` must be an **explicit
   boolean** — it is the only load-bearing and only non-optional field, so setting it is
   what distinguishes a caller speaking the contract from one speaking a different dialect.
   A non-object, an **array** (`typeof [] === "object"`), an object without a boolean
