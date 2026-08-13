@@ -101,11 +101,77 @@ export {};
  * `surface` is the one load-bearing field — the caller sets it (e.g. to
  * `verdict !== "honored"`); the rest is carried, not interpreted.
  *
+ * FIELD BOUNDS — there are TWO, and sizing to the first does NOT guarantee
+ * survival past the second. `annotate()` normalizes and NEVER throws, so every
+ * loss below is silent at the call site.
+ *
+ * (1) SOURCE bound, on the fact you get back from `drainAnnotations()` and on
+ * the `humanChannel` event. Limits are CHARACTERS (UTF-16 code units), not bytes:
+ *   - `verdict` — clipped to 80 chars.
+ *   - `where`   — clipped to 300 chars with NO marker. Keep it a ONE-LINE
+ *                 address; it is not a place for bulk evidence.
+ *   - `meta`    — carried as a DECOUPLED COPY (mutating your object after the call
+ *                 cannot move the bound or split the sinks) with any `__proto__`
+ *                 KEY dropped at every depth, so merging the fact into another
+ *                 object cannot shift that object's prototype. Capped at
+ *                 1000 BYTES serialized, ALL-OR-NOTHING: over the cap the whole
+ *                 object is REPLACED by `{_truncated: true, bytes}`, so bulky
+ *                 evidence takes `field`/`stated`/`returned` down with it. A
+ *                 `meta` that cannot be serialized at all (circular, BigInt)
+ *                 becomes `{_unserializable: true}` — a DIFFERENT marker, same
+ *                 total loss. Bound free text BEFORE it reaches `meta`.
+ *                 The copy is a JSON ROUND-TRIP, so it carries JSON values only
+ *                 and drops what JSON cannot express — NO marker, this is the
+ *                 one lossy path that is silent by design because the audit row
+ *                 was always JSON and the sinks must agree: a `Date` arrives as
+ *                 its ISO string, a `Map`/`Set` as `{}`, an `undefined` value
+ *                 has its key removed, and a class instance arrives as a plain
+ *                 object (`instanceof` no longer holds). Put plain JSON-shaped
+ *                 values in `meta`; coerce anything else yourself first.
+ *
+ * (2) AUDIT-SINK bound, applied AFTER redaction, on the persisted line only.
+ * Redaction EXPANDS a field (each match becomes a longer `[REDACTED:…]` tag), so
+ * a line built from in-budget fields can still exceed the ~3500-byte atomic-append
+ * cap. When it does, the row re-bounds: `where` is re-clipped to ~200 bytes WITH a
+ * `[TRUNCATED]` suffix and a root `_truncated: true`, and `meta` is replaced by
+ * `{_truncated, bytes}` EVEN IF the source `meta` was well under 1000 bytes
+ * (measured: a legal 355-byte meta persisted as `{_truncated:true,bytes:6977}`).
+ * So under a configured redactor the mechanical fields can survive the drain and
+ * still vanish from the audit row. It is this byte-level backstop — not the source
+ * caps, which count characters — that actually preserves append atomicity.
+ *
+ * Unknown keys are dropped.
+ *
+ * MALFORMED — `surface` must be an EXPLICIT boolean. A fact without one is not
+ * normalized, it is REJECTED: nothing is buffered, `drainAnnotations()` stays
+ * clean, and a distinct `annotate_malformed` audit row carries the reason. It
+ * never changes a decision — a record, not a verdict. The four doorways:
+ *   - `"not-an-object"` — `null`, a string, a number, a boolean.
+ *   - `"array"` — `typeof [] === "object"` catches nothing, so pass ONE fact
+ *                 object, never an array of them.
+ *   - `"missing-surface"` — `surface` absent or non-boolean: the retired pre-E6
+ *                 sketch `{kind, field, stated, returned, text}`, `{}`, a typo,
+ *                 or a truthy STRING like `"false"`.
+ *   - `"unreadable"` — reading the fact THREW (a getter, a Proxy trap, a revoked
+ *                 Proxy). Rejected WHOLE even if `surface` itself read fine:
+ *                 half-read is not "everything was fine".
+ * Before this rule the first three normalized into a fact byte-identical to a
+ * legitimate `honored` one — so "I could not read what you sent" and "everything
+ * was fine" shared a value and routed as `pass` — and the fourth threw straight
+ * into the agent loop.
+ *
+ * NEVER-THROWS, precisely: `annotate()` never throws because of THE FACT — any
+ * shape, any hostile getter. An audit WRITE failure (disk full, unwritable path)
+ * still propagates, by design: a silently-dropped audit line is a worse failure
+ * than a loud one, and every other phase this gate emits behaves the same way.
+ *
  * @typedef {object} Annotation
- * @property {boolean} surface  true ⇒ the answer did NOT honor the request (show the human).
- * @property {string|null} [verdict]  decisive hint, e.g. `"honored"` | `"broke"` (carried text).
- * @property {string|null} [where]  human-readable description of the mismatch.
- * @property {object|null} [meta]  optional structured detail (e.g. field/stated/returned).
+ * @property {boolean} surface  REQUIRED explicit boolean; true ⇒ the answer did NOT
+ *   honor the request (show the human). Anything else ⇒ the whole fact is malformed.
+ * @property {string|null} [verdict]  decisive hint, e.g. `"honored"` | `"broke"` (carried
+ *   text). ≤80 chars. Redacted in the audit line like `where`/`meta`.
+ * @property {string|null} [where]  human-readable one-line description of the mismatch. ≤300 chars, clipped silently.
+ * @property {object|null} [meta]  optional structured detail (e.g. field/stated/returned). ≤1000 bytes serialized, else replaced wholesale by a truncation marker.
  */
 
 /**

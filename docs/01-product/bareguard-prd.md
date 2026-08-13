@@ -560,6 +560,8 @@ Children inherit via env var `BAREGUARD_AUDIT_PATH` set by the parent.
 | `halt` | dedicated grep target on halt | `dimension`, `spent`, `cap`, `rule`, `awaiting` |
 | `topup` | runner / humanChannel raised a cap | `dimension`, `oldCap`, `newCap` |
 | `terminate` | gate terminated (graceful) | `reason` |
+| `annotate` | (v0.7) every well-formed `gate.annotate()` fact (Part 2 §8.2) | `surface`, `verdict`, `where`, `meta` |
+| `annotate_malformed` | (v0.13) a `gate.annotate()` call whose fact could not be read — no `surface` boolean, or the read itself threw (Part 2 §8.2.1). Nothing buffered; no decision changed | `reason` (`not-an-object` \| `array` \| `missing-surface` \| `unreadable`) |
 
 **Properties:**
 
@@ -1041,7 +1043,9 @@ done — locking before the bench run is the one scenario that risks an early 2.
 `Result.pricing` field (v0.9), **rule strings** (adopters and the seam contract test
 match on them — incl. `flags.<field>`, now live in litectx's write-gate seam,
 `bash.classify`, and `budget.unpriced` (v0.9)), the audit JSONL line format (incl. the
-`unpriced` phase, v0.9), the budget file format, and the
+`unpriced` phase, v0.9, and the `annotate_malformed` phase, v0.13), the
+`gate.annotate` fact contract (`surface` must be an explicit boolean — v0.13), the
+budget file format, and the
 `humanChannel` event/decision contract (incl. the `event.classification`/`event.tier`
 fields the classifier attaches).
 
@@ -1831,10 +1835,22 @@ consumer has shown which 10% of it they need.
 surface would ever ship:**
 1. **Tap point** — reads the *authoritative tool return*, never the agent's claim.
 2. **Timing** — after the return, before the next action.
-3. **Fact envelope** — one output shape regardless of domain:
-   `{kind, field, stated, returned, text}` where `kind ∈ violation|deviation` (§6.6);
-   a deviation needs only `kind` + `text` (e.g. `{kind:"violation", field:"price",
-   stated:300, returned:400, text:"€400, exceeds your stated max of €300"}`).
+3. **Fact envelope** — one output shape regardless of domain, **as SHIPPED in 0.7.0**:
+   `{surface, verdict, where, meta}` — `surface` (bool) is the only load-bearing field,
+   `where` is a one-line string, and `{field, stated, returned}` ride under `meta`
+   (e.g. `{surface:true, verdict:"broke", where:"price: stated 300, returned 400",
+   meta:{field:"price", stated:300, returned:400}}`).
+   > **Superseded shape — do not emit.** This skeleton originally specified
+   > `{kind, field, stated, returned, text}` with `kind ∈ violation|deviation`. **`kind`
+   > was retired by E6e** (§9.2.6 — the axis measured unreliable, 6/9, every miss an
+   > over-call) and the field is **`where`, never `text`**. The retired shape is kept
+   > visible because it was cited downstream as if current. It carries no `surface`,
+   > so **as of v0.13 it is MALFORMED**: nothing is buffered and an `annotate_malformed`
+   > audit row records `reason: "missing-surface"`. (Before that rule it normalized
+   > into a fact with every key dropped and `surface` defaulting `false`, routing as
+   > `honored` — **fail-open and invisible**.) The CURRENT state is pinned by
+   > `axis-b-annotate.test.js`; the superseded fail-open is described here only,
+   > since its tests were replaced by the rejection tests that supersede them.
 4. **Routing** — facts go to the three §6.3 sinks: the human-ask annotation, agent
    feedback (in-band context), and the audit line.
 5. **The prohibition** — never blocks, never modifies, never decides (D7).
@@ -1951,9 +1967,33 @@ judge is **not** asked violation-vs-deviation — E6e showed that axis is unreli
   "where": "you said under €300; the booking is €400" }
 ```
 ```js
-gate.annotate({ surface: verdict !== "honored", verdict, text: where })
+gate.annotate({ surface: verdict !== "honored", verdict, where })
+// the field is `where` — an earlier draft of this line said `text`, which annotate()
+// silently DROPS (it normalizes and never throws), leaving where:null. Structured
+// detail rides `meta: {field, stated, returned}`.
 // bareguard reads reversibility from the action it rides, then routes per §6.6 + the knob.
 ```
+
+**Field bounds are part of this contract, and there are TWO of them** (shipped; the
+`Annotation` typedef carries the full statement and is the citable authority, because it
+ships in the `.d.ts` and cannot drift from the code):
+
+1. **Source bound** — on the drained fact and the `humanChannel` event. `verdict` ≤80 and
+   `where` ≤300 **characters** (UTF-16 code units, *not* bytes), `where` clipped with **no
+   marker**; `meta` ≤1000 **bytes**, **all-or-nothing** — over the cap the whole object
+   becomes `{_truncated:true, bytes}`, so bulky evidence takes `field`/`stated`/`returned`
+   with it (an unserializable `meta` becomes `{_unserializable:true}`, same total loss).
+2. **Audit-sink bound** — applied **after redaction**, on the persisted line only. Redaction
+   *expands* fields, so a line built from in-budget values can still exceed the ~3500-byte
+   atomic-append cap; the row then re-clips `where` to ~200 bytes **with** a `[TRUNCATED]`
+   suffix and a root `_truncated:true`, and **replaces `meta` even when the source `meta`
+   was legal** (measured: a 355-byte `meta` persisted as `{_truncated:true,bytes:6977}`).
+
+**Consequence for a judge author:** sizing to the source budget does **not** guarantee the
+mechanical fields survive into the audit row once a redactor is configured. Bound free text
+before it reaches `meta`, and keep `where` a one-line address. The byte-level audit backstop
+— not the character-counted source caps — is what actually preserves append atomicity; the
+caps are not to be raised.
 
 **Why one open call is good enough — and why it is not a safety bet.** B **never decides
 outcome**, so a wrong call costs only a *missed annotation* or *a little HITL noise* — never
@@ -2153,19 +2193,22 @@ format must make user-authored constraints the only input B reconciles against.
 
 ## 8.1 Concrete spec — `recall`-provenance & `impact`-risk (settled 2026-06-14, design-only)
 
-The §6.5 skeleton (tap → `{kind, field, stated, returned, text}` envelope → sinks → never-decide) is
-fixed. This section fills in the **variable check** for litectx's two real return shapes (grounded at
+The §6.5 skeleton (tap → `{surface, verdict, where, meta}` envelope → sinks → never-decide) is
+fixed. *(The envelopes in this section pre-date E6 and are rewritten to the shipped shape —
+`kind` was retired by E6e and `text` is not a field; see §6.5.)* This section fills in the **variable check** for litectx's two real return shapes (grounded at
 file:line, litectx HEAD), and shows the declaration format (OQ1) they imply. **Still unbuilt** — this
 is the spec for *if* a consumer asks; none has. It replaces the retired `assemble`/scenario-2 sensor
 (§0.2 #5: `assemble` self-enforces its budget, so there is no honest violation to reconcile).
 
 > **#2 RESOLVED (2026-06-15) — thin primitive.** bareguard ships `gate.annotate` (the §6.5 skeleton:
-> envelope + `kind × reversible` routing per §6.6); the **check stays the caller's**, so OQ1's format
-> is not frozen by the surface. Both litectx checks below are **deterministic → `kind:"violation"`**;
-> the soft **`deviation`** path (LLM-judged) is caller/runner-side only (§6.7) and needs no litectx
-> change. Routing is now **violation always → HITL** (§6.6), which tightens Case R below.
+> envelope + `surface × reversible` routing per §6.6); the **check stays the caller's**, so OQ1's
+> format is not frozen by the surface. Both litectx checks below are **deterministic →
+> `surface:true` (`verdict:"broke"`)**; the soft LLM-judged path is caller/runner-side only (§6.7)
+> and needs no litectx change. Routing is now **surfaced always → HITL** (§6.6), which tightens
+> Case R below. *(Written pre-E6 as `kind:"violation"` vs `deviation`; `kind` was retired by E6e —
+> the shipped envelope routes on `surface`, and the decisive verdict is `honored`/`broke`.)*
 
-**Case R — recall provenance** *(deterministic membership → `kind:"violation"`; reversible read)*
+**Case R — recall provenance** *(deterministic membership → `surface:true`; reversible read)*
 - **Return:** `recall(q)` → `Hit[]`; memory hits carry `provenance` via `attachMemMeta`
   (`litectx/src/index.js:332`). Values **today `human | agent`, `null` for indexed files** (`:120`).
 - **Constraint:** `{recall:{provenanceIn:["human","doc"]}}` (or `provenanceNotIn:[…]`).
@@ -2175,7 +2218,7 @@ is the spec for *if* a consumer asks; none has. It replaces the retired `assembl
   earlier draft routed reversible reads to feedback+audit only; a hard provenance breach now asks. A
   soft "this memory feels off-topic" would be a `deviation` and, being reversible, would pass silently —
   but that judgment is not what this deterministic check produces.)*
-- **Envelope:** `{kind:"violation", field:"provenance", stated:["human","doc"], returned:"agent", text:"fact:x is agent-authored; you restricted to human/doc"}`.
+- **Envelope:** `{surface:true, verdict:"broke", where:"provenance: stated human/doc, returned agent", meta:{field:"provenance", stated:["human","doc"], returned:"agent"}}`.
 
 **Case I — impact risk** *(the genuine detect-and-feed-A case — rides the edit's existing A-stop)*
 - **Return:** `impact(symbol)` → `{usedBy, risk, callers, callees}`, `risk ∈ low|med|high`
@@ -2185,7 +2228,7 @@ is the spec for *if* a consumer asks; none has. It replaces the retired `assembl
 - **Sink:** an edit *is* an irreversible A-action; the `violation` rides the edit's existing A-stop,
   which now carries "editing `foo`, impact=high (12 callers), you capped at med." Human sees blast
   radius, not spin. (Routing unchanged by §6.6 — irreversible violation was always HITL.)
-- **Envelope:** `{kind:"violation", field:"risk", stated:"med", returned:"high", text:"foo: impact=high (12 callers), exceeds your stated max of med"}`.
+- **Envelope:** `{surface:true, verdict:"broke", where:"risk: stated med, returned high (foo, 12 callers)", meta:{field:"risk", stated:"med", returned:"high"}}`.
 
 **What this pins about OQ1 — the format is tiny.** The two consumers need exactly two operator kinds:
 ```
@@ -2283,6 +2326,27 @@ gate.annotate({
   **default `strict`**. Binary (the decisive verdict left no middle to split — §6.6). Governs
   the whole reversible-`broke` set. Pure noise control, never safety.
 - **Safe default / opt-in:** no `annotate()` call ⇒ no facts ⇒ no behavior change. B is additive.
+- **Malformed is rejected, not normalized (v0.13).** `surface` must be an **explicit
+  boolean** — it is the only load-bearing and only non-optional field, so setting it is
+  what distinguishes a caller speaking the contract from one speaking a different dialect.
+  A non-object, an **array** (`typeof [] === "object"`), an object without a boolean
+  `surface` (the retired sketch, `{}`, a typo, a truthy `"false"`), or a fact that
+  **throws when read** (a getter / Proxy trap → `reason:"unreadable"`, rejected WHOLE
+  even if `surface` itself read fine) buffers **nothing** and emits a distinct
+  `annotate_malformed` audit row carrying `reason` — a **record, not a verdict**: it
+  changes no decision (same class as `unpriced` / `budget_warn`). A distinct *phase*
+  rather than a flag on `annotate`, because a flag would let a parser counting
+  `phase === "annotate"` miscount a rejection as a fact.
+  **The never-throws guarantee, stated precisely:** `annotate()` never throws because of
+  *the fact* — any shape, any hostile getter (every read of a caller-supplied object is
+  inside the guard, the shape check *and* the normalization). An audit **write** failure
+  (disk full, unwritable path) still propagates, deliberately — a silently-dropped audit
+  line is the worse failure, and every other phase behaves the same. Both halves are
+  pinned by test, so the guarantee cannot quietly widen back.
+  Rationale: without the rule every one of those normalized into a fact **byte-identical
+  to a legitimate `honored`** one, so "I could not read what you sent" and "everything was
+  fine" shared a value — the fail-open that let a downstream sketch-shaped call go
+  invisible (§6.5).
 
 ### 8.2.2 The routing function (ship this exactly — E6i-validated)
 
