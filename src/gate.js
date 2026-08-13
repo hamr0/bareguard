@@ -114,8 +114,11 @@ function annotationDefect(fact, surface) {
  * audit line stays well under the audit's PIPE_BUF line cap (atomic shared-file
  * appends): `where`/`meta` are reply-derived and otherwise unbounded. This also
  * bounds what reaches the human/agent — `where` is a one-line summary by design.
- * Every read here is caller-controlled and may throw; see {@link annotationDefect}.
+ * Every read here is caller-controlled and may throw, so it runs inside
+ * {@link readAnnotation}'s try/catch — which is also where `surface` was read.
  * @param {*} fact
+ * @param {*} surface  `fact.surface` as already read by {@link readAnnotation};
+ *   taken as a parameter, never re-read, so the validated value is the stored one
  * @returns {import("./types.js").Annotation}
  */
 function normalizeAnnotation(fact, surface) {
