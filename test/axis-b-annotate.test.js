@@ -438,6 +438,26 @@ test("`verdict` and `where` are read once too — no validate-vs-store divergenc
   assert.equal(facts[0].verdict, "broke", "the validated string is what was stored");
 });
 
+// The copy is a JSON round-trip, so it is LOSSY for non-JSON values — and unlike
+// the size/serializability losses it carries NO marker. Pinned because it is the
+// one silent loss path in the contract: the audit row was always JSON, and the two
+// sinks agreeing is the point of the copy. Documented in the `Annotation` typedef.
+test("the meta copy carries JSON values only, and the typedef says which are lost", async () => {
+  const gate = new Gate({ audit: { path: null } });
+  await gate.init();
+  class Judge { constructor() { this.field = "price"; } }
+  await gate.annotate({ surface: true, meta: new Judge() });
+  await gate.annotate({ surface: true, meta: { d: new Date(0), m: new Map([["k", "v"]]), u: undefined, keep: 1 } });
+  const [cls, vals] = gate.drainAnnotations();
+
+  assert.equal(cls.meta instanceof Judge, false, "class identity is not carried");
+  assert.deepEqual(cls.meta, { field: "price" }, "but its own data is");
+  assert.equal(vals.meta.d, "1970-01-01T00:00:00.000Z", "a Date arrives as its ISO string");
+  assert.deepEqual(vals.meta.m, {}, "a Map arrives empty");
+  assert.equal("u" in vals.meta, false, "an undefined value has its key removed");
+  assert.equal(vals.meta.keep, 1, "JSON-shaped values are untouched");
+});
+
 // Prototype safety: `meta` is reply-derived — the least trusted data the gate
 // carries. A `__proto__` KEY (what JSON.parse of a hostile reply produces) is inert
 // while it sits on the fact, but a consumer merging the fact — `Object.assign({}, meta)`

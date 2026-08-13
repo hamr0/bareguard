@@ -120,6 +120,14 @@ export {};
  *                 `meta` that cannot be serialized at all (circular, BigInt)
  *                 becomes `{_unserializable: true}` — a DIFFERENT marker, same
  *                 total loss. Bound free text BEFORE it reaches `meta`.
+ *                 The copy is a JSON ROUND-TRIP, so it carries JSON values only
+ *                 and drops what JSON cannot express — NO marker, this is the
+ *                 one lossy path that is silent by design because the audit row
+ *                 was always JSON and the sinks must agree: a `Date` arrives as
+ *                 its ISO string, a `Map`/`Set` as `{}`, an `undefined` value
+ *                 has its key removed, and a class instance arrives as a plain
+ *                 object (`instanceof` no longer holds). Put plain JSON-shaped
+ *                 values in `meta`; coerce anything else yourself first.
  *
  * (2) AUDIT-SINK bound, applied AFTER redaction, on the persisted line only.
  * Redaction EXPANDS a field (each match becomes a longer `[REDACTED:…]` tag), so
