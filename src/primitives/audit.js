@@ -141,6 +141,14 @@ export class Audit {
       if (typeof truncated.where === "string" && Buffer.byteLength(truncated.where, "utf8") > 200) {
         truncated.where = truncated.where.slice(0, 200) + "[TRUNCATED]";
       }
+      // `verdict` is redacted too, so it expands too, so it must be re-bounded too.
+      // Adding a field to the redactor without adding it here reopens the atomicity
+      // hole: redaction runs pattern-by-pattern over ALREADY-redacted text, so a
+      // later pattern matching the `[REDACTED:…]` marker an earlier one inserted
+      // compounds (measured: an 80-char verdict reached 63 KB across 5 patterns).
+      if (typeof truncated.verdict === "string" && Buffer.byteLength(truncated.verdict, "utf8") > 200) {
+        truncated.verdict = truncated.verdict.slice(0, 200) + "[TRUNCATED]";
+      }
       if (truncated.meta != null && typeof truncated.meta === "object") {
         const bytes = Buffer.byteLength(JSON.stringify(truncated.meta), "utf8");
         if (bytes > 200) truncated.meta = { _truncated: true, bytes };

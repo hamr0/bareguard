@@ -438,6 +438,32 @@ test("`verdict` and `where` are read once too — no validate-vs-store divergenc
   assert.equal(facts[0].verdict, "broke", "the validated string is what was stored");
 });
 
+// Atomicity: redaction EXPANDS a field, and it runs pattern-by-pattern over text a
+// previous pattern already rewrote — so a later pattern matching the `[REDACTED:…]`
+// marker compounds. Any field added to the redactor MUST also be re-bounded in the
+// audit truncation branch, or an 80-char source field can blow the ~3500-byte
+// atomic-append cap (measured: 63 KB on one line before `verdict` was re-bounded).
+test("a redaction-expanded `verdict` cannot break audit line atomicity", async (t) => {
+  const dir = await makeTmpDir();
+  t.after(() => cleanup(dir));
+  const { auditPath } = uniquePaths(dir);
+  const gate = new Gate({
+    audit: { path: auditPath },
+    // each later pattern also matches characters the earlier one just INSERTED
+    secrets: { patterns: [/x/g, /E/g, /D/g, /A/g, /T/g] },
+  });
+  await gate.init();
+  await gate.annotate({ surface: true, verdict: "x".repeat(80), where: "x".repeat(300), meta: { b: "x".repeat(400) } });
+
+  const raw = (await readFile(auditPath, "utf8")).trim();
+  assert.equal(raw.split("\n").length, 1, "one line");
+  const bytes = Buffer.byteLength(raw, "utf8");
+  assert.ok(bytes <= 3500, `line must stay under the atomic-append cap, got ${bytes} bytes`);
+  const row = JSON.parse(raw);
+  assert.equal(row._truncated, true, "and it says so");
+  assert.ok(!row.verdict.includes("x".repeat(10)), "the raw secret text is still gone");
+});
+
 // Security: `verdict` is caller-judge free text, exactly like `where`. The 0.7.0
 // redaction pass covered `where`/`meta` and MISSED it, so a judge that echoed a key
 // into its verdict wrote the raw secret into the shared audit file.
