@@ -402,6 +402,42 @@ test("an audit WRITE failure still propagates (the guarantee covers the fact, no
     /ENOSPC/, "and so does the malformed row's own write");
 });
 
+// TOCTOU: the value VALIDATED must be the value STORED. `surface` used to be read
+// twice — once to check `typeof === "boolean"`, once to store `=== true` — so a
+// getter answering differently on the second read validated as a real violation and
+// landed as `surface:false`, routing as `honored` and vanishing. That is the exact
+// fail-open this rejection rule exists to close, reached straight through the guard.
+test("`surface` is read ONCE — a flipping getter cannot validate true and store false", async () => {
+  const gate = new Gate({ audit: { path: null } });
+  await gate.init();
+  let reads = 0;
+  await gate.annotate({
+    get surface() { reads++; return reads === 1; },   // true on the check, false on the store
+    verdict: "broke", where: "a real violation",
+  });
+  const facts = gate.drainAnnotations();
+  assert.equal(reads, 1, "the field is read exactly once");
+  assert.equal(facts.length, 1, "the fact it validated as is the fact it kept");
+  assert.equal(facts[0].surface, true, "stored value === validated value, not the flipped one");
+  assert.equal(routeAnnotation(facts[0].surface, true, "strict"), "HITL", "and it still reaches the human");
+});
+
+// Same seam on the carried fields: a `verdict` that turns non-string on a second
+// read must not slip a non-string past the type check into the stored fact.
+test("`verdict` and `where` are read once too — no validate-vs-store divergence", async () => {
+  const gate = new Gate({ audit: { path: null } });
+  await gate.init();
+  let vReads = 0;
+  await gate.annotate({
+    surface: true,
+    get verdict() { vReads++; return vReads === 1 ? "broke" : { evil: true }; },
+    where: "w",
+  });
+  const facts = gate.drainAnnotations();
+  assert.equal(vReads, 1, "verdict is read exactly once");
+  assert.equal(facts[0].verdict, "broke", "the validated string is what was stored");
+});
+
 // Security: `verdict` is caller-judge free text, exactly like `where`. The 0.7.0
 // redaction pass covered `where`/`meta` and MISSED it, so a judge that echoed a key
 // into its verdict wrote the raw secret into the shared audit file.

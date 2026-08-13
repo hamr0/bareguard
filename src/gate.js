@@ -93,16 +93,19 @@ export function routeAnnotation(surface, reversible, knob = "strict") {
  * the retired pre-E6 sketch, `{}`, or a typo. Without the rule all of those
  * normalize to a fact byte-identical to a legitimate `honored` one, i.e. "I could
  * not read what you sent" and "everything was fine" share a value (fail-open).
- * Reading `fact.surface` can itself throw (a getter, a Proxy trap, a revoked
- * Proxy), so every caller must run this inside the `annotate()` try/catch that
- * maps a throw to the `"unreadable"` defect.
+ * Takes `surface` as an ARGUMENT rather than re-reading it: the value validated
+ * here must be the identical value that gets stored, or a getter answering
+ * differently on a second read slips past the check (see normalizeAnnotation).
+ * Reading it can also throw (a getter, a Proxy trap, a revoked Proxy), so the
+ * read and this check both sit inside readAnnotation's try/catch.
  * @param {*} fact
+ * @param {*} surface  the already-read `fact.surface`
  * @returns {"not-an-object"|"array"|"missing-surface"|null}
  */
-function annotationDefect(fact) {
+function annotationDefect(fact, surface) {
   if (fact == null || typeof fact !== "object") return "not-an-object";
   if (Array.isArray(fact)) return "array";           // typeof [] === "object"
-  if (typeof fact.surface !== "boolean") return "missing-surface";
+  if (typeof surface !== "boolean") return "missing-surface";
   return null;
 }
 
@@ -115,11 +118,19 @@ function annotationDefect(fact) {
  * @param {*} fact
  * @returns {import("./types.js").Annotation}
  */
-function normalizeAnnotation(fact) {
+function normalizeAnnotation(fact, surface) {
+  // Each caller field is read into a local ONCE and only the local is used after.
+  // Re-reading `fact.x` to test it and again to store it is a TOCTOU seam: a getter
+  // that answers differently on the second call validates as one value and lands as
+  // another. `surface` is the dangerous one — `=== true` coerces silently, so the
+  // divergence is toward `false`/"honored"/invisible, i.e. the exact fail-open this
+  // rejection rule exists to close, reachable straight through the guard.
+  const verdict = fact.verdict;
+  const where   = fact.where;
   return {
-    surface: fact.surface === true,
-    verdict: typeof fact.verdict === "string" ? fact.verdict.slice(0, 80) : null,
-    where:   typeof fact.where   === "string" ? fact.where.slice(0, 300)   : null,
+    surface: surface === true,
+    verdict: typeof verdict === "string" ? verdict.slice(0, 80)  : null,
+    where:   typeof where   === "string" ? where.slice(0, 300)   : null,
     meta:    boundMeta(fact.meta),
   };
 }
@@ -138,8 +149,10 @@ function normalizeAnnotation(fact) {
  */
 function readAnnotation(fact) {
   try {
-    const defect = annotationDefect(fact);
-    return defect ? { defect, norm: null } : { defect: null, norm: normalizeAnnotation(fact) };
+    // `surface` is read here, ONCE, and the same value is both validated and stored.
+    const surface = fact == null ? undefined : fact.surface;
+    const defect = annotationDefect(fact, surface);
+    return defect ? { defect, norm: null } : { defect: null, norm: normalizeAnnotation(fact, surface) };
   } catch {
     return { defect: "unreadable", norm: null };
   }
