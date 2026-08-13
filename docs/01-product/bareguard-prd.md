@@ -560,6 +560,8 @@ Children inherit via env var `BAREGUARD_AUDIT_PATH` set by the parent.
 | `halt` | dedicated grep target on halt | `dimension`, `spent`, `cap`, `rule`, `awaiting` |
 | `topup` | runner / humanChannel raised a cap | `dimension`, `oldCap`, `newCap` |
 | `terminate` | gate terminated (graceful) | `reason` |
+| `annotate` | (v0.7) every well-formed `gate.annotate()` fact (Part 2 §8.2) | `surface`, `verdict`, `where`, `meta` |
+| `annotate_malformed` | (Unreleased) a `gate.annotate()` call whose fact could not be read — no `surface` boolean, or the read itself threw (Part 2 §8.2.1). Nothing buffered; no decision changed | `reason` (`not-an-object` \| `array` \| `missing-surface` \| `unreadable`) |
 
 **Properties:**
 
@@ -1041,7 +1043,9 @@ done — locking before the bench run is the one scenario that risks an early 2.
 `Result.pricing` field (v0.9), **rule strings** (adopters and the seam contract test
 match on them — incl. `flags.<field>`, now live in litectx's write-gate seam,
 `bash.classify`, and `budget.unpriced` (v0.9)), the audit JSONL line format (incl. the
-`unpriced` phase, v0.9), the budget file format, and the
+`unpriced` phase, v0.9, and the `annotate_malformed` phase, Unreleased), the
+`gate.annotate` fact contract (`surface` must be an explicit boolean — Unreleased), the
+budget file format, and the
 `humanChannel` event/decision contract (incl. the `event.classification`/`event.tier`
 fields the classifier attaches).
 
@@ -1840,10 +1844,13 @@ surface would ever ship:**
    > `{kind, field, stated, returned, text}` with `kind ∈ violation|deviation`. **`kind`
    > was retired by E6e** (§9.2.6 — the axis measured unreliable, 6/9, every miss an
    > over-call) and the field is **`where`, never `text`**. The retired shape is kept
-   > visible because it was cited downstream as if current: `annotate()` normalizes
-   > strictly and **never throws**, so a sketch-shaped fact has every key dropped,
-   > `surface` defaults `false`, and the fact routes as `honored` — **fail-open and
-   > invisible** (pinned by `axis-b-annotate.test.js`).
+   > visible because it was cited downstream as if current. It carries no `surface`,
+   > so **as of the Unreleased malformed-rejection rule it is MALFORMED**: nothing is buffered and an `annotate_malformed`
+   > audit row records `reason: "missing-surface"`. (Before that rule it normalized
+   > into a fact with every key dropped and `surface` defaulting `false`, routing as
+   > `honored` — **fail-open and invisible**.) The CURRENT state is pinned by
+   > `axis-b-annotate.test.js`; the superseded fail-open is described here only,
+   > since its tests were replaced by the rejection tests that supersede them.
 4. **Routing** — facts go to the three §6.3 sinks: the human-ask annotation, agent
    feedback (in-band context), and the audit line.
 5. **The prohibition** — never blocks, never modifies, never decides (D7).
@@ -2319,6 +2326,27 @@ gate.annotate({
   **default `strict`**. Binary (the decisive verdict left no middle to split — §6.6). Governs
   the whole reversible-`broke` set. Pure noise control, never safety.
 - **Safe default / opt-in:** no `annotate()` call ⇒ no facts ⇒ no behavior change. B is additive.
+- **Malformed is rejected, not normalized (Unreleased).** `surface` must be an **explicit
+  boolean** — it is the only load-bearing and only non-optional field, so setting it is
+  what distinguishes a caller speaking the contract from one speaking a different dialect.
+  A non-object, an **array** (`typeof [] === "object"`), an object without a boolean
+  `surface` (the retired sketch, `{}`, a typo, a truthy `"false"`), or a fact that
+  **throws when read** (a getter / Proxy trap → `reason:"unreadable"`, rejected WHOLE
+  even if `surface` itself read fine) buffers **nothing** and emits a distinct
+  `annotate_malformed` audit row carrying `reason` — a **record, not a verdict**: it
+  changes no decision (same class as `unpriced` / `budget_warn`). A distinct *phase*
+  rather than a flag on `annotate`, because a flag would let a parser counting
+  `phase === "annotate"` miscount a rejection as a fact.
+  **The never-throws guarantee, stated precisely:** `annotate()` never throws because of
+  *the fact* — any shape, any hostile getter (every read of a caller-supplied object is
+  inside the guard, the shape check *and* the normalization). An audit **write** failure
+  (disk full, unwritable path) still propagates, deliberately — a silently-dropped audit
+  line is the worse failure, and every other phase behaves the same. Both halves are
+  pinned by test, so the guarantee cannot quietly widen back.
+  Rationale: without the rule every one of those normalized into a fact **byte-identical
+  to a legitimate `honored`** one, so "I could not read what you sent" and "everything was
+  fine" shared a value — the fail-open that let a downstream sketch-shaped call go
+  invisible (§6.5).
 
 ### 8.2.2 The routing function (ship this exactly — E6i-validated)
 

@@ -307,6 +307,8 @@ One JSONL file. Default path: `$XDG_STATE_HOME/bareguard/<root-run-id>.jsonl`. O
 | `halt` | dedicated grep target on halt | `dimension` (`costUsd`/`tokens`/`turns`), `spent`, `cap`, `rule`, `awaiting` |
 | `topup` | runner / humanChannel raised a cap | `dimension`, `oldCap`, `newCap` |
 | `terminate` | gate terminated (graceful) | `reason` |
+| `annotate` | every well-formed `gate.annotate()` fact | `surface`, `verdict`, `where`, `meta` |
+| `annotate_malformed` | a `gate.annotate()` fact that could not be read (see Axis B below). Nothing buffered; no decision changed | `reason` (`not-an-object` \| `array` \| `missing-surface` \| `unreadable`) |
 
 Every line carries: `ts`, `seq`, `run_id`, `parent_run_id`, `spawn_depth`. Use `parent_run_id` to reconstruct the family tree.
 
@@ -602,6 +604,23 @@ await gate.annotate({ surface: verdict !== "honored", verdict, where: "you said 
 await gate.check({ type: "book", needsReview: "yes" });          // the buffered fact rides this ask
 const facts = gate.drainAnnotations();                            // and/or feed back to the agent each turn
 ```
+
+**`surface` MUST be an explicit boolean.** It is the only load-bearing field, so it is
+what the contract is checked on. A fact without one is not normalized, it is REJECTED —
+nothing buffered, nothing drained, and an `annotate_malformed` audit row with the reason:
+
+```js
+gate.annotate([fact]);                       // reason "array"        — pass ONE object, never an array
+gate.annotate({ kind, field, stated, text }); // reason "missing-surface" — retired pre-E6 sketch shape
+gate.annotate({ verdict, where });            // reason "missing-surface" — `surface` forgotten
+gate.annotate(null);                          // reason "not-an-object"
+gate.annotate(hostileGetterObject);           // reason "unreadable"   — the read itself threw
+```
+
+Rejection changes no decision and never throws because of the fact you passed (an audit
+*write* failure — full disk, unwritable path — still propagates, like every other phase).
+Without this rule all of the above normalized into a fact **byte-identical to a legitimate
+`honored` one**, so an unreadable call and a clean result looked the same and routed as `pass`.
 
 Routing is `routeAnnotation(surface, reversible, knob)` (pure, exported): a `broke` fact on an irreversible action — or on a reversible one under `strict` — rides the ask; under `relaxed` a reversible `broke` goes to audit + agent-feedback only. The knob is pure noise control, never safety. **Why the judge is caller-side:** bareguard putting an LLM inside the floor would drop a fallible model into the decision path; keep the model out — bareguard only buffers, routes, and sinks the fact you computed.
 

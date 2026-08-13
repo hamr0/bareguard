@@ -110,7 +110,9 @@ export {};
  *   - `verdict` — clipped to 80 chars.
  *   - `where`   — clipped to 300 chars with NO marker. Keep it a ONE-LINE
  *                 address; it is not a place for bulk evidence.
- *   - `meta`    — 1000 BYTES serialized, ALL-OR-NOTHING: over the cap the whole
+ *   - `meta`    — carried as a DECOUPLED COPY (mutating your object after the call
+ *                 cannot move the bound or split the sinks), capped at
+ *                 1000 BYTES serialized, ALL-OR-NOTHING: over the cap the whole
  *                 object is REPLACED by `{_truncated: true, bytes}`, so bulky
  *                 evidence takes `field`/`stated`/`returned` down with it. A
  *                 `meta` that cannot be serialized at all (circular, BigInt)
@@ -128,13 +130,36 @@ export {};
  * still vanish from the audit row. It is this byte-level backstop — not the source
  * caps, which count characters — that actually preserves append atomicity.
  *
- * Unknown keys are dropped. A non-object fact is ignored — but note `typeof [] ===
- * "object"`, so an ARRAY is NOT ignored: it buffers a dead fact with `surface:false`
- * that routes as `honored`. Pass one fact object, never an array of them.
+ * Unknown keys are dropped.
+ *
+ * MALFORMED — `surface` must be an EXPLICIT boolean. A fact without one is not
+ * normalized, it is REJECTED: nothing is buffered, `drainAnnotations()` stays
+ * clean, and a distinct `annotate_malformed` audit row carries the reason. It
+ * never changes a decision — a record, not a verdict. The four doorways:
+ *   - `"not-an-object"` — `null`, a string, a number, a boolean.
+ *   - `"array"` — `typeof [] === "object"` catches nothing, so pass ONE fact
+ *                 object, never an array of them.
+ *   - `"missing-surface"` — `surface` absent or non-boolean: the retired pre-E6
+ *                 sketch `{kind, field, stated, returned, text}`, `{}`, a typo,
+ *                 or a truthy STRING like `"false"`.
+ *   - `"unreadable"` — reading the fact THREW (a getter, a Proxy trap, a revoked
+ *                 Proxy). Rejected WHOLE even if `surface` itself read fine:
+ *                 half-read is not "everything was fine".
+ * Before this rule the first three normalized into a fact byte-identical to a
+ * legitimate `honored` one — so "I could not read what you sent" and "everything
+ * was fine" shared a value and routed as `pass` — and the fourth threw straight
+ * into the agent loop.
+ *
+ * NEVER-THROWS, precisely: `annotate()` never throws because of THE FACT — any
+ * shape, any hostile getter. An audit WRITE failure (disk full, unwritable path)
+ * still propagates, by design: a silently-dropped audit line is a worse failure
+ * than a loud one, and every other phase this gate emits behaves the same way.
  *
  * @typedef {object} Annotation
- * @property {boolean} surface  true ⇒ the answer did NOT honor the request (show the human).
- * @property {string|null} [verdict]  decisive hint, e.g. `"honored"` | `"broke"` (carried text). ≤80 chars.
+ * @property {boolean} surface  REQUIRED explicit boolean; true ⇒ the answer did NOT
+ *   honor the request (show the human). Anything else ⇒ the whole fact is malformed.
+ * @property {string|null} [verdict]  decisive hint, e.g. `"honored"` | `"broke"` (carried
+ *   text). ≤80 chars. Redacted in the audit line like `where`/`meta`.
  * @property {string|null} [where]  human-readable one-line description of the mismatch. ≤300 chars, clipped silently.
  * @property {object|null} [meta]  optional structured detail (e.g. field/stated/returned). ≤1000 bytes serialized, else replaced wholesale by a truncation marker.
  */

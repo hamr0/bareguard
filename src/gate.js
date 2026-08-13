@@ -86,18 +86,90 @@ export function routeAnnotation(surface, reversible, knob = "strict") {
 }
 
 /**
+ * Why a fact cannot be read as an annotation — or `null` when it is well-formed.
+ * The rule is one line: `surface` must be an EXPLICIT boolean. It is the only
+ * load-bearing (and only non-optional) field, so a caller who sets it is speaking
+ * the contract and a caller who doesn't is speaking a different dialect — an array,
+ * the retired pre-E6 sketch, `{}`, or a typo. Without the rule all of those
+ * normalize to a fact byte-identical to a legitimate `honored` one, i.e. "I could
+ * not read what you sent" and "everything was fine" share a value (fail-open).
+ * Reading `fact.surface` can itself throw (a getter, a Proxy trap, a revoked
+ * Proxy), so every caller must run this inside the `annotate()` try/catch that
+ * maps a throw to the `"unreadable"` defect.
+ * @param {*} fact
+ * @returns {"not-an-object"|"array"|"missing-surface"|null}
+ */
+function annotationDefect(fact) {
+  if (fact == null || typeof fact !== "object") return "not-an-object";
+  if (Array.isArray(fact)) return "array";           // typeof [] === "object"
+  if (typeof fact.surface !== "boolean") return "missing-surface";
+  return null;
+}
+
+/**
+ * Normalize a well-formed fact, bounding each field at the source so an annotate
+ * audit line stays well under the audit's PIPE_BUF line cap (atomic shared-file
+ * appends): `where`/`meta` are reply-derived and otherwise unbounded. This also
+ * bounds what reaches the human/agent — `where` is a one-line summary by design.
+ * Every read here is caller-controlled and may throw; see {@link annotationDefect}.
+ * @param {*} fact
+ * @returns {import("./types.js").Annotation}
+ */
+function normalizeAnnotation(fact) {
+  return {
+    surface: fact.surface === true,
+    verdict: typeof fact.verdict === "string" ? fact.verdict.slice(0, 80) : null,
+    where:   typeof fact.where   === "string" ? fact.where.slice(0, 300)   : null,
+    meta:    boundMeta(fact.meta),
+  };
+}
+
+/**
+ * Read a caller-supplied annotation fact WITHOUT EVER THROWING — the single place
+ * every property of `fact` is touched. Both the shape check and the normalization
+ * live inside the guard, because a getter / Proxy trap can throw on any of them
+ * (`surface` during the check, `verdict`/`where`/`meta` during the normalize);
+ * guarding only the first is a half-fix that still breaks the agent loop. A throw
+ * becomes the `"unreadable"` defect and the fact is rejected WHOLE — half-read is
+ * not "everything was fine", the same conflation the rejection rule exists to kill.
+ * @param {*} fact
+ * @returns {{defect: "not-an-object"|"array"|"missing-surface"|"unreadable", norm: null}
+ *   | {defect: null, norm: import("./types.js").Annotation}}
+ */
+function readAnnotation(fact) {
+  try {
+    const defect = annotationDefect(fact);
+    return defect ? { defect, norm: null } : { defect: null, norm: normalizeAnnotation(fact) };
+  } catch {
+    return { defect: "unreadable", norm: null };
+  }
+}
+
+/**
  * Bound an annotation `meta` object so an annotate audit line can't exceed the
  * audit's atomic-append cap. Non-objects → null; oversized / unserializable →
  * a small marker that replaces it everywhere downstream (buffer / event / drain).
- * The caller still holds their own original object reference.
+ * Under the cap the fact carries a DECOUPLED COPY, not the caller's object — the
+ * caller keeps their original and can mutate it freely without moving the bound.
  * @param {*} meta
  * @returns {object|null}
  */
 function boundMeta(meta) {
   if (meta == null || typeof meta !== "object") return null;
   try {
-    const bytes = Buffer.byteLength(JSON.stringify(meta), "utf8");
-    return bytes > 1000 ? { _truncated: true, bytes } : meta;
+    const json = JSON.stringify(meta);
+    const bytes = Buffer.byteLength(json, "utf8");
+    if (bytes > 1000) return { _truncated: true, bytes };
+    // DECOUPLE from the caller's object. Returning `meta` itself made the cap
+    // undoable: a judge that kept appending evidence to the object it had already
+    // handed over grew the drained/event fact past 1000 bytes AFTER the bound ran,
+    // while the audit row (serialized at emit time) kept the small version — so the
+    // two sinks silently disagreed. A round-trip through the JSON we already
+    // computed costs nothing extra and makes the bound a fact, not a request.
+    const copy = JSON.parse(json);
+    // A `meta` whose toJSON yields a scalar (e.g. a bare Date) cannot be carried
+    // structurally at all; that is the existing total-loss marker, not a new one.
+    return copy !== null && typeof copy === "object" ? copy : { _unserializable: true };
   } catch {
     return { _unserializable: true };
   }
@@ -592,24 +664,33 @@ export class Gate {
    * ride the next human ask `check()` raises (sink 3, §6.6 routing), and exposes
    * it for agent feedback via {@link Gate#drainAnnotations} (sink 2). Additive and
    * opt-in: with no `annotate()` call the decision path is byte-identical.
-   * @param {import("./types.js").Annotation} fact  caller-computed fact; only
-   *   `surface` is load-bearing (e.g. set it to `verdict !== "honored"`). Junk
-   *   (non-object) is ignored — annotate can never throw into the agent loop.
+   * @param {import("./types.js").Annotation} fact  caller-computed fact; `surface`
+   *   MUST be an explicit boolean (e.g. `verdict !== "honored"`). Anything else —
+   *   a non-object, an array, a fact missing `surface`, or a fact that THROWS when
+   *   read (a getter / Proxy trap) — is MALFORMED: nothing is buffered and a
+   *   distinct `annotate_malformed` audit row records the reason. Never changes a
+   *   decision. Never throws because of the FACT — any shape, any hostile getter.
+   *   An audit WRITE failure (disk full, unwritable path) still propagates, by
+   *   design: a silently-dropped audit line is a worse failure than a loud one,
+   *   and that is true of every other phase this gate emits.
    * @returns {Promise<void>}
    */
   async annotate(fact) {
     if (!this._initialized) await this.init();
-    if (fact == null || typeof fact !== "object") return; // fail-safe: ignore junk
-    // Bound each field at the source so an annotate audit line stays well under
-    // the audit's PIPE_BUF line cap (atomic shared-file appends): `where`/`meta`
-    // are reply-derived and otherwise unbounded. This also bounds what reaches
-    // the human/agent — `where` is a one-line summary by design.
-    const norm = {
-      surface: fact.surface === true,
-      verdict: typeof fact.verdict === "string" ? fact.verdict.slice(0, 80) : null,
-      where:   typeof fact.where   === "string" ? fact.where.slice(0, 300)   : null,
-      meta:    boundMeta(fact.meta),
-    };
+    // Malformed is LOUD but inert: a record, not a verdict (same class as
+    // `unpriced` / `budget_warn`). Its own phase, not a flag on `annotate`, so a
+    // parser counting `phase === "annotate"` cannot miscount a rejection as a fact.
+    //
+    // EVERY read of `fact` is caller-controlled and can throw (a getter, a Proxy
+    // trap), so all of them are inside readAnnotation's guard — that is what makes
+    // "never throws because of the fact you passed" true. The audit WRITE below is
+    // deliberately NOT guarded: a silently-dropped audit line is the worse failure.
+    const read = readAnnotation(fact);
+    if (read.defect !== null) {
+      await this.audit.emit({ phase: "annotate_malformed", action: null, reason: read.defect });
+      return;
+    }
+    const norm = read.norm;
     this._annotations.push(norm);
     // Sink 1: the fact is recorded even if no ask ever rides it.
     await this.audit.emit({

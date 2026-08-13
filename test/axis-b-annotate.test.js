@@ -282,45 +282,180 @@ test("the meta cap boundary: at 1000 bytes it survives, one byte over loses ever
   assert.equal(over.meta._truncated, true, "one byte over is replaced wholesale");
 });
 
-// The fail-open that BA-20's criterion 7 exists to catch, pinned from bareguard's side:
-// annotate() normalizes strictly and NEVER throws, so a fact built to the retired
-// pre-E6 sketch shape has every key dropped and `surface` defaults false — the fact
-// then routes as `honored` and no human ever sees it.
-test("a sketch-shaped fact fails OPEN: unknown keys dropped, surface defaults false", async () => {
+// ── The malformed contract (§6.7) ───────────────────────────────────────────
+// A fact that omits an explicit boolean `surface` used to normalize into a fact
+// BYTE-IDENTICAL to a legitimate honored one: "I couldn't read what you sent" and
+// "everything was fine" were the same value, and both routed as `honored`. Every
+// doorway into that dead fact is now rejected, buffered NOWHERE, and audited as a
+// DISTINCT phase (`annotate_malformed`) so a parser counting `phase === "annotate"`
+// cannot miscount a rejection as a fact.
+
+// Doorway 1 — the retired pre-E6 sketch shape (what BA-20 cited as current).
+test("a sketch-shaped fact is MALFORMED: nothing buffered, loud audit row", async () => {
   const gate = new Gate({ audit: { path: null } });
   await gate.init();
   await gate.annotate({ kind: "violation", field: "price", stated: 300, returned: 400, text: "€400 exceeds €300" });
-  const fact = gate.drainAnnotations()[0];
-  assert.equal(fact.surface, false, "surface defaults false — this is the fail-open");
-  assert.equal(fact.verdict, null, "`kind` is not a field and carries nothing");
-  assert.equal(fact.where, null, "`text` is not the field name; `where` is");
-  assert.equal(fact.meta, null, "top-level field/stated/returned do not reach meta");
-  assert.equal(routeAnnotation(fact.surface, true, "strict"), "pass", "routes as honored — invisible");
+  assert.equal(gate.drainAnnotations().length, 0, "no dead fact reaches the authoritative drain");
+  const lines = (await gate.audit.readAll()).filter((l) => l.phase === "annotate_malformed");
+  assert.equal(lines.length, 1);
+  assert.equal(lines[0].reason, "missing-surface");
+  assert.equal((await gate.audit.readAll()).filter((l) => l.phase === "annotate").length, 0,
+    "a malformed call emits NO `annotate` row — the phases are distinct");
 });
 
-test("a non-object fact is ignored entirely and annotate never throws", async () => {
+// Doorway 2 — the shipped shape with `surface` simply forgotten.
+test("a fact that forgets `surface` is MALFORMED, not silently honored", async () => {
+  const gate = new Gate({ audit: { path: null } });
+  await gate.init();
+  await gate.annotate({ verdict: "broke", where: "you said under €300; the booking is €400" });
+  assert.equal(gate.drainAnnotations().length, 0);
+  assert.equal((await gate.audit.readAll()).filter((l) => l.phase === "annotate_malformed")[0].reason, "missing-surface");
+});
+
+// Doorway 3 — a non-boolean `surface`. Truthiness is NOT the contract: only an
+// explicit boolean is, so `"false"` (a truthy string) can never mean surface.
+test("a non-boolean `surface` is MALFORMED — truthy strings are not the contract", async () => {
+  const gate = new Gate({ audit: { path: null } });
+  await gate.init();
+  for (const s of ["true", "false", 1, 0, null]) {
+    await gate.annotate({ surface: s, where: "x" });
+  }
+  assert.equal(gate.drainAnnotations().length, 0, "nothing buffered from any of them");
+  assert.equal((await gate.audit.readAll()).filter((l) => l.phase === "annotate_malformed").length, 5);
+});
+
+// Doorway 4 — junk. Still ignored for buffering, but no longer SILENT.
+test("a non-object fact is MALFORMED and annotate never throws", async () => {
   const gate = new Gate({ audit: { path: null } });
   await gate.init();
   for (const junk of [null, undefined, "broke", 42, true]) {
     await gate.annotate(junk); // must not throw into the agent loop
   }
   assert.equal(gate.drainAnnotations().length, 0, "nothing buffered from junk");
+  const lines = (await gate.audit.readAll()).filter((l) => l.phase === "annotate_malformed");
+  assert.equal(lines.length, 5);
+  assert.ok(lines.every((l) => l.reason === "not-an-object"));
 });
 
-// KNOWN FAIL-OPEN, pinned as current behavior (not endorsed): `typeof [] === "object"`,
-// so the non-object guard does NOT catch an array. A judge returning `[fact]` instead of
-// `fact` — an easy shape to get wrong — buffers a DEAD fact that routes as `honored`.
-// Hardening this is a gate-behavior change and is the operator's call; until then the
-// typedef says "pass one fact object, never an array" and this test says why.
-test("an ARRAY is NOT ignored — it buffers a dead fact and fails open", async () => {
+// Doorway 5 — the array. `typeof [] === "object"`, so the non-object guard never
+// caught it; a judge returning `[fact]` instead of `fact` used to buffer a dead
+// fact that routed as `honored`. Its own reason, because the fix is different
+// (unwrap the array, not add a field).
+test("an ARRAY is MALFORMED with its own reason", async () => {
   const gate = new Gate({ audit: { path: null } });
   await gate.init();
   await gate.annotate([{ surface: true, verdict: "broke", where: "a real violation" }]);
+  assert.equal(gate.drainAnnotations().length, 0, "the wrapped fact is NOT buffered");
+  assert.equal((await gate.audit.readAll()).filter((l) => l.phase === "annotate_malformed")[0].reason, "array");
+});
+
+// Doorway 6 — a fact whose SHAPE is fine but that EXPLODES WHEN READ. `surface`,
+// `verdict`, `where` and `meta` are all caller-controlled property reads, so any of
+// them can be a getter or Proxy trap that throws. This threw out of `annotate()` and
+// into the agent loop before the read was guarded — the one contract Axis B leans on
+// ("a detector never breaks the loop it observes").
+test("a fact that THROWS when read is MALFORMED, not an exception", async () => {
+  const gate = new Gate({ audit: { path: null } });
+  await gate.init();
+  const revoked = Proxy.revocable({ surface: true }, {});
+  revoked.revoke();
+  const hostile = [
+    { get surface() { throw new Error("boom"); } },                    // the guard's own read
+    { surface: true, get verdict() { throw new Error("boom"); } },     // after the guard passes
+    { surface: true, get where()   { throw new Error("boom"); } },
+    { surface: true, get meta()    { throw new Error("boom"); } },
+    revoked.proxy,                                                      // even Array.isArray throws
+  ];
+  for (const fact of hostile) {
+    await gate.annotate(fact); // must not throw into the agent loop
+  }
+  assert.equal(gate.drainAnnotations().length, 0, "an unreadable fact buffers nothing");
+  const lines = (await gate.audit.readAll()).filter((l) => l.phase === "annotate_malformed");
+  assert.equal(lines.length, 5);
+  assert.ok(lines.every((l) => l.reason === "unreadable"), "all five report `unreadable`");
+});
+
+// The rejection is WHOLE-FACT. A legitimate `surface: true` does NOT survive a
+// hostile `where` — "I could only read half of this" is not "everything was fine",
+// which is the exact conflation this rule exists to kill. It is still not invisible:
+// the malformed row is the loud signal.
+test("an unreadable fact is rejected whole, even when `surface` read fine", async () => {
+  const gate = new Gate({ audit: { path: null } });
+  await gate.init();
+  await gate.annotate({ surface: true, verdict: "broke", get where() { throw new Error("boom"); } });
+  assert.equal(gate.drainAnnotations().length, 0, "no half-fact is buffered");
+  assert.equal((await gate.audit.readAll()).filter((l) => l.phase === "annotate").length, 0);
+});
+
+// The narrowed half of the contract, pinned so it cannot quietly widen again: the
+// "never throws" guarantee covers THE FACT, not the audit WRITE. A failed append
+// must stay loud — silently losing the durable record is the worse failure.
+test("an audit WRITE failure still propagates (the guarantee covers the fact, not the disk)", async () => {
+  const gate = new Gate({ audit: { path: null } });
+  await gate.init();
+  gate.audit.emit = async () => { throw new Error("ENOSPC"); };
+  await assert.rejects(
+    () => gate.annotate({ surface: true, verdict: "broke", where: "a real violation" }),
+    /ENOSPC/, "a well-formed fact surfaces the write failure");
+  await assert.rejects(
+    () => gate.annotate({ kind: "violation" }),
+    /ENOSPC/, "and so does the malformed row's own write");
+});
+
+// Security: `verdict` is caller-judge free text, exactly like `where`. The 0.7.0
+// redaction pass covered `where`/`meta` and MISSED it, so a judge that echoed a key
+// into its verdict wrote the raw secret into the shared audit file.
+test("a secret in `verdict` is redacted in the audit line, like `where`", async () => {
+  const gate = new Gate({ audit: { path: null }, secrets: { patterns: [/sk-[A-Za-z0-9]{10,}/g] } });
+  await gate.init();
+  await gate.annotate({ surface: true, verdict: "broke: sk-ABCDEFGHIJKLMNOP", where: "leaked sk-ABCDEFGHIJKLMNOP" });
+  const row = (await gate.audit.readAll()).filter((l) => l.phase === "annotate")[0];
+  assert.ok(!row.verdict.includes("sk-ABCDEFGHIJKLMNOP"), "verdict must not persist the raw key");
+  assert.ok(row.verdict.includes("REDACTED"), "verdict carries the redaction marker");
+  assert.ok(!row.where.includes("sk-ABCDEFGHIJKLMNOP"), "where stays redacted too (no regression)");
+});
+
+// The `meta` bound must be a FACT, not a request. `boundMeta` used to hand the
+// caller's own object straight back, so a judge that kept appending evidence after
+// annotate() grew the drained fact past the documented 1000-byte cap — and the audit
+// row, serialized at emit time, kept the small version. The two sinks disagreed.
+test("the `meta` bound survives the caller mutating their object afterwards", async () => {
+  const gate = new Gate({ audit: { path: null } });
+  await gate.init();
+  const meta = { field: "price", stated: 300, returned: 400 };
+  await gate.annotate({ surface: true, verdict: "broke", meta });
+
+  meta.evidence = "x".repeat(5000);          // the caller keeps writing after handing it over
+  const drained = gate.drainAnnotations()[0];
+  assert.notEqual(drained.meta, meta, "the drained meta is not the caller's object");
+  assert.equal(drained.meta.evidence, undefined, "the post-hoc write does not reach the fact");
+  assert.ok(JSON.stringify(drained.meta).length <= 1000, "the cap still holds after the mutation");
+  assert.deepEqual(drained.meta, { field: "price", stated: 300, returned: 400 }, "content is carried intact");
+
+  const row = (await gate.audit.readAll()).filter((l) => l.phase === "annotate")[0];
+  assert.deepEqual(row.meta, drained.meta, "audit sink and drain sink agree");
+});
+
+// NEGATIVE CONTROL — the rule must reject only the malformed. An explicit
+// `surface: false` is a legitimate honored fact and still buffers normally.
+test("an explicit `surface: false` is well-formed and still buffers", async () => {
+  const gate = new Gate({ audit: { path: null } });
+  await gate.init();
+  await gate.annotate({ surface: false, verdict: "honored", where: "all good" });
   const facts = gate.drainAnnotations();
-  assert.equal(facts.length, 1, "the array passed the non-object guard");
-  assert.equal(facts[0].surface, false, "and the real fact inside it was dropped — fail-open");
-  assert.equal(facts[0].where, null);
-  assert.equal(routeAnnotation(facts[0].surface, true, "strict"), "pass", "routes as honored");
+  assert.equal(facts.length, 1, "honored facts are NOT collateral damage of the rule");
+  assert.equal(facts[0].surface, false);
+  assert.equal((await gate.audit.readAll()).filter((l) => l.phase === "annotate_malformed").length, 0);
+  assert.equal((await gate.audit.readAll()).filter((l) => l.phase === "annotate").length, 1);
+});
+
+// A rejection is a RECORD, not a verdict — same class as `unpriced`/`budget_warn`.
+test("a malformed annotate changes no decision", async () => {
+  const gate = new Gate({ audit: { path: null }, content: PURE });
+  await gate.init();
+  await gate.annotate({ kind: "violation", text: "€400 exceeds €300" });
+  const d = await gate.check({ type: "llm", prompt: "hi" });
+  assert.equal(d.outcome, "allow", "rejecting a fact cannot change what the gate allows");
 });
 
 // honored facts (surface=false) never reach the human, even on an ask.
