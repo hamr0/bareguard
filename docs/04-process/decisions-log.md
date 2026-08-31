@@ -6,9 +6,9 @@ Resolved during design; should not be re-litigated unless explicitly asked.
 
 - **HOLD at 0.5.x; 1.0 is gated, not scheduled.** Cut 1.0 only after (1) the first
   real consumer exercises the seam (litectx swap-point + integration bench, no API
-  regret), (2) the last-call breaking-change review resolves (empty-allowlist
-  fail-open; `strict` default for money caps; ratify `allows()`/no-channel/topup
-  semantics), (3) the §21 bareagent-migration box is done or amended. Full gate +
+  regret), (2) the last-call breaking-change review resolves (~~empty-allowlist
+  fail-open~~ — DECIDED, flipped to fail-closed, UNRELEASED; `strict` default for
+  money caps; ratify `allows()`/no-channel/topup semantics), (3) the §21 bareagent-migration box is done or amended. Full gate +
   the SemVer surface list: PRD §19 "bareguard 1.0". Walk-away doctrine after 1.0
   reaffirmed.
 - **All pending/future work lives in docs, not chat.** Index: PRD §19 (1.0 gate +
