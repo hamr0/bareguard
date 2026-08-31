@@ -205,12 +205,53 @@ function boundMeta(meta) {
  * terminal allow/deny decisions. See README.md and bareguard.context.md for
  * wiring recipes.
  */
+
+/**
+ * Config keys that MUST be arrays when present. A non-array in any of them was
+ * never validated, and produced four different silent wrongs: a replaced
+ * safe-default deny floor (fail OPEN), a string iterated per-character so one
+ * entry matched everything (deny ALL), a throw out of the gate mid-action, or a
+ * runtime deny. Validate once, loudly, where the operator can see it — matching
+ * `budget`, which already throws on an invalid resource cap or softRatio.
+ * @type {ReadonlyArray<[string, string]>}
+ */
+const ARRAY_SHAPED_CONFIG = Object.freeze([
+  ["tools", "allowlist"], ["tools", "denylist"],
+  ["content", "denyPatterns"], ["content", "askPatterns"],
+  ["fs", "deny"], ["fs", "readScope"], ["fs", "writeScope"],
+  ["net", "allowDomains"],
+  ["bash", "allow"], ["bash", "denyPatterns"],
+  ["secrets", "keys"], ["secrets", "patterns"], ["secrets", "envVars"],
+]);
+
+/**
+ * Throw if any array-shaped config key is present but not an array.
+ * `undefined`/`null` mean "not configured" and are left alone; `[]` is a legal
+ * array (an empty scope, or the documented pure-allow opt-out).
+ * @param {object} config gate config
+ * @returns {void}
+ */
+function assertArrayShapedConfig(config) {
+  for (const [section, key] of ARRAY_SHAPED_CONFIG) {
+    const s = config?.[section];
+    if (s == null || typeof s !== "object") continue;
+    const v = s[key];
+    if (v === undefined || v === null) continue;
+    if (!Array.isArray(v)) {
+      throw new Error(
+        `invalid bareguard config: ${section}.${key} must be an array, got ${typeof v}`,
+      );
+    }
+  }
+}
+
 export class Gate {
   /**
    * @param {import("./types.js").GateConfig & { _clock?: () => number }} [config]
    *   Gate configuration. `_clock` is a millisecond clock override for tests.
    */
   constructor(config = {}) {
+    assertArrayShapedConfig(config);
     this.cfg = config;
     this.runId = config.runId ?? randomUUID();
     this.parentRunId = config.parentRunId ?? process.env.BAREGUARD_PARENT_RUN_ID ?? null;

@@ -182,14 +182,23 @@ test("tools.allowlist: a present-but-unusable value is denied, never waved throu
   // default ALLOW. A truthy non-array threw `globs.some is not a function`
   // instead of denying. Same shape as fs.invalidPath / net.invalidUrl /
   // bash.invalidCmd: present-but-wrong-type is denied, not waved through.
+  // The constructor now rejects a non-array outright (see
+  // test/config-shape-validation.test.js), so the runtime arm is reached the
+  // one way it still can be: `Gate` holds `this.cfg = config` BY REFERENCE, so
+  // a caller can swap the value out after construction. That is why this arm
+  // stays — it is defence-in-depth, not dead code.
   for (const bad of ["", 0, false, NaN, "search", {}, new Set(["wireMoney"]), 42]) {
-    const d = await new Gate({ tools: { allowlist: bad } }).check({ type: "wireMoney" });
+    const cfg = { tools: { allowlist: ["nothing"] } };
+    const gate = new Gate(cfg);
+    cfg.tools.allowlist = bad;
+    const d = await gate.check({ type: "wireMoney" });
     assert.equal(d.outcome, "deny",
       `allowlist: ${JSON.stringify(bad) ?? String(bad)} must deny, got ${d.outcome} (rule ${d.rule})`);
     assert.equal(d.rule, "tools.allowlist.invalid");
   }
 
-  // absent and null remain "scope not configured" — the ONE loose reading kept
+  // absent and null remain "scope not configured" — the ONE loose reading kept,
+  // and both still construct (the constructor skips them, it does not reject)
   for (const absent of [undefined, null]) {
     const d = await new Gate({ tools: { allowlist: absent } }).check({ type: "wireMoney" });
     assert.equal(d.outcome, "allow", `allowlist: ${absent} must stay unconfigured`);
