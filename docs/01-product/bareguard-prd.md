@@ -1035,8 +1035,11 @@ done — locking before the bench run is the one scenario that risks an early 2.
 **Last-call breaking-change review (open items, decide before lock):**
 - ~~**Empty `tools.allowlist` fails OPEN**~~ — **DECIDED: flip to fail-closed
   (breaking; built on `fix/empty-allowlist-fails-closed`, UNRELEASED).** `[]` is now a
-  configured scope of nothing → step 5 runs → `tools.allowlist.exclusive` deny. Only an
-  ABSENT key means not-configured. Rationale: the tightest expressible scope produced
+  configured scope of nothing → step 5 runs → `tools.allowlist.exclusive` deny. Only
+  `undefined`/`null` means not-configured; any other non-array value denies via
+  `tools.allowlist.invalid` (a follow-up on `fix/audit-reason-rebound`, also
+  UNRELEASED — the original `!cfg.allowlist` guard still let `""`/`0`/`false`/`NaN`
+  read as absent and fail OPEN, and let a truthy non-array throw). Rationale: the tightest expressible scope produced
   the loosest outcome, silently, and every sibling scope primitive (`net.allowDomains`,
   `fs.readScope`/`writeScope`, `bash.allow`) already denied on `[]` — `tools` was the
   sole outlier (measured). Throw-on-construct was rejected: a deny is in-band agent

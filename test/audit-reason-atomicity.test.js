@@ -68,3 +68,26 @@ test("audit: a short reason is preserved verbatim — the bound must not over-tr
   assert.equal(entry.reason, "wireMoney not in allowlist");
   assert.ok(!entry._truncated, "a small line must not be flagged as truncated");
 });
+
+test("audit: the humanChannel-threw reason path is bounded too", async (t) => {
+  // `reason` is re-bounded by FIELD NAME, so gate.js's own reason producers are
+  // covered generically — but the fix's genericity is a claim, not a test, so
+  // exercise the one gate.js path that interpolates an unbounded caller value
+  // (`humanChannel threw: ${err.message}`) end to end.
+  const dir = await makeTmpDir(); t.after(async () => cleanup(dir));
+  const auditPath = path.join(dir, "audit.jsonl");
+  const gate = new Gate({
+    content: { askPatterns: [/./] },
+    secrets: { patterns: [/a/, /E/, /D/] },
+    humanChannel: async () => { throw new Error("a".repeat(3000)); },
+    audit: { path: auditPath },
+  });
+  await gate.init();
+  const d = await gate.check({ type: "bash", cmd: "ls" });
+  assert.equal(d.outcome, "deny", "a throwing humanChannel must fail closed");
+
+  for (const raw of fs.readFileSync(auditPath, "utf8").trim().split("\n")) {
+    assert.ok(Buffer.byteLength(raw, "utf8") <= MAX_LINE_BYTES,
+      `audit line is ${Buffer.byteLength(raw, "utf8")} bytes, over the ${MAX_LINE_BYTES} cap`);
+  }
+});
