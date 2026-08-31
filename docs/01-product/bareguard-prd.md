@@ -298,7 +298,8 @@ THE 6 STEPS (first match wins; 2b/4b are co-located arms of step 13 `flags`):
   4. content.askPatterns            → askHuman (action; resolved via humanChannel)
   4b. flags ask                     → askHuman (action; action[field] value maps to "ask")
   5. tools.allowlist enforcement    → set+match: allow; set+miss: deny (rule: tools.allowlist.exclusive)
-     (set to [] = scope of nothing = deny all; only an ABSENT key skips this step)
+     (set to [] = scope of nothing = deny all; a non-array denies via tools.allowlist.invalid;
+      only an ABSENT/null key skips this step)
   6. default                        → allow (rule: "default")
 ```
 
@@ -317,10 +318,14 @@ v0.4 of this PRD made allowlist short-circuit ask ("explicit listing =
 explicit consent"). v0.6 reverses that. Allowlist now means **only "which
 tools can be invoked at all":**
 
-- **Unset (key absent):** no effect; flow continues to step 6 (default allow).
+- **Unset (`undefined`/`null`):** no effect; flow continues to step 6 (default allow).
 - **Empty (`[]`):** a configured scope of *nothing* — every action is denied
   (rule: `tools.allowlist.exclusive`). `[]` is NOT "unset". (Changed — breaking,
   UNRELEASED; previously `[]` was folded into unset and fell through to allow.)
+- **Present but not an array** (`""`, `0`, `false`, `NaN`, a string, an object):
+  denied (rule: `tools.allowlist.invalid`), same as `fs.invalidPath` /
+  `net.invalidUrl` / `bash.invalidCmd`. Previously the falsy ones read as unset
+  and fell through to allow, and the truthy ones threw out of the gate.
 - **Set with one or more entries:**
   - tool name matches → `allow` (rule: `tools.allowlist`).
   - tool name does not match → `deny` (rule: `tools.allowlist.exclusive`).

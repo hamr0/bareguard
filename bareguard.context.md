@@ -230,7 +230,8 @@ THE 6 STEPS (first match wins; all action severity unless noted)
   4. content.askPatterns            → askHuman  (fires even on allowlisted tools)
   4b. flags ask                     → askHuman  (action[field] value maps to "ask", e.g. provenance:"web")
   5. tools.allowlist enforcement    → set+match: allow; set+miss: deny (rule: tools.allowlist.exclusive)
-     (set to [] = scope of nothing = deny all; only an ABSENT key skips this step)
+     (set to [] = scope of nothing = deny all; a non-array denies via tools.allowlist.invalid;
+      only an ABSENT/null key skips this step)
   6. default                        → allow
 ```
 
@@ -250,6 +251,7 @@ Universal denies first (1-2b-3), universal asks second (4-4b), capability scope 
 | `tools.allowlist.exclusive` (not in scope) | action | return error to LLM, continue loop |
 | `tools.denyArgPatterns` | action | return error to LLM, continue loop |
 | `fs.invalidPath`, `net.invalidUrl`, `bash.invalidCmd` (path/url/cmd present but not a string) | action | return error to LLM, continue loop |
+| `tools.allowlist.invalid` (allowlist present but not an array) | action | operator config bug — fix the config; the gate denies until then |
 | `limits.maxChildren`, `limits.maxDepth` | action | return error to LLM, continue loop |
 | `content.askPatterns` (after humanChannel resolves) | action | terminal allow or deny |
 | **`budget.maxCostUsd`, `budget.maxTokens`** | **halt** | **escalate to humanChannel; never bubble to LLM** |
