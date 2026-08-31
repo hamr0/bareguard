@@ -109,9 +109,13 @@ export class Audit {
     }
     let serialized = JSON.stringify(line) + "\n";
     if (Buffer.byteLength(serialized, "utf8") > MAX_LINE_BYTES) {
-      // Truncate all large action fields and result strings to keep the line
-      // atomic on POSIX FS (PIPE_BUF). Tag root with _truncated:true so
+      // Re-bound every field that can carry caller-controlled or redaction-
+      // expanded text — action, result, where, verdict, reason, meta — to keep
+      // the line atomic on POSIX FS (PIPE_BUF). Tag root with _truncated:true so
       // downstream consumers can filter without inspecting string contents.
+      // INVARIANT: any field added to the redactor must ALSO be re-bounded here;
+      // omitting one silently reopens the atomicity hole (0.13.0 `verdict`,
+      // and `reason`, were each found that way).
       const truncated = { ...line, _truncated: true };
       if (truncated.action) {
         const newAction = { ...truncated.action };
@@ -148,6 +152,16 @@ export class Audit {
       // compounds (measured: an 80-char verdict reached 63 KB across 5 patterns).
       if (typeof truncated.verdict === "string" && Buffer.byteLength(truncated.verdict, "utf8") > 200) {
         truncated.verdict = truncated.verdict.slice(0, 200) + "[TRUNCATED]";
+      }
+      // `reason` is redacted too, and every rule that echoes caller data into it
+      // (tools `action.type`, fs `path`, net `url`/`host`, flags field values,
+      // humanChannel `err.message`) is unbounded at the source — there is no
+      // per-field cap upstream the way `where`/`meta` have one. So it is both
+      // unbounded AND expanded by redaction: measured 4510 bytes at DEFAULT
+      // config from a long `action.type` alone, and 60,408 bytes once three
+      // broad patterns compound over each other's markers.
+      if (typeof truncated.reason === "string" && Buffer.byteLength(truncated.reason, "utf8") > 200) {
+        truncated.reason = truncated.reason.slice(0, 200) + "[TRUNCATED]";
       }
       if (truncated.meta != null && typeof truncated.meta === "object") {
         const bytes = Buffer.byteLength(JSON.stringify(truncated.meta), "utf8");
