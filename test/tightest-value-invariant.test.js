@@ -10,6 +10,9 @@
 //   ALLOW-scopes  `[]` means "permit nothing"  -> must DENY
 //   DENY-lists    `[]` means "forbid nothing"  -> must ALLOW (same as absent, correctly)
 //   numeric caps  `0`  means "spend nothing"   -> must halt, never "no cap"
+//   additive     `[]` extends by nothing; a shipped default CANNOT be disabled by
+//                 an empty collection (`secrets.keys`, `classify.extra*`). Opting
+//                 out is a separate explicit flag (`secrets.redactKeys: false`).
 //   `content`     `[]` is LOOSER than absent, DELIBERATELY (PRD §11: the
 //                 documented pure-allow opt-out from the shipped safe defaults).
 //                 It is the one key where `[]` and absent must NOT agree, so it
@@ -145,4 +148,28 @@ test("content: `[]` is the documented opt-out and is LOOSER than absent — the 
   const pureAllow = await new Gate({ content: { denyPatterns: [], askPatterns: [] } }).check(action);
   assert.equal(pureAllow.outcome, "allow");
   assert.equal(pureAllow.rule, "default");
+});
+
+test("additive-extend defaults: `[]` extends by nothing and cannot disable a shipped default", async () => {
+  const { makeRedactor } = await import("../src/primitives/secrets.js");
+  const { classifyCommand } = await import("../src/primitives/classify.js");
+
+  // secrets: effective keys = DEFAULT_SECRET_KEYS + cfg.keys. `[]` adds nothing;
+  // only the explicit `redactKeys: false` opts out. A silently-disabled redactor
+  // would put live credentials in the audit log, so this is the worst possible
+  // place for the content-style replace semantics.
+  const withSecret = { apiKey: "sk-ABCDEFGHIJKLMNOP" };
+  for (const cfg of [undefined, { keys: [] }, { patterns: [] }, { envVars: [] }]) {
+    const redact = makeRedactor(cfg);
+    assert.ok(redact, `secrets ${JSON.stringify(cfg)}: redactor must still be built`);
+    assert.equal(redact(withSecret).apiKey, "[REDACTED:key=apiKey]",
+      `secrets ${JSON.stringify(cfg)}: [] must not disable the default-on backstop`);
+  }
+  // the ONE documented opt-out is explicit, not an empty collection
+  assert.equal(makeRedactor({ redactKeys: false }), null);
+
+  // classify: extra* are spread onto the shipped tiers, never substituted for them
+  assert.equal(classifyCommand("rm -rf /", {}), "super_destructive");
+  assert.equal(classifyCommand("rm -rf /", { extraDestructive: [], extraSuperDestructive: [] }),
+    "super_destructive", "extra* [] must extend by nothing, not replace the tiers");
 });
