@@ -97,3 +97,41 @@ test("config: the runtime deny still guards post-construction mutation", async (
   assert.equal(d.outcome, "deny", "a mutated-to-non-array allowlist must still deny");
   assert.equal(d.rule, "tools.allowlist.invalid");
 });
+
+test("config: tools.denyArgPatterns is a MAP of arrays — its nested values are validated too", () => {
+  // The flat [section, key] model missed this: `denyArgPatterns` is the one
+  // config surface that is a map of arrays rather than an array. Its top-level
+  // value is correctly not in the flat list, but its per-tool values are as
+  // array-shaped as any validated key and were entirely unguarded. The most
+  // natural authoring mistake — one pattern, forgotten wrapper — threw
+  // `patterns is not iterable` out of Gate.check mid-action.
+  // FALSY non-arrays included deliberately: a truthiness-based skip would wave
+  // exactly these through, and that mutation survived the first version of this
+  // test — the same gap already found once on the flat key list.
+  for (const bad of [/rm -rf/, "rm -rf", 42, {}, true, new Set([/x/]), "", 0, false, NaN]) {
+    assert.throws(() => new Gate({ tools: { denyArgPatterns: { bash: bad } } }),
+      /tools\.denyArgPatterns\.bash/,
+      `denyArgPatterns.bash = ${String(bad)} must throw at construct time`);
+  }
+  // the map itself must be a plain object
+  assert.throws(() => new Gate({ tools: { denyArgPatterns: [/x/] } }), /tools\.denyArgPatterns/);
+  assert.throws(() => new Gate({ tools: { denyArgPatterns: "x" } }), /tools\.denyArgPatterns/);
+
+  // legal shapes still construct
+  assert.doesNotThrow(() => new Gate({ tools: { denyArgPatterns: {} } }));
+  assert.doesNotThrow(() => new Gate({ tools: { denyArgPatterns: { bash: [/rm/], fetch: [] } } }));
+  assert.doesNotThrow(() => new Gate({ tools: { denyArgPatterns: { bash: null } } }));
+});
+
+test("config: a denyArgPatterns value mutated to a non-array denies, it does not throw", async () => {
+  // same defence-in-depth as tools.allowlist.invalid: cfg is held by reference.
+  // A deny rule the gate cannot evaluate must fail CLOSED, not vanish.
+  const cfg = { tools: { denyArgPatterns: { bash: [/never-matches/] } } };
+  const gate = new Gate(cfg);
+  assert.equal((await gate.check({ type: "bash", cmd: "ls" })).outcome, "allow");
+
+  cfg.tools.denyArgPatterns.bash = /rm -rf/; // the forgotten-wrapper mistake
+  const d = await gate.check({ type: "bash", cmd: "ls" });
+  assert.equal(d.outcome, "deny", "an unevaluatable deny rule must fail closed");
+  assert.equal(d.rule, "tools.denyArgPatterns.invalid");
+});

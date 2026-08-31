@@ -252,6 +252,7 @@ Universal denies first (1-2b-3), universal asks second (4-4b), capability scope 
 | `tools.denyArgPatterns` | action | return error to LLM, continue loop |
 | `fs.invalidPath`, `net.invalidUrl`, `bash.invalidCmd` (path/url/cmd present but not a string) | action | return error to LLM, continue loop |
 | `tools.allowlist.invalid` (allowlist present but not an array) | action | operator config bug — fix the config; the gate denies until then |
+| `tools.denyArgPatterns.invalid` (a per-tool pattern list present but not an array) | action | operator config bug — a deny rule the gate cannot evaluate fails closed |
 | `limits.maxChildren`, `limits.maxDepth` | action | return error to LLM, continue loop |
 | `content.askPatterns` (after humanChannel resolves) | action | terminal allow or deny |
 | **`budget.maxCostUsd`, `budget.maxTokens`** | **halt** | **escalate to humanChannel; never bubble to LLM** |

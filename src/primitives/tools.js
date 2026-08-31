@@ -33,7 +33,17 @@ export function toolsDenyArgsCheck(action, cfg = {}) {
   const map = cfg.denyArgPatterns;
   if (!map) return null;
   const patterns = map[action.type];
-  if (!patterns || patterns.length === 0) return null;
+  if (patterns === undefined || patterns === null) return null;
+  // Present but unusable: cfg is held by reference, so a caller can swap the
+  // value out after the constructor validated it. A deny rule the gate cannot
+  // evaluate must fail CLOSED, not vanish and not throw out of check().
+  if (!Array.isArray(patterns)) {
+    return {
+      outcome: "deny", severity: "action", rule: "tools.denyArgPatterns.invalid",
+      reason: `tools.denyArgPatterns.${action.type} is not an array (type ${typeof patterns})`,
+    };
+  }
+  if (patterns.length === 0) return null;
   let argStr;
   try { argStr = JSON.stringify(action); }
   catch { return null; }

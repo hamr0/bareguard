@@ -232,6 +232,27 @@ const ARRAY_SHAPED_CONFIG = Object.freeze([
  * @returns {void}
  */
 function assertArrayShapedConfig(config) {
+  // `tools.denyArgPatterns` is the one config surface that is a MAP of arrays
+  // rather than an array, so the flat [section, key] model above cannot express
+  // it. Its per-tool values are as array-shaped as any key in that list, and the
+  // natural authoring slip — one pattern, forgotten wrapper — threw
+  // `patterns is not iterable` out of check() mid-action.
+  const dap = config?.tools?.denyArgPatterns;
+  if (dap !== undefined && dap !== null) {
+    if (typeof dap !== "object" || Array.isArray(dap)) {
+      throw new Error(
+        `invalid bareguard config: tools.denyArgPatterns must be an object mapping tool name to an array of patterns, got ${Array.isArray(dap) ? "array" : typeof dap}`,
+      );
+    }
+    for (const [tool, patterns] of Object.entries(dap)) {
+      if (patterns === undefined || patterns === null) continue;
+      if (!Array.isArray(patterns)) {
+        throw new Error(
+          `invalid bareguard config: tools.denyArgPatterns.${tool} must be an array, got ${typeof patterns}`,
+        );
+      }
+    }
+  }
   for (const [section, key] of ARRAY_SHAPED_CONFIG) {
     const s = config?.[section];
     if (s == null || typeof s !== "object") continue;

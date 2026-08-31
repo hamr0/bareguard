@@ -324,7 +324,10 @@ tools can be invoked at all":**
   UNRELEASED; previously `[]` was folded into unset and fell through to allow.)
 - **Present but not an array** (`""`, `0`, `false`, `NaN`, a string, an object):
   denied (rule: `tools.allowlist.invalid`), same as `fs.invalidPath` /
-  `net.invalidUrl` / `bash.invalidCmd`. Previously the falsy ones read as unset
+  `net.invalidUrl` / `bash.invalidCmd`. `tools.denyArgPatterns.<tool>` is guarded
+  the same way (rule: `tools.denyArgPatterns.invalid`) — a deny rule the gate
+  cannot evaluate fails closed. Both are reachable only by mutating the config
+  after construction; the constructor rejects these shapes outright. Previously the falsy ones read as unset
   and fell through to allow, and the truthy ones threw out of the gate.
 - **Set with one or more entries:**
   - tool name matches → `allow` (rule: `tools.allowlist`).
