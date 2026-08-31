@@ -202,3 +202,80 @@ test("audit: a collapsed action.type is itself bounded — it is caller-controll
       `line is ${Buffer.byteLength(line, "utf8")} bytes`);
   }
 });
+
+// Every bound in the oversize-truncation block is a BYTE bound — the line cap
+// it feeds is measured in bytes because POSIX PIPE_BUF is. But the block cut
+// with `String.prototype.slice`, which counts UTF-16 CODE UNITS, and `result`'s
+// guard read `.length`, a code-unit COUNT. Measured before the fix: a `reason`
+// of 5000 CJK characters persisted at 611 bytes against a claimed 211-byte
+// bound (2.9x), astral emoji at 411 (1.9x), and a 200-character CJK `result`
+// value (600 bytes) was not truncated AT ALL. Neither breached MAX_LINE_BYTES
+// on its own — the wholesale-collapse stage re-bounds the line regardless — but
+// the per-field guarantee the code and CHANGELOG stated was false, and the
+// margin it silently ate is the margin the next forgotten field will need.
+const BOUND = 200 + "[TRUNCATED]".length; // 211
+
+for (const [name, fill] of [["CJK (3 bytes/char)", "中"], ["astral emoji (4 bytes, 2 UTF-16 units)", "\u{1F4A5}"]]) {
+  test(`audit: reason is bounded in BYTES, not UTF-16 units — ${name}`, async (t) => {
+    const { entry } = await lastLine(t, { tools: { allowlist: ["zzz"] } }, { type: fill.repeat(5000) });
+    const bytes = Buffer.byteLength(entry.reason, "utf8");
+    assert.ok(bytes <= BOUND, `reason is ${bytes} bytes, bound is ${BOUND}`);
+    assert.ok(entry.reason.endsWith("[TRUNCATED]"), "a cut value must say so");
+  });
+}
+
+test("audit: a multi-byte RESULT string is bounded — its guard counted code units, not bytes", async (t) => {
+  const dir = await makeTmpDir(); t.after(async () => cleanup(dir));
+  const auditPath = path.join(dir, "audit.jsonl");
+  const gate = new Gate({ audit: { path: auditPath } });
+  await gate.init();
+  // 200 CJK chars = 600 bytes: `.length > 200` is FALSE, so this was never cut.
+  // Padded with a second wide key so the line trips the oversize path at all.
+  await gate.record({ type: "bash", cmd: "ls" },
+    { text: "中".repeat(200), pad: "x".repeat(MAX_LINE_BYTES) });
+  const entry = JSON.parse(fs.readFileSync(auditPath, "utf8").trim().split("\n").pop());
+  if (typeof entry.result?.text === "string") {
+    const bytes = Buffer.byteLength(entry.result.text, "utf8");
+    assert.ok(bytes <= BOUND, `result.text is ${bytes} bytes, bound is ${BOUND}`);
+  }
+});
+
+test("audit: where and verdict are bounded in bytes when the line is oversize", async (t) => {
+  const dir = await makeTmpDir(); t.after(async () => cleanup(dir));
+  const auditPath = path.join(dir, "audit.jsonl");
+  // gate.annotate caps `where`/`verdict` at the SOURCE in UTF-16 units, so CJK
+  // alone lands at 900 bytes and never trips the line cap. The re-bound under
+  // test only fires on an OVERSIZE line, so drive it the way the field actually
+  // gets there in practice: redaction expanding an already-legal value.
+  const gate = new Gate({ audit: { path: auditPath }, secrets: { patterns: [/\u4e2d/, /E/, /D/] } });
+  await gate.init();
+  await gate.annotate({ surface: true, verdict: "\u4e2d".repeat(300), where: "\u4e2d".repeat(300) });
+  let exercised = false;
+  for (const raw of fs.readFileSync(auditPath, "utf8").trim().split("\n")) {
+    const e = JSON.parse(raw);
+    assert.ok(Buffer.byteLength(raw, "utf8") <= MAX_LINE_BYTES,
+      `line is ${Buffer.byteLength(raw, "utf8")} bytes`);
+    if (!e._truncated) continue;
+    exercised = true;
+    for (const f of ["where", "verdict"]) {
+      if (typeof e[f] !== "string") continue;
+      const bytes = Buffer.byteLength(e[f], "utf8");
+      assert.ok(bytes <= BOUND, `${f} is ${bytes} bytes, bound is ${BOUND}`);
+    }
+  }
+  assert.ok(exercised, "no line hit the oversize path — this test asserted nothing");
+});
+
+// Probe the threshold itself, not just one value far past it: a byte-safe cut
+// must not start cutting values that were always legal.
+test("audit: the byte bound is exact at the boundary — under keeps, over cuts", async (t) => {
+  // ASCII, so bytes == code units and the boundary is unambiguous.
+  for (const [label, len, cut] of [["under (199)", 199, false], ["at (200)", 200, false], ["over (201)", 201, true]]) {
+    const { entry } = await lastLine(t, { tools: { allowlist: ["zzz"] } },
+      { type: "T".repeat(len), pad: "x".repeat(MAX_LINE_BYTES) });
+    // reason embeds the type, so isolate on the action field the loop bounds.
+    const v = entry.action.type;
+    if (typeof v !== "string") continue; // collapsed wholesale; not this test's subject
+    assert.equal(v.endsWith("[TRUNCATED]"), cut, `${label}: got ${Buffer.byteLength(v, "utf8")} bytes`);
+  }
+});

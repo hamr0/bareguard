@@ -12,6 +12,37 @@ const MAX_LINE_BYTES = 3500; // safety margin under PIPE_BUF (4096 on Linux/macO
 const NEEDS_LOCK = process.platform === "win32";
 
 /**
+ * Truncate a string to at most `max` UTF-8 BYTES, appending a marker if it was
+ * cut. Every bound in the oversize-truncation block is a BYTE bound — the line
+ * cap it feeds is measured in bytes because POSIX `PIPE_BUF` is — but the block
+ * used `String.prototype.slice`, which counts UTF-16 code units. A 200-unit
+ * slice of CJK is 600 bytes and of astral emoji 400: measured, a `reason` of
+ * 5000 CJK characters persisted at 611 bytes against a claimed 211-byte bound,
+ * 2.9x over. `result` was worse still — its guard read `.length > 200`, a code-
+ * unit COUNT, so a 200-character CJK value (600 bytes) was not truncated at all.
+ * Neither breached `MAX_LINE_BYTES` on its own, because the wholesale-collapse
+ * stage below re-bounds the line regardless; but the per-field guarantee the
+ * code and CHANGELOG stated was false, and the margin it was silently eating is
+ * the margin the next forgotten field will need.
+ * @param {string} s value to bound
+ * @param {number} max maximum UTF-8 bytes to keep before the marker
+ * @returns {string} `s` unchanged if it already fits, else a byte-clipped prefix + `[TRUNCATED]`
+ */
+function clipBytes(s, max) {
+  if (Buffer.byteLength(s, "utf8") <= max) return s;
+  // Slice to `max` CODE UNITS first: every code unit costs at least one byte, so
+  // the first `max` bytes always live inside the first `max` units. That keeps
+  // the copy bounded by `max` instead of by the length of a hostile input
+  // (measured over a 150 KB value: 0.201 ms/call before, 0.040 ms after).
+  let out = Buffer.from(s.slice(0, max), "utf8").subarray(0, max).toString("utf8");
+  // subarray can land mid-sequence; the decoder turns the partial tail into a
+  // single U+FFFD, which costs 3 bytes and can push `out` back over `max`.
+  // Only the tail can split, so dropping one code unit is always enough.
+  if (Buffer.byteLength(out, "utf8") > max) out = out.slice(0, -1);
+  return out + "[TRUNCATED]";
+}
+
+/**
  * Resolve the default audit file path: XDG_STATE_HOME, then ~/.local/state, then cwd.
  * @param {string} rootRunId root run id used in the filename
  * @returns {string} absolute path to the per-family JSONL audit file
@@ -124,8 +155,8 @@ export class Audit {
           if (v !== null && typeof v === "object") {
             const bytes = Buffer.byteLength(JSON.stringify(v), "utf8");
             if (bytes > 200) newAction[k] = `[TRUNCATED:${bytes} bytes]`;
-          } else if (typeof v === "string" && Buffer.byteLength(v, "utf8") > 200) {
-            newAction[k] = v.slice(0, 200) + "[TRUNCATED]";
+          } else if (typeof v === "string") {
+            newAction[k] = clipBytes(v, 200);
           }
         }
         truncated.action = newAction;
@@ -133,8 +164,8 @@ export class Audit {
       if (truncated.result) {
         truncated.result = { ...truncated.result };
         for (const k of Object.keys(truncated.result)) {
-          if (typeof truncated.result[k] === "string" && truncated.result[k].length > 200) {
-            truncated.result[k] = truncated.result[k].slice(0, 200) + "[TRUNCATED]";
+          if (typeof truncated.result[k] === "string") {
+            truncated.result[k] = clipBytes(truncated.result[k], 200);
           }
         }
       }
@@ -142,17 +173,13 @@ export class Audit {
       // source (gate.annotate), but redaction runs AFTER that bound and can EXPAND
       // a field ([REDACTED:...] per match), so re-bound them here like result —
       // otherwise the atomicity guarantee leaks for secret-heavy reply text.
-      if (typeof truncated.where === "string" && Buffer.byteLength(truncated.where, "utf8") > 200) {
-        truncated.where = truncated.where.slice(0, 200) + "[TRUNCATED]";
-      }
+      if (typeof truncated.where === "string") truncated.where = clipBytes(truncated.where, 200);
       // `verdict` is redacted too, so it expands too, so it must be re-bounded too.
       // Adding a field to the redactor without adding it here reopens the atomicity
       // hole: redaction runs pattern-by-pattern over ALREADY-redacted text, so a
       // later pattern matching the `[REDACTED:…]` marker an earlier one inserted
       // compounds (measured: an 80-char verdict reached 63 KB across 5 patterns).
-      if (typeof truncated.verdict === "string" && Buffer.byteLength(truncated.verdict, "utf8") > 200) {
-        truncated.verdict = truncated.verdict.slice(0, 200) + "[TRUNCATED]";
-      }
+      if (typeof truncated.verdict === "string") truncated.verdict = clipBytes(truncated.verdict, 200);
       // `reason` is redacted too, and every rule that echoes caller data into it
       // (tools `action.type`, fs `path`, net `url`/`host`, flags field values,
       // humanChannel `err.message`) is unbounded at the source — there is no
@@ -160,9 +187,7 @@ export class Audit {
       // unbounded AND expanded by redaction: measured 4510 bytes at DEFAULT
       // config from a long `action.type` alone, and 60,408 bytes once three
       // broad patterns compound over each other's markers.
-      if (typeof truncated.reason === "string" && Buffer.byteLength(truncated.reason, "utf8") > 200) {
-        truncated.reason = truncated.reason.slice(0, 200) + "[TRUNCATED]";
-      }
+      if (typeof truncated.reason === "string") truncated.reason = clipBytes(truncated.reason, 200);
       if (truncated.meta != null && typeof truncated.meta === "object") {
         const bytes = Buffer.byteLength(JSON.stringify(truncated.meta), "utf8");
         if (bytes > 200) truncated.meta = { _truncated: true, bytes };
@@ -193,9 +218,7 @@ export class Audit {
             // Bounded by BYTES, not UTF-16 units, because it is caller-controlled
             // and the whole point of this branch is a byte budget.
             if (typeof src.type === "string") {
-              collapsed.type = Buffer.byteLength(src.type, "utf8") > 120
-                ? Buffer.from(src.type, "utf8").subarray(0, 120).toString("utf8") + "[TRUNCATED]"
-                : src.type;
+              collapsed.type = clipBytes(src.type, 120);
             }
             truncated[k] = collapsed;
           }
@@ -218,9 +241,7 @@ export class Audit {
         const minimal = {};
         for (const [k, v] of Object.entries(truncated)) {
           if (v === null || typeof v !== "object") {
-            minimal[k] = typeof v === "string" && Buffer.byteLength(v, "utf8") > 120
-              ? v.slice(0, 120) + "[TRUNCATED]"
-              : v;
+            minimal[k] = typeof v === "string" ? clipBytes(v, 120) : v;
           }
         }
         minimal._truncated = true;
