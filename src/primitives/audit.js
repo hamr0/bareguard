@@ -95,6 +95,12 @@ const NEEDS_LOCK = process.platform === "win32";
  * @returns {string} `s` unchanged if it already fits, else a byte-clipped prefix + `[TRUNCATED]`
  */
 function clipBytes(s, max) {
+  // A non-positive cap is nonsense, and silently wrong rather than loudly wrong:
+  // `s.slice(0, -5)` means "drop the last 5 characters", not "keep none", so a
+  // negative cap would return nearly the whole string while claiming a bound.
+  // Unreachable today (every caller passes a fixed positive constant), kept so
+  // making the cap configurable later cannot turn into a bypass.
+  if (max <= 0) return "[TRUNCATED]";
   if (Buffer.byteLength(s, "utf8") <= max) return s;
   // Slice to `max` CODE UNITS first: every code unit costs at least one byte, so
   // the first `max` bytes always live inside the first `max` units. That keeps

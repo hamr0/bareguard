@@ -279,3 +279,22 @@ test("audit: the byte bound is exact at the boundary — under keeps, over cuts"
     assert.equal(v.endsWith("[TRUNCATED]"), cut, `${label}: got ${Buffer.byteLength(v, "utf8")} bytes`);
   }
 });
+
+// `reason` was the one LINE_FIELDS row no test held down. Dropping it kept the
+// suite green (295/295) because the third, generic backstop re-bounds every
+// scalar independently, so the LINE still fit — but that stage pays for it by
+// dropping the object payloads wholesale: `action` disappeared from the record
+// entirely and the line was stamped `_dropped`. An audit entry that no longer
+// says WHAT was denied is a real loss, and "the line fits" was never the whole
+// guarantee. This pins the degradation, not just the byte count.
+test("audit: an oversize reason is bounded at its OWN stage — the last resort must not fire", async (t) => {
+  const { entry } = await lastLine(t, { tools: { allowlist: ["zzz"] } },
+    { type: "T".repeat(4000), cmd: "ls -la" });
+
+  assert.ok(Buffer.byteLength(entry.reason, "utf8") <= BOUND,
+    `reason is ${Buffer.byteLength(entry.reason, "utf8")} bytes, bound is ${BOUND}`);
+  assert.equal(entry._dropped, undefined,
+    "bounding `reason` must be enough — falling through to the scalar-only backstop costs the payload");
+  assert.ok(entry.action, "the audit line must still record WHAT was denied");
+  assert.equal(entry.rule, "tools.allowlist.exclusive", "and under which rule");
+});
