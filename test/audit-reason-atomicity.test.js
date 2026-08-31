@@ -154,3 +154,51 @@ test("audit: a normal small line is still untouched by the line backstop", async
   assert.deepEqual(entry.action, { type: "bash", cmd: "ls -la" }, "action must survive verbatim");
   assert.ok(bytes < 1000);
 });
+
+// The wholesale payload collapse writes `{_truncated, bytes}` in place of the
+// action — which drops `action.type`. `_rebuildBudgetFromAudit` classifies a
+// historical round with `l.action.type !== "llm"`, so a collapsed llm round
+// reads as `undefined !== "llm"` and is rebuilt as a TOOL round. That is
+// exactly the live-vs-cold-start divergence 0.9.0 closed by construction with
+// `sanitizeSpend`, reopened on the toolRounds dimension by the line backstop.
+// It over-counts (fails safe) but it still makes the two paths disagree.
+test("audit: payload collapse keeps action.type — live and cold-start toolRounds cannot diverge", async (t) => {
+  const dir = await makeTmpDir(); t.after(async () => cleanup(dir));
+  const auditPath = path.join(dir, "audit.jsonl");
+
+  const wide = { type: "llm" };
+  for (let i = 0; i < 200; i++) wide["k" + i] = "v".repeat(190);
+
+  const live = new Gate({ audit: { path: auditPath }, limits: { maxToolRounds: 50 } });
+  await live.init();
+  await live.record(wide, { costUsd: 0.01, tokens: 10 });
+
+  const raw = fs.readFileSync(auditPath, "utf8").trim().split("\n").pop();
+  assert.ok(Buffer.byteLength(raw, "utf8") <= MAX_LINE_BYTES,
+    `line is ${Buffer.byteLength(raw, "utf8")} bytes`);
+  const entry = JSON.parse(raw);
+  assert.equal(entry.action._truncated, true,
+    "precondition: this action must be wide enough to trip the wholesale collapse");
+  assert.equal(entry.action.type, "llm",
+    "the one field the budget rebuild classifies on must survive the collapse");
+
+  const cold = new Gate({ audit: { path: auditPath }, limits: { maxToolRounds: 50 } });
+  await cold.init();
+  assert.equal(cold.limits.toolRounds, live.limits.toolRounds,
+    `cold start rebuilt ${cold.limits.toolRounds} tool rounds, live counted ${live.limits.toolRounds}`);
+});
+
+test("audit: a collapsed action.type is itself bounded — it is caller-controlled", async (t) => {
+  const dir = await makeTmpDir(); t.after(async () => cleanup(dir));
+  const auditPath = path.join(dir, "audit.jsonl");
+  // multi-byte, so a UTF-16 slice would under-count the bytes it costs
+  const wide = { type: "\u{1F4A5}".repeat(4000) };
+  for (let i = 0; i < 200; i++) wide["k" + i] = "v".repeat(190);
+  const gate = new Gate({ audit: { path: auditPath } });
+  await gate.init();
+  await gate.record(wide, { costUsd: 0.01 });
+  for (const line of fs.readFileSync(auditPath, "utf8").trim().split("\n")) {
+    assert.ok(Buffer.byteLength(line, "utf8") <= MAX_LINE_BYTES,
+      `line is ${Buffer.byteLength(line, "utf8")} bytes`);
+  }
+});

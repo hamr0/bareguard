@@ -181,7 +181,23 @@ export class Audit {
       if (Buffer.byteLength(serialized, "utf8") > MAX_LINE_BYTES) {
         for (const k of ["action", "result"]) {
           if (truncated[k] != null && typeof truncated[k] === "object") {
-            truncated[k] = { _truncated: true, bytes: Buffer.byteLength(JSON.stringify(truncated[k]), "utf8") };
+            const src = truncated[k];
+            const collapsed = { _truncated: true, bytes: Buffer.byteLength(JSON.stringify(src), "utf8") };
+            // `type` survives the collapse. It is not cosmetic: the cold-start
+            // budget rebuild classifies a historical round with
+            // `l.action.type !== "llm"`, so dropping it turns a collapsed llm
+            // round into `undefined !== "llm"` — a TOOL round. That is the live-
+            // vs-rebuilt divergence 0.9.0 closed by construction (sanitizeSpend),
+            // reopened on the toolRounds dimension by this very backstop. It
+            // over-counts, so it fails safe, but the two paths must not disagree.
+            // Bounded by BYTES, not UTF-16 units, because it is caller-controlled
+            // and the whole point of this branch is a byte budget.
+            if (typeof src.type === "string") {
+              collapsed.type = Buffer.byteLength(src.type, "utf8") > 120
+                ? Buffer.from(src.type, "utf8").subarray(0, 120).toString("utf8") + "[TRUNCATED]"
+                : src.type;
+            }
+            truncated[k] = collapsed;
           }
         }
         serialized = JSON.stringify(truncated) + "\n";
