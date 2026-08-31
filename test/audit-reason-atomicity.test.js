@@ -91,3 +91,66 @@ test("audit: the humanChannel-threw reason path is bounded too", async (t) => {
       `audit line is ${Buffer.byteLength(raw, "utf8")} bytes, over the ${MAX_LINE_BYTES} cap`);
   }
 });
+
+// The per-field bound is not a line bound. `action`/`result` are truncated
+// PER KEY (each value capped at 200 bytes), so an object with many small keys
+// passes every per-key check and still blows MAX_LINE_BYTES — 200 keys x 190
+// bytes measured at 40,197 bytes, stamped `_truncated: true`. `meta` was never
+// vulnerable because it collapses the WHOLE object once its total exceeds 200.
+// The guarantee is about the LINE, so the backstop has to be on the line.
+
+test("audit: many small keys cannot blow the cap — the bound is on the LINE, not per field", async (t) => {
+  const wide = { type: "bash" };
+  for (let i = 0; i < 200; i++) wide["k" + i] = "v".repeat(190);
+  const { bytes, entry } = await lastLine(t, { tools: { allowlist: ["zzz"] } }, wide);
+  assert.ok(bytes <= MAX_LINE_BYTES, `wide action produced ${bytes} bytes`);
+  assert.equal(entry._truncated, true);
+
+  // Degrade as little as necessary: the payload collapses to a SUMMARY carrying
+  // its real size, rather than being dropped from the line. Without the
+  // wholesale-collapse pass the last-resort path would fire instead and the
+  // action would vanish entirely, which is a strictly worse audit record.
+  assert.equal(entry.action._truncated, true);
+  assert.ok(entry.action.bytes > MAX_LINE_BYTES,
+    "the collapsed action must report the size it would have been");
+  assert.equal(entry._dropped, undefined,
+    "the last-resort path must not fire when collapsing the payload is enough");
+  assert.ok(entry.reason, "a diagnostic reason must survive payload collapse");
+});
+
+test("audit: a wide RESULT object is bounded too", async (t) => {
+  const dir = await makeTmpDir(); t.after(async () => cleanup(dir));
+  const auditPath = path.join(dir, "audit.jsonl");
+  const gate = new Gate({ audit: { path: auditPath } });
+  await gate.init();
+  const result = {};
+  for (let i = 0; i < 200; i++) result["k" + i] = "v".repeat(190);
+  await gate.record({ type: "bash", cmd: "ls" }, result);
+  for (const raw of fs.readFileSync(auditPath, "utf8").trim().split("\n")) {
+    assert.ok(Buffer.byteLength(raw, "utf8") <= MAX_LINE_BYTES,
+      `line is ${Buffer.byteLength(raw, "utf8")} bytes`);
+  }
+});
+
+test("audit: even a pathological action stays under the cap and keeps its routing fields", async (t) => {
+  // deep nesting + many keys + multi-byte characters (byte length, not UTF-16)
+  const nasty = { type: "bash" };
+  for (let i = 0; i < 500; i++) nasty["\u{1F4A5}key" + i] = { a: "é".repeat(100), b: { c: "x".repeat(100) } };
+  const { bytes, entry } = await lastLine(t, { tools: { allowlist: ["zzz"] } }, nasty);
+  assert.ok(bytes <= MAX_LINE_BYTES, `pathological action produced ${bytes} bytes`);
+  // the line must remain useful: identity and routing survive whatever is dropped
+  assert.equal(entry.rule, "tools.allowlist.exclusive");
+  assert.equal(entry.decision, "deny");
+  assert.ok(entry.run_id, "run_id must survive");
+  assert.ok(entry.ts, "ts must survive");
+  assert.equal(typeof entry.seq, "number", "seq must survive");
+  assert.ok(entry.aid, "aid must survive — it is what joins request to outcome");
+});
+
+test("audit: a normal small line is still untouched by the line backstop", async (t) => {
+  const { entry, bytes } = await lastLine(t, { tools: { allowlist: ["zzz"] } },
+    { type: "bash", cmd: "ls -la" });
+  assert.ok(!entry._truncated, "a small line must not be flagged");
+  assert.deepEqual(entry.action, { type: "bash", cmd: "ls -la" }, "action must survive verbatim");
+  assert.ok(bytes < 1000);
+});

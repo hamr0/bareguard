@@ -168,6 +168,49 @@ export class Audit {
         if (bytes > 200) truncated.meta = { _truncated: true, bytes };
       }
       serialized = JSON.stringify(truncated) + "\n";
+
+      // THE LINE BOUND. Everything above is PER FIELD, and a per-field bound is
+      // not a line bound: `action`/`result` cap each VALUE at 200 bytes but
+      // never the key COUNT, so 200 keys of 190 bytes passed every check above
+      // and still produced a 40,197-byte line stamped `_truncated: true`.
+      // `meta` was never vulnerable because it collapses the WHOLE object once
+      // its total exceeds 200 — that is the shape the guarantee actually needs.
+      // The promise is about the LINE, so it is enforced on the line: collapse
+      // the payload wholesale, then, if even that does not fit, keep only the
+      // fields a consumer needs to route and correlate the entry.
+      if (Buffer.byteLength(serialized, "utf8") > MAX_LINE_BYTES) {
+        for (const k of ["action", "result"]) {
+          if (truncated[k] != null && typeof truncated[k] === "object") {
+            truncated[k] = { _truncated: true, bytes: Buffer.byteLength(JSON.stringify(truncated[k]), "utf8") };
+          }
+        }
+        serialized = JSON.stringify(truncated) + "\n";
+      }
+      if (Buffer.byteLength(serialized, "utf8") > MAX_LINE_BYTES) {
+        // Last resort: keep every SCALAR field and drop the object payloads.
+        // NOT REACHABLE by any input I could construct — every field that can
+        // carry caller data is bounded above, so collapsing action/result has
+        // always sufficed. It is kept as an unconditional backstop so the
+        // invariant "the persisted line is <= MAX_LINE_BYTES" holds by
+        // construction rather than by enumerating today's fields, which is the
+        // enumeration that failed twice (`verdict` in 0.13.0, `reason` here).
+        // No test kills this branch; that is a known gap, not a claim of cover.
+        // Deliberately generic rather than an allowlist of field names — a
+        // hardcoded list silently drops any field added later, and the line's
+        // routing/correlation fields (ts, seq, run_id, parent_run_id, aid,
+        // phase, decision, severity, rule) are all scalars by construction.
+        const minimal = {};
+        for (const [k, v] of Object.entries(truncated)) {
+          if (v === null || typeof v !== "object") {
+            minimal[k] = typeof v === "string" && Buffer.byteLength(v, "utf8") > 120
+              ? v.slice(0, 120) + "[TRUNCATED]"
+              : v;
+          }
+        }
+        minimal._truncated = true;
+        minimal._dropped = "line exceeded MAX_LINE_BYTES after field truncation";
+        serialized = JSON.stringify(minimal) + "\n";
+      }
     }
     if (NEEDS_LOCK) {
       // Windows: O_APPEND cross-process atomicity not guaranteed.

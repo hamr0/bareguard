@@ -135,3 +135,22 @@ test("config: a denyArgPatterns value mutated to a non-array denies, it does not
   assert.equal(d.outcome, "deny", "an unevaluatable deny rule must fail closed");
   assert.equal(d.rule, "tools.denyArgPatterns.invalid");
 });
+
+test("config: a caller-supplied key is bounded before it reaches the error message", () => {
+  // A thrown Error is not routed through the audit redactor and nothing
+  // downstream caps its size, so an unbounded key would carry arbitrary config
+  // data into whatever logs construction failures. Measured unbounded: a
+  // 2,000,000-char key produced a 2,000,077-char message.
+  const huge = "k".repeat(2_000_000);
+  assert.throws(
+    () => new Gate({ tools: { denyArgPatterns: { [huge]: /x/ } } }),
+    (err) => {
+      assert.ok(err.message.length < 300,
+        `error message is ${err.message.length} chars; the key must be clipped`);
+      assert.match(err.message, /tools\.denyArgPatterns\./);
+      return true;
+    });
+  // a normal key is still named in full, so the message stays actionable
+  assert.throws(() => new Gate({ tools: { denyArgPatterns: { bash: /x/ } } }),
+    /tools\.denyArgPatterns\.bash must be an array/);
+});

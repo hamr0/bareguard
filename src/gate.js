@@ -225,6 +225,17 @@ const ARRAY_SHAPED_CONFIG = Object.freeze([
 ]);
 
 /**
+ * Bound a caller-supplied config key before it is interpolated into an error
+ * message. Errors are not redacted and not size-capped by anything downstream.
+ * @param {string} k config key
+ * @returns {string} the key, clipped
+ */
+function clipKey(k) {
+  const s = String(k);
+  return s.length > 64 ? s.slice(0, 64) + "…" : s;
+}
+
+/**
  * Throw if any array-shaped config key is present but not an array.
  * `undefined`/`null` mean "not configured" and are left alone; `[]` is a legal
  * array (an empty scope, or the documented pure-allow opt-out).
@@ -247,8 +258,14 @@ function assertArrayShapedConfig(config) {
     for (const [tool, patterns] of Object.entries(dap)) {
       if (patterns === undefined || patterns === null) continue;
       if (!Array.isArray(patterns)) {
+        // The key is interpolated into the message, so bound it. A config key
+        // can be built programmatically from an upstream tool registry, and a
+        // thrown Error is NOT routed through the audit redactor — an unbounded
+        // key would carry arbitrary caller data into whatever logs construction
+        // failures. Measured unbounded: a 2,000,000-char key produced a
+        // 2,000,077-char message.
         throw new Error(
-          `invalid bareguard config: tools.denyArgPatterns.${tool} must be an array, got ${typeof patterns}`,
+          `invalid bareguard config: tools.denyArgPatterns.${clipKey(tool)} must be an array, got ${typeof patterns}`,
         );
       }
     }
