@@ -321,7 +321,7 @@ tools can be invoked at all":**
 - **Unset (`undefined`/`null`):** no effect; flow continues to step 6 (default allow).
 - **Empty (`[]`):** a configured scope of *nothing* — every action is denied
   (rule: `tools.allowlist.exclusive`). `[]` is NOT "unset". (Changed — breaking,
-  UNRELEASED; previously `[]` was folded into unset and fell through to allow.)
+  v0.14; previously `[]` was folded into unset and fell through to allow.)
 - **Present but not an array** (`""`, `0`, `false`, `NaN`, a string, an object):
   denied (rule: `tools.allowlist.invalid`), same as `fs.invalidPath` /
   `net.invalidUrl` / `bash.invalidCmd`. `tools.denyArgPatterns.<tool>` is guarded
@@ -1037,11 +1037,11 @@ done — locking before the bench run is the one scenario that risks an early 2.
 
 **Last-call breaking-change review (open items, decide before lock):**
 - ~~**Empty `tools.allowlist` fails OPEN**~~ — **DECIDED: flip to fail-closed
-  (breaking; built on `fix/empty-allowlist-fails-closed`, UNRELEASED).** `[]` is now a
+  (breaking; built on `fix/empty-allowlist-fails-closed`, v0.14).** `[]` is now a
   configured scope of nothing → step 5 runs → `tools.allowlist.exclusive` deny. Only
   `undefined`/`null` means not-configured; any other non-array value denies via
   `tools.allowlist.invalid` (a follow-up on `fix/audit-reason-rebound`, also
-  UNRELEASED — the original `!cfg.allowlist` guard still let `""`/`0`/`false`/`NaN`
+  v0.14 — the original `!cfg.allowlist` guard still let `""`/`0`/`false`/`NaN`
   read as absent and fail OPEN, and let a truthy non-array throw). Rationale: the tightest expressible scope produced
   the loosest outcome, silently, and every sibling scope primitive (`net.allowDomains`,
   `fs.readScope`/`writeScope`, `bash.allow`) already denied on `[]` — `tools` was the
@@ -1061,7 +1061,8 @@ done — locking before the bench run is the one scenario that risks an early 2.
 `bash.reclassify`/`bash.platform`, and `budget.failClosedOnUnpriced` (v0.9)), the
 `Result.pricing` field (v0.9), **rule strings** (adopters and the seam contract test
 match on them — incl. `flags.<field>`, now live in litectx's write-gate seam,
-`bash.classify`, and `budget.unpriced` (v0.9)), the audit JSONL line format (incl. the
+`bash.classify`, `budget.unpriced` (v0.9), and `tools.allowlist.invalid` /
+`tools.denyArgPatterns.invalid` (v0.14)), the audit JSONL line format (incl. the
 `unpriced` phase, v0.9, and the `annotate_malformed` phase, v0.13), the
 `gate.annotate` fact contract (`surface` must be an explicit boolean — v0.13), the
 budget file format, and the
@@ -1777,7 +1778,7 @@ for safety.** This is what keeps agent self-selection safe despite M1: selecting
   note that off-catalog refusal is a resolver concern, not a scope trick (the
   resolver refuses to BUILD a gate, which is louder than one denying every action
   in turn). The empty-allowlist foot-gun this bullet originally cited is gone —
-  `[]` fails CLOSED as of the UNRELEASED empty-allowlist fix. **All samples verified by execution** against
+  `[]` fails CLOSED as of the v0.14 empty-allowlist fix. **All samples verified by execution** against
   the shipped `Gate` (2026-06-09: E4 re-run + 9 assertions — rules fire exactly as
   documented; the Axis-B fact reaches the human event verbatim).
 - ❌ A library of **agent-authored harnesses promoted to reusable** without a vetting
