@@ -298,6 +298,7 @@ THE 6 STEPS (first match wins; 2b/4b are co-located arms of step 13 `flags`):
   4. content.askPatterns            → askHuman (action; resolved via humanChannel)
   4b. flags ask                     → askHuman (action; action[field] value maps to "ask")
   5. tools.allowlist enforcement    → set+match: allow; set+miss: deny (rule: tools.allowlist.exclusive)
+     (set to [] = scope of nothing = deny all; only an ABSENT key skips this step)
   6. default                        → allow (rule: "default")
 ```
 
@@ -316,7 +317,10 @@ v0.4 of this PRD made allowlist short-circuit ask ("explicit listing =
 explicit consent"). v0.6 reverses that. Allowlist now means **only "which
 tools can be invoked at all":**
 
-- **Unset or empty:** no effect; flow continues to step 6 (default allow).
+- **Unset (key absent):** no effect; flow continues to step 6 (default allow).
+- **Empty (`[]`):** a configured scope of *nothing* — every action is denied
+  (rule: `tools.allowlist.exclusive`). `[]` is NOT "unset". (Changed — breaking,
+  UNRELEASED; previously `[]` was folded into unset and fell through to allow.)
 - **Set with one or more entries:**
   - tool name matches → `allow` (rule: `tools.allowlist`).
   - tool name does not match → `deny` (rule: `tools.allowlist.exclusive`).
@@ -1024,10 +1028,14 @@ done — locking before the bench run is the one scenario that risks an early 2.
    not this API).
 
 **Last-call breaking-change review (open items, decide before lock):**
-- **Empty `tools.allowlist` fails OPEN** — `[]` is treated as not-configured → step 5
-  skipped → default allow (verified vs `src/primitives/tools.js`; documented as the
-  cookbook's headline foot-gun). Flip to fail-closed / throw-on-construct, or keep and
-  lock the documented behavior?
+- ~~**Empty `tools.allowlist` fails OPEN**~~ — **DECIDED: flip to fail-closed
+  (breaking; built on `fix/empty-allowlist-fails-closed`, UNRELEASED).** `[]` is now a
+  configured scope of nothing → step 5 runs → `tools.allowlist.exclusive` deny. Only an
+  ABSENT key means not-configured. Rationale: the tightest expressible scope produced
+  the loosest outcome, silently, and every sibling scope primitive (`net.allowDomains`,
+  `fs.readScope`/`writeScope`, `bash.allow`) already denied on `[]` — `tools` was the
+  sole outlier (measured). Throw-on-construct was rejected: a deny is in-band agent
+  feedback, a throw is not. 3 regression tests, both mutations verified.
 - **`budget.strict` default for money caps** — `check()` halts post-fact (`spent ≥ cap`
   = cap + one action overshoot); decide if `strict` projection becomes the default for
   `maxCostUsd` (the §19 Budget candidate's semantics flag).
@@ -1755,8 +1763,10 @@ for safety.** This is what keeps agent self-selection safe despite M1: selecting
   `code-mode-sandbox` (E1+E4) / `repo-maintainer` (the SF-9 ship-gate as a recipe) /
   `delegation` (spawn/defer containment) / **`detect-and-feed-A` (Axis B as a recipe —
   the OQ1 demand sensor)** — plus the roll-your-own skeleton and the
-  empty-allowlist-fails-OPEN foot-gun (verified) that makes off-catalog refusal a
-  resolver concern, not a scope trick. **All samples verified by execution** against
+  note that off-catalog refusal is a resolver concern, not a scope trick (the
+  resolver refuses to BUILD a gate, which is louder than one denying every action
+  in turn). The empty-allowlist foot-gun this bullet originally cited is gone —
+  `[]` fails CLOSED as of the UNRELEASED empty-allowlist fix. **All samples verified by execution** against
   the shipped `Gate` (2026-06-09: E4 re-run + 9 assertions — rules fire exactly as
   documented; the Axis-B fact reaches the human event verbatim).
 - ❌ A library of **agent-authored harnesses promoted to reusable** without a vetting

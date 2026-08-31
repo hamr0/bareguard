@@ -57,7 +57,10 @@ export function toolsDenyArgsCheck(action, cfg = {}) {
  * @returns {{outcome:string,severity:string,rule:string,reason:(string|null)}|null} allow/deny decision, or null if no allowlist configured
  */
 export function toolsAllowlistCheck(action, cfg = {}) {
-  if (!cfg.allowlist || cfg.allowlist.length === 0) return null;
+  // An ABSENT allowlist means "scope not configured" (no opinion). An EMPTY one
+  // is a configured scope of nothing and must deny everything: folding `[]` into
+  // "not configured" made the tightest possible scope fail OPEN to default allow.
+  if (!cfg.allowlist) return null;
   if (matchAny(action.type, cfg.allowlist)) {
     return { outcome: "allow", severity: "action", rule: "tools.allowlist", reason: null };
   }

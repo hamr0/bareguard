@@ -117,3 +117,47 @@ test("net.denyPrivateIps — IPv4 link-local (cloud metadata) and 0.0.0.0 are bl
   assert.equal((await gate.check({ type: "fetch", url: "http://8.8.8.8/" })).outcome, "allow");
   assert.equal((await gate.check({ type: "fetch", url: "http://example.com/" })).outcome, "allow");
 });
+
+// ---------------------------------------------------------------------------
+// tools.allowlist: an EMPTY allowlist must fail CLOSED. Before this fix `[]`
+// was folded into "not configured", so step 5 was skipped and the action fell
+// through to default allow — the tightest possible scope produced the loosest
+// possible outcome, silently. Every sibling scope primitive (net.allowDomains,
+// fs.readScope/writeScope, bash.allow) already denies on `[]`; tools was the
+// sole outlier.
+// ---------------------------------------------------------------------------
+
+test("tools.allowlist — an empty allowlist denies every action (fails closed)", async (t) => {
+  const gate = await gateWith(t, { tools: { allowlist: [] } });
+
+  for (const action of [
+    { type: "wireMoney", amount: 999999 },
+    { type: "search", query: "anything" },
+    { type: "read", path: "/tmp/x" },
+  ]) {
+    const d = await gate.check(action);
+    assert.equal(d.outcome, "deny", `${action.type} must be denied by an empty allowlist`);
+    assert.equal(d.rule, "tools.allowlist.exclusive");
+  }
+});
+
+test("tools.allowlist — an ABSENT allowlist still means 'no opinion' (default allow)", async (t) => {
+  const gate = await gateWith(t, { tools: { denylist: ["wireMoney"] } });
+
+  // no allowlist key: scope is unconfigured, so unrelated types pass
+  assert.equal((await gate.check({ type: "search", query: "x" })).outcome, "allow");
+  // ...and the denylist still bites
+  assert.equal((await gate.check({ type: "wireMoney", amount: 1 })).rule, "tools.denylist");
+});
+
+test("tools.allowlist — a bundle whose intersection is empty cannot widen the floor", async (t) => {
+  const FLOOR_TOOLS = ["search", "read", "fetch", "bookFlight", "wireMoney"];
+  // cookbook resolver shape: bundle names that miss the floor entirely (typos)
+  const allowlist = ["reed", "serch"].filter((x) => FLOOR_TOOLS.includes(x));
+  assert.deepEqual(allowlist, [], "precondition: the intersection is empty");
+
+  const gate = await gateWith(t, { tools: { allowlist } });
+  const d = await gate.check({ type: "wireMoney", amount: 999999 });
+  assert.equal(d.outcome, "deny", "narrowest possible bundle must not allow-all");
+  assert.equal(d.rule, "tools.allowlist.exclusive");
+});

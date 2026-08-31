@@ -112,8 +112,10 @@ regardless.
 - **Wrong pick ≠ unsafe (D2)** — T2's too-narrow "research" bundle on a booking task
   didn't let the booking slip; the floor's irreversible→ask stopped it anyway.
 - **No ungoverned path** — T3a's off-catalog / self-authored bundle *refuses to run*
-  (fail closed). NB: an *empty* allowlist would fail OPEN in bareguard, so selection
-  is gated at resolve-time, not by handing the agent an empty scope.
+  (fail closed). NB: selection is gated at resolve-time rather than by handing the
+  agent an empty scope — refusing to build a Gate is louder than one that denies
+  every action in turn. (An empty allowlist itself fails CLOSED as of the
+  UNRELEASED empty-allowlist fix; when this POC ran, it fell through to allow.)
 - **Advisory validator earned nothing** — it flagged T2's mismatch but changed no
   decision; the deterministic floor did all the safety work (OQ2 leans "floor is
   enough"). Selection is ergonomics, not a guard.
