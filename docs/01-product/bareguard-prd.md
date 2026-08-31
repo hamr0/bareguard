@@ -1763,8 +1763,10 @@ for safety.** This is what keeps agent self-selection safe despite M1: selecting
   `code-mode-sandbox` (E1+E4) / `repo-maintainer` (the SF-9 ship-gate as a recipe) /
   `delegation` (spawn/defer containment) / **`detect-and-feed-A` (Axis B as a recipe —
   the OQ1 demand sensor)** — plus the roll-your-own skeleton and the
-  empty-allowlist-fails-OPEN foot-gun (verified) that makes off-catalog refusal a
-  resolver concern, not a scope trick. **All samples verified by execution** against
+  note that off-catalog refusal is a resolver concern, not a scope trick (the
+  resolver refuses to BUILD a gate, which is louder than one denying every action
+  in turn). The empty-allowlist foot-gun this bullet originally cited is gone —
+  `[]` fails CLOSED as of the UNRELEASED empty-allowlist fix. **All samples verified by execution** against
   the shipped `Gate` (2026-06-09: E4 re-run + 9 assertions — rules fire exactly as
   documented; the Axis-B fact reaches the human event verbatim).
 - ❌ A library of **agent-authored harnesses promoted to reusable** without a vetting
