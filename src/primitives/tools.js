@@ -53,15 +53,29 @@ export function toolsDenyArgsCheck(action, cfg = {}) {
  * @param {object} action action being evaluated
  * @param {string} action.type tool/action type name
  * @param {object} [cfg] tools config
- * @param {string[]} [cfg.allowlist] glob patterns of allowed tool types
+ * @param {string[]} [cfg.allowlist] glob patterns of allowed tool types. `[]` is a
+ *   scope of nothing (denies all); a non-array denies with `tools.allowlist.invalid`.
+ *   Only `undefined`/`null` leave scope unconfigured.
  * @returns {{outcome:string,severity:string,rule:string,reason:(string|null)}|null} allow/deny decision, or null if no allowlist configured
  */
 export function toolsAllowlistCheck(action, cfg = {}) {
-  // An ABSENT allowlist means "scope not configured" (no opinion). An EMPTY one
-  // is a configured scope of nothing and must deny everything: folding `[]` into
-  // "not configured" made the tightest possible scope fail OPEN to default allow.
-  if (!cfg.allowlist) return null;
-  if (matchAny(action.type, cfg.allowlist)) {
+  const list = cfg.allowlist;
+  // An ABSENT allowlist means "scope not configured" (no opinion). Anything
+  // present is a configured scope and must produce a decision:
+  //   - `[]` is a scope of nothing -> deny everything. Folding it into "not
+  //     configured" made the tightest possible scope fail OPEN to default allow.
+  //   - a non-array is a scope we cannot read -> deny, same as the shape checks
+  //     in fs.invalidPath / net.invalidUrl / bash.invalidCmd. Testing truthiness
+  //     instead let `""`/`0`/`false`/`NaN` read as absent (a config-templating
+  //     bug fails OPEN) and let a truthy non-array throw out of the gate.
+  if (list === undefined || list === null) return null;
+  if (!Array.isArray(list)) {
+    return {
+      outcome: "deny", severity: "action", rule: "tools.allowlist.invalid",
+      reason: `tools.allowlist is not an array (type ${typeof list})`,
+    };
+  }
+  if (matchAny(action.type, list)) {
     return { outcome: "allow", severity: "action", rule: "tools.allowlist", reason: null };
   }
   return {
