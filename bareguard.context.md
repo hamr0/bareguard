@@ -230,6 +230,7 @@ THE 6 STEPS (first match wins; all action severity unless noted)
   4. content.askPatterns            → askHuman  (fires even on allowlisted tools)
   4b. flags ask                     → askHuman  (action[field] value maps to "ask", e.g. provenance:"web")
   5. tools.allowlist enforcement    → set+match: allow; set+miss: deny (rule: tools.allowlist.exclusive)
+     (set to [] = scope of nothing = deny all; only an ABSENT key skips this step)
   6. default                        → allow
 ```
 
@@ -627,7 +628,7 @@ Routing is `routeAnnotation(surface, reversible, knob)` (pure, exported): a `bro
 ## See also
 
 - [`docs/01-product/bareguard-prd.md`](docs/01-product/bareguard-prd.md) — unified PRD (v0.7).
-- [`docs/02-features/harness-cookbook.md`](docs/02-features/harness-cookbook.md) — operator-vetted capability bundles: tighten-only presets over one floor (incl. the empty-allowlist-fails-OPEN foot-gun).
+- [`docs/02-features/harness-cookbook.md`](docs/02-features/harness-cookbook.md) — operator-vetted capability bundles: tighten-only presets over one floor.
 - [`docs/04-process/non-roadmap.md`](docs/04-process/non-roadmap.md) — the NO-GO list.
 - [`docs/04-process/decisions-log.md`](docs/04-process/decisions-log.md) — decisions resolved across versions.
 - [`CHANGELOG.md`](CHANGELOG.md) — release-by-release diff.

@@ -1024,10 +1024,14 @@ done — locking before the bench run is the one scenario that risks an early 2.
    not this API).
 
 **Last-call breaking-change review (open items, decide before lock):**
-- **Empty `tools.allowlist` fails OPEN** — `[]` is treated as not-configured → step 5
-  skipped → default allow (verified vs `src/primitives/tools.js`; documented as the
-  cookbook's headline foot-gun). Flip to fail-closed / throw-on-construct, or keep and
-  lock the documented behavior?
+- ~~**Empty `tools.allowlist` fails OPEN**~~ — **DECIDED: flip to fail-closed
+  (breaking; built on `fix/empty-allowlist-fails-closed`, UNRELEASED).** `[]` is now a
+  configured scope of nothing → step 5 runs → `tools.allowlist.exclusive` deny. Only an
+  ABSENT key means not-configured. Rationale: the tightest expressible scope produced
+  the loosest outcome, silently, and every sibling scope primitive (`net.allowDomains`,
+  `fs.readScope`/`writeScope`, `bash.allow`) already denied on `[]` — `tools` was the
+  sole outlier (measured). Throw-on-construct was rejected: a deny is in-band agent
+  feedback, a throw is not. 3 regression tests, both mutations verified.
 - **`budget.strict` default for money caps** — `check()` halts post-fact (`spent ≥ cap`
   = cap + one action overshoot); decide if `strict` projection becomes the default for
   `maxCostUsd` (the §19 Budget candidate's semantics flag).

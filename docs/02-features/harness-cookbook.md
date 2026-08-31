@@ -41,7 +41,7 @@ function gateFor(bundleName) {
   const b = CATALOG[bundleName];
   if (!b) return null;                                   // off-catalog → REFUSE to run
   const allowlist = b.tools.filter((t) => FLOOR_TOOLS.includes(t));
-  if (allowlist.length === 0) return null;               // see foot-gun below
+  if (allowlist.length === 0) return null;               // refuse to RUN (see below)
   return new Gate({
     ...FLOOR,
     tools:   { ...FLOOR.tools, allowlist },              // narrowed menu (⊆ floor)
@@ -54,14 +54,26 @@ function gateFor(bundleName) {
 }
 ```
 
-### ⚠️ The one foot-gun: an empty allowlist fails OPEN
+### An empty allowlist fails CLOSED
 
-`tools.allowlist: []` is treated as *not configured* — step 5 is skipped and the
-action falls through to default **allow** (verified against `src/primitives/tools.js`).
-So a bundle must never resolve to an empty allowlist, and an off-catalog or
-self-authored proposal must be refused **at resolve time** (return `null` → don't run),
-not "enforced" by handing the gate an empty scope. This is why `gateFor` has two
-`return null` paths. Selection is gated by the resolver; safety is gated by the floor.
+`tools.allowlist: []` is a configured scope of **nothing** — step 5 runs, nothing
+matches, and every action is denied with rule `tools.allowlist.exclusive` (verified
+against `src/primitives/tools.js`; regression-tested in
+`test/security-regression.test.js`). Only an **absent** `allowlist` key means "scope
+not configured" and falls through to the default. This matches every sibling scope
+primitive (`net.allowDomains`, `fs.readScope`/`writeScope`, `bash.allow`), which have
+always denied on `[]`.
+
+> **Changed — breaking, UNRELEASED (on `fix/empty-allowlist-fails-closed`).** Previously `[]` was folded into
+> "not configured" and fell through to default **allow** — the tightest possible
+> scope produced the loosest possible outcome, silently. If you passed `[]`
+> expecting allow-all, remove the key instead.
+
+The second `return null` in `gateFor` therefore refuses to *run* an empty bundle
+rather than relying on the gate to enforce it: an off-catalog or self-authored
+proposal is a **selection** failure the resolver owns, and surfacing it as "no gate"
+is louder than a gate that denies everything one action at a time. Selection is
+gated by the resolver; safety is gated by the floor.
 
 ## The bundles
 
