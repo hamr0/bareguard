@@ -184,3 +184,69 @@ test("gate config: a malformed flags section must throw loudly at construction, 
   assert.doesNotThrow(() => new Gate({ flags: { provenance: { web: "deny" } }, audit: { path: null } }));
 });
 
+// A `Map`-shaped config section is a DIFFERENT exotic-object variant of the
+// #4 section-shape bug: `typeof` a Map is `"object"` and `Array.isArray`
+// is false, so the old `typeof s !== "object" || Array.isArray(s)` guard let
+// it straight through construction — then `s["allowlist"]` on a Map reads a
+// named property, which is always `undefined` (Map entries are not own
+// properties), so the leaf check read it as "unconfigured" too. Same fail-
+// OPEN shape as the string-section bug, found again by a later review pass.
+// `isPlainObject` closes the whole family (Map, Set, Date, …) at once.
+//
+// The load-bearing assertion here is NOT the Map rejection — it's that a
+// LEGITIMATE null-prototype config section (bareguard's own `safeAction()`
+// deliberately produces null-proto objects gate-wide, 0.6.0) must NOT be
+// rejected by the same fix. A naive `s.constructor !== Object` check would
+// have broken every null-proto caller.
+test("gate config: a Map-shaped section is rejected (same class as the string-section bug, different exotic type)", () => {
+  assert.throws(
+    () => new Gate({ tools: new Map([["allowlist", ["x"]]]), audit: { path: null } }),
+    /tools must be a plain object/,
+  );
+  assert.throws(
+    () => new Gate({ tools: { denyArgPatterns: new Map() }, audit: { path: null } }),
+    /tools\.denyArgPatterns must be an object/,
+  );
+  assert.throws(
+    () => new Gate({ flags: new Map(), audit: { path: null } }),
+    /flags must be an object/,
+  );
+  assert.throws(
+    () => new Gate({ flags: { provenance: new Map([["web", "deny"]]) }, audit: { path: null } }),
+    /flags\.provenance must be an object/,
+  );
+  // secrets.keys/patterns/envVars route through the SAME shared section loop
+  // (ARRAY_SHAPED_CONFIG) as `tools` above — no separate fix needed, verified
+  // it actually throws rather than assumed.
+  assert.throws(
+    () => new Gate({ secrets: new Map([["keys", ["apiKey"]]]), audit: { path: null } }),
+    /secrets must be a plain object/,
+  );
+});
+
+test("gate config: a null-prototype section (safeAction()'s own shape) must NOT be rejected — must still gate correctly", async () => {
+  const nullProtoTools = Object.assign(Object.create(null), { allowlist: ["read"] });
+  const gate = new Gate({ tools: nullProtoTools, audit: { path: null } });
+  const allowed = await gate.check({ type: "read" });
+  const denied = await gate.check({ type: "write" });
+  assert.equal(allowed.outcome, "allow");
+  assert.equal(allowed.rule, "tools.allowlist");
+  assert.equal(denied.outcome, "deny");
+  assert.equal(denied.rule, "tools.allowlist.exclusive");
+
+  // Null-proto denyArgPatterns (map AND its per-tool array) must still deny.
+  const dap = Object.assign(Object.create(null), { bash: [/secret-marker/] });
+  const gate2 = new Gate({ tools: { denyArgPatterns: dap }, content: { denyPatterns: [] }, audit: { path: null } });
+  const d = await gate2.check({ type: "bash", cmd: "echo secret-marker" });
+  assert.equal(d.outcome, "deny");
+  assert.equal(d.rule, "tools.denyArgPatterns");
+
+  // Null-proto flags (top-level AND nested value-map) must still deny.
+  const inner = Object.assign(Object.create(null), { web: "deny" });
+  const outer = Object.assign(Object.create(null), { provenance: inner });
+  const gate3 = new Gate({ flags: outer, audit: { path: null } });
+  const f = await gate3.check({ type: "x", provenance: "web" });
+  assert.equal(f.outcome, "deny");
+  assert.equal(f.rule, "flags.provenance");
+});
+

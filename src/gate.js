@@ -238,6 +238,30 @@ function clipKey(k) {
 }
 
 /**
+ * True for a plain object — `{}`-literal shaped, or the null-prototype shape
+ * `safeAction()` deliberately produces gate-wide (0.6.0) — and false for
+ * everything else a config section must not be: an array, a string/number/
+ * boolean (primitives coerce through `Object.getPrototypeOf` to their wrapper
+ * prototype, e.g. `String.prototype`, never `Object.prototype`), or an exotic
+ * object like `Map`/`Set`/`Date`. The prior guard at each of these three call
+ * sites was `typeof s !== "object" || Array.isArray(s)`, which a `Map` passes
+ * (`typeof` is `"object"`, it is not an `Array`) — so `new Gate({ tools: new
+ * Map([["allowlist",["x"]]]) })` constructed with no error, and `s["allowlist"]`
+ * on a Map is always `undefined` (Map entries are not own properties), reading
+ * as "unconfigured" — full fail-OPEN, same failure as the string-section bug
+ * this replaces, just a different exotic type slipping through the same hole.
+ * One structural check closes the whole family (Map, Set, Date, anything else
+ * with a foreign prototype) instead of enumerating bad types one at a time.
+ * @param {*} v value to check
+ * @returns {boolean} true if `v` is a plain object (Object.prototype or null prototype)
+ */
+function isPlainObject(v) {
+  if (v === null || typeof v !== "object") return false;
+  const proto = Object.getPrototypeOf(v);
+  return proto === Object.prototype || proto === null;
+}
+
+/**
  * Throw if any array-shaped config key is present but not an array.
  * `undefined`/`null` mean "not configured" and are left alone; `[]` is a legal
  * array (an empty scope, or the documented pure-allow opt-out).
@@ -252,9 +276,9 @@ function assertArrayShapedConfig(config) {
   // `patterns is not iterable` out of check() mid-action.
   const dap = config?.tools?.denyArgPatterns;
   if (dap !== undefined && dap !== null) {
-    if (typeof dap !== "object" || Array.isArray(dap)) {
+    if (!isPlainObject(dap)) {
       throw new Error(
-        `invalid bareguard config: tools.denyArgPatterns must be an object mapping tool name to an array of patterns, got ${Array.isArray(dap) ? "array" : typeof dap}`,
+        `invalid bareguard config: tools.denyArgPatterns must be an object mapping tool name to an array of patterns, got ${Array.isArray(dap) ? "array" : typeof dap === "object" ? dap.constructor?.name ?? "object" : typeof dap}`,
       );
     }
     for (const [tool, patterns] of Object.entries(dap)) {
@@ -284,17 +308,17 @@ function assertArrayShapedConfig(config) {
   // a no-op as the top-level case).
   const flagsCfg = config?.flags;
   if (flagsCfg !== undefined && flagsCfg !== null) {
-    if (typeof flagsCfg !== "object" || Array.isArray(flagsCfg)) {
+    if (!isPlainObject(flagsCfg)) {
       throw new Error(
-        `invalid bareguard config: flags must be an object mapping field name to a value->outcome map, got ${Array.isArray(flagsCfg) ? "array" : typeof flagsCfg}`,
+        `invalid bareguard config: flags must be an object mapping field name to a value->outcome map, got ${Array.isArray(flagsCfg) ? "array" : typeof flagsCfg === "object" ? flagsCfg.constructor?.name ?? "object" : typeof flagsCfg}`,
       );
     }
     for (const [field, valueMap] of Object.entries(flagsCfg)) {
       if (valueMap === undefined || valueMap === null) continue;
-      if (typeof valueMap !== "object" || Array.isArray(valueMap)) {
+      if (!isPlainObject(valueMap)) {
         // Key bounded before interpolation — same reasoning as `denyArgPatterns.${clipKey(tool)}` above.
         throw new Error(
-          `invalid bareguard config: flags.${clipKey(field)} must be an object mapping value to "deny"|"ask", got ${Array.isArray(valueMap) ? "array" : typeof valueMap}`,
+          `invalid bareguard config: flags.${clipKey(field)} must be an object mapping value to "deny"|"ask", got ${Array.isArray(valueMap) ? "array" : typeof valueMap === "object" ? valueMap.constructor?.name ?? "object" : typeof valueMap}`,
         );
       }
     }
@@ -304,17 +328,23 @@ function assertArrayShapedConfig(config) {
     const s = config?.[section];
     if (s === undefined || s === null) continue;
     // A section that is present but not a plain object (a string, a number, an
-    // array…) used to be treated the same as "not configured" — `continue`d
-    // past silently — because `typeof s !== "object"` is also true for the
-    // legitimate "absent" case. That let `new Gate({ tools: "search", fs: "/etc" })`
-    // construct with no error and then evaluate every action as `rule:"default",
-    // outcome:"allow"`: `s[key]` on a string reads a named property, which is
-    // always `undefined`, so the leaf-level check below never sees the string at
-    // all and treats the whole section as unconfigured — full fail-OPEN for a
-    // config typo. Same shape check `tools.denyArgPatterns` already uses above.
-    if (typeof s !== "object" || Array.isArray(s)) {
+    // array, or an exotic object like `Map`/`Set`/`Date`) used to be treated
+    // the same as "not configured" — `continue`d past silently. First found
+    // with a string (`typeof s !== "object"` is also true for the legitimate
+    // "absent" case): `new Gate({ tools: "search", fs: "/etc" })` constructed
+    // with no error and then evaluated every action as `rule:"default",
+    // outcome:"allow"`. Then found AGAIN with a `Map` after the string fix
+    // shipped (`typeof` a Map is `"object"` and it is not an `Array`, so the
+    // old `typeof s !== "object" || Array.isArray(s)` check let it straight
+    // through): `s[key]` on a string OR a Map both read as a named property
+    // lookup that is always `undefined` (a Map's entries are not its own
+    // properties), so the leaf-level check below never sees either shape at
+    // all — full fail-OPEN for a config typo either way. `isPlainObject`
+    // closes the whole family in one check instead of enumerating bad types
+    // one at a time. Same shape check `tools.denyArgPatterns`/`flags` use above.
+    if (!isPlainObject(s)) {
       throw new Error(
-        `invalid bareguard config: ${section} must be a plain object, got ${Array.isArray(s) ? "array" : typeof s}`,
+        `invalid bareguard config: ${section} must be a plain object, got ${Array.isArray(s) ? "array" : typeof s === "object" ? s.constructor?.name ?? "object" : typeof s}`,
       );
     }
     const v = s[key];
