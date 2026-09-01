@@ -1061,9 +1061,17 @@ done — locking before the bench run is the one scenario that risks an early 2.
 `bash.reclassify`/`bash.platform`, and `budget.failClosedOnUnpriced` (v0.9)), the
 `Result.pricing` field (v0.9), **rule strings** (adopters and the seam contract test
 match on them — incl. `flags.<field>`, now live in litectx's write-gate seam,
-`bash.classify`, `budget.unpriced` (v0.9), and `tools.allowlist.invalid` /
-`tools.denyArgPatterns.invalid` (v0.14)), the audit JSONL line format (incl. the
-`unpriced` phase, v0.9, and the `annotate_malformed` phase, v0.13), the
+`bash.classify`, `budget.unpriced` (v0.9), `tools.allowlist.invalid` /
+`tools.denyArgPatterns.invalid` (v0.14), and the ten runtime `<key>.invalid` deny
+rules extending the same fail-closed-on-mutation pattern to the rest of the
+array/map-shaped config surface — `tools.denylist.invalid`,
+`content.denyPatterns.invalid`/`askPatterns.invalid`, `fs.deny.invalid`/
+`readScope.invalid`/`writeScope.invalid`, `net.allowDomains.invalid`,
+`bash.allow.invalid`/`denyPatterns.invalid`, `flags.invalid` (built, not yet
+released — v0.15)), the audit JSONL line format (incl. the
+`unpriced` phase, v0.9, the `annotate_malformed` phase, v0.13, and `aid` now
+redacted/byte-bounded like `reason`/`where`/`verdict` — built, not yet released,
+v0.15), the
 `gate.annotate` fact contract (`surface` must be an explicit boolean — v0.13), the
 budget file format, and the
 `humanChannel` event/decision contract (incl. the `event.classification`/`event.tier`
