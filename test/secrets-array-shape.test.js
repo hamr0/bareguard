@@ -70,22 +70,39 @@ test("secrets.patterns: a non-iterable value must not throw", () => {
 });
 
 test("secrets.envVars: a malformed value falls back to no extra env-var redaction, does not throw or corrupt", () => {
-  process.env.BAREGUARD_TEST_ENVVARS_SHAPE = "hunter2hunter2secretvalue";
+  // NOTE on why this needs a character-collision fixture: a "typical" multi-
+  // char string like `envVars: "MY_SECRET_VAR"` is a WEAK reproduction here —
+  // pre-fix, iterating its characters looks up `process.env['M']`,
+  // `process.env['Y']`, etc., and in any real environment those single-char
+  // lookups are already undefined, so the buggy char-iteration path and the
+  // fixed "malformed -> []" path produce IDENTICAL output by coincidence, not
+  // by design. That made an earlier version of this test pass even with the
+  // fix reverted (caught by re-diffing against the pre-fix source, not by
+  // reading the test). To make the two paths actually diverge, this uses a
+  // single-CHARACTER env var name that the malformed string's char-iteration
+  // would accidentally hit: pre-fix, `envVars: "QZ"` iterates to
+  // `process.env['Q']` (a real match here) and `process.env['Z']` (not set),
+  // so the pre-fix bug ACCIDENTALLY redacts a value the caller never actually
+  // named "Q" for. Post-fix, a malformed `envVars` is entirely ignored ([]),
+  // so that accidental match does not happen either — the value survives
+  // untouched, same as `envVars` being absent.
+  process.env.Q = "hunter2hunter2secretvalue1234567890"; // single-char name: the collision char-iteration hits
   try {
     assert.doesNotThrow(() => redact(
-      { a: "contains hunter2hunter2secretvalue here" },
-      { envVars: "BAREGUARD_TEST_ENVVARS_SHAPE" }, // string, not an array
+      { a: "contains hunter2hunter2secretvalue1234567890 here" },
+      { envVars: "QZ" }, // string, not an array; 'Q' collides with process.env.Q above
     ));
     const clean = redact(
-      { a: "contains hunter2hunter2secretvalue here" },
-      { envVars: "BAREGUARD_TEST_ENVVARS_SHAPE" },
+      { a: "contains hunter2hunter2secretvalue1234567890 here" },
+      { envVars: "QZ" },
     );
-    // envVars has no default set to fall back to; the assertion is that the
-    // malformed value is inert (no crash, no partial/garbled redaction) —
-    // other layers (key-aware walk, value patterns) still run unaffected.
-    assert.equal(clean.a, "contains hunter2hunter2secretvalue here");
+    // Load-bearing: post-fix, the malformed `envVars` must be inert — it must
+    // NOT accidentally redact via the 'Q' character the way pre-fix char-
+    // iteration did. envVars has no default set to fall back to, so "inert"
+    // here means byte-identical to the un-redacted input, not "still protected".
+    assert.equal(clean.a, "contains hunter2hunter2secretvalue1234567890 here");
   } finally {
-    delete process.env.BAREGUARD_TEST_ENVVARS_SHAPE;
+    delete process.env.Q;
   }
 });
 

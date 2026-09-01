@@ -29,15 +29,21 @@ import { netCheck } from "../src/primitives/net.js";
 import { bashCheck } from "../src/primitives/bash.js";
 import { flagsDenyCheck, flagsAskCheck } from "../src/primitives/flags.js";
 
-test("gate config: a non-object SECTION (not just a non-array leaf) must be rejected at construction", () => {
+// Before the #4 fix, `new Gate({ tools: "search", fs: "/etc" })` constructed
+// SUCCESSFULLY, and then `check({type:"wireMoney"})` /
+// `check({type:"read",path:"/etc/shadow"})` both came back
+// `rule:"default", outcome:"allow"` — full fail-open. Post-fix, construction
+// itself throws, so there is no longer any `Gate` instance to call `.check()`
+// on with this config; the throw at construction (with the specific message
+// below) IS the complete verification — there is no separate ".check() still
+// behaves" assertion possible once construction is the point of rejection.
+// (An earlier version of this file had a second, weaker test here that only
+// asserted `assert.throws(...)` with no message check on the same combined
+// config — pure duplicate coverage of this one, removed on review.)
+test("gate config: a non-object SECTION (not just a non-array leaf) must be rejected at construction, not silently fail open", () => {
   assert.throws(() => new Gate({ tools: "search", audit: { path: null } }), /tools must be a plain object/);
   assert.throws(() => new Gate({ fs: "/etc", audit: { path: null } }), /fs must be a plain object/);
-});
-
-test("gate config: a malformed tools section must not silently fail open to default-allow", async () => {
-  // Before the #4 fix this constructed successfully and both actions came
-  // back rule:"default", outcome:"allow" — the exact failure mode reported.
-  assert.throws(() => new Gate({ tools: "search", fs: "/etc", audit: { path: null } }));
+  assert.throws(() => new Gate({ tools: "search", fs: "/etc", audit: { path: null } }), /must be a plain object/);
 });
 
 test("gate config: bash.extraDestructive / extraSuperDestructive / axisB.reversible must be validated as array-shaped", () => {

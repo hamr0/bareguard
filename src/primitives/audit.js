@@ -43,6 +43,18 @@ const LINE_FIELDS = Object.freeze([
   // (tools `action.type`, fs `path`, net `url`/`host`, flags field values,
   // humanChannel `err.message`) and is unbounded at the source.
   Object.freeze({ key: "reason",  redactIf: (v) => typeof v === "string",              bound: "clip" }),
+  // `aid` is a per-eval correlation id (OQ4): minted internally as an 8-hex-char
+  // `randomUUID().slice(0,8)`, but a caller CAN override it — `record(action,
+  // result, { aid })` accepts a caller-supplied string with zero validation
+  // (gate.js) and stamps it onto the line unredacted/unbounded until this row
+  // existed. A `branch-review` finding, reproduced: a hostile `aid` (e.g.
+  // `"Bearer sk-liveSECRETtoken..."`) was written raw to disk at DEFAULT
+  // config — the exact backstop `secrets` exists to be. A normal generated
+  // aid (8 hex chars, far under FIELD_BYTE_CAP) is untouched by this: `clip`
+  // only trims at 200 bytes, and `redact()` returns the original reference
+  // when nothing matched (see secrets.js) — proven by execution, not assumed
+  // (test/audit-aid-redaction.test.js).
+  Object.freeze({ key: "aid",     redactIf: (v) => typeof v === "string",              bound: "clip" }),
   // Axis-B annotate lines carry reply-derived `where`/`verdict`/`meta`. These are
   // capped at the source by gate.annotate, but redaction runs AFTER that cap.
   Object.freeze({ key: "where",   redactIf: (v) => typeof v === "string",              bound: "clip" }),
@@ -283,13 +295,25 @@ export class Audit {
         // Last resort: keep every SCALAR field, drop the object payloads, but
         // re-derive a scalars-only `result`/`action.type` (below) so budget
         // accounting still sees this round.
-        // NOT REACHABLE by any input I could construct — every field that can
-        // carry caller data is bounded above, so collapsing action/result has
-        // always sufficed. It is kept as an unconditional backstop so the
-        // invariant "the persisted line is <= MAX_LINE_BYTES" holds by
-        // construction rather than by enumerating today's fields, which is the
-        // enumeration that failed twice (`verdict` in 0.13.0, `reason` here).
-        // No test kills this branch; that is a known gap, not a claim of cover.
+        // REACHABLE — corrected: a `branch-review` at HEAD e5e96ef reached this
+        // branch with an oversized `aid` (before `aid` was added to LINE_FIELDS,
+        // above, it was the one caller-controlled string on the line with no
+        // per-field bound, so an oversize `aid` alone forced collapse all the
+        // way down to here). Adding `aid` to LINE_FIELDS CLOSES that specific
+        // path — an oversized `aid` is now clipped to FIELD_BYTE_CAP in the
+        // per-field pass at the top of this block, before the wholesale
+        // collapse even runs, so it no longer reaches this backstop on its
+        // own (verified by execution). The backstop remains reachable by other
+        // means — e.g. many caller-supplied top-level scalar fields outside
+        // LINE_FIELDS, none of which is bounded on its own but whose COUNT is
+        // unbounded — and IS covered:
+        // test/audit-truncation-budget.test.js's "the scalar-only last-resort
+        // fallback must still preserve result spend + action.type" forces it
+        // and asserts on `_dropped`. It remains an unconditional backstop
+        // (rather than an enumeration of today's fields) so the invariant "the
+        // persisted line is <= MAX_LINE_BYTES" holds by construction — the
+        // enumeration approach is what silently missed `verdict` (0.13.0) and
+        // `reason`/`aid` (this branch) in the first place.
         // Deliberately generic rather than an allowlist of field names — a
         // hardcoded list silently drops any field added later, and the line's
         // routing/correlation fields (ts, seq, run_id, parent_run_id, aid,
