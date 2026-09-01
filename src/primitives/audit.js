@@ -9,7 +9,122 @@ import os from "node:os";
 import lockfile from "proper-lockfile";
 
 const MAX_LINE_BYTES = 3500; // safety margin under PIPE_BUF (4096 on Linux/macOS)
+const FIELD_BYTE_CAP = 200;  // per-field bound inside an oversize line
+
+/**
+ * The audit line's caller-controlled fields, declared ONCE. Both passes that
+ * touch them — redaction and the oversize re-bound — are driven from this table.
+ *
+ * Keeping two hand-written enumerations in sync is the bug this file has now
+ * shipped four times: `where`/`meta` re-bound but `verdict` missed (0.13.0, an
+ * 80-char verdict reached 63,669 bytes), then `verdict` covered but `reason`
+ * missed (60,408 bytes), then every VALUE bounded but the key COUNT unbounded
+ * (40,197 bytes), then every bound taken in UTF-16 units instead of bytes (611
+ * against a claimed 211). Four recurrences, one cause: a field could be added to
+ * one list and forgotten in the other. It cannot now — a field is one row, and
+ * redaction and bounding both read it.
+ *
+ * This coupling is not stylistic. Redaction EXPANDS text (`[REDACTED:…]` per
+ * match, compounding when a later pattern matches an earlier marker), so a field
+ * that is redacted but NOT re-bounded is precisely how the atomic-append
+ * guarantee breaks.
+ *
+ * `redactIf` is the field's existing presence test, kept per-row rather than
+ * generalized, so this table changes no behavior on the fields it replaces.
+ * `bound`: `perKey` walks the object's own values; `wholesale` replaces the
+ * whole object once it exceeds the cap; `clip` byte-truncates a string.
+ * @type {ReadonlyArray<{key:string,redactIf:(v:any)=>boolean,bound:"perKey"|"wholesale"|"clip"}>}
+ */
+const LINE_FIELDS = Object.freeze([
+  // `action`/`result` carry arbitrary caller payloads.
+  Object.freeze({ key: "action",  redactIf: (v) => Boolean(v),                         bound: "perKey" }),
+  Object.freeze({ key: "result",  redactIf: (v) => Boolean(v),                         bound: "perKey" }),
+  // `reason` echoes caller data from every rule that names what it denied
+  // (tools `action.type`, fs `path`, net `url`/`host`, flags field values,
+  // humanChannel `err.message`) and is unbounded at the source.
+  Object.freeze({ key: "reason",  redactIf: (v) => typeof v === "string",              bound: "clip" }),
+  // `aid` is a per-eval correlation id (OQ4): minted internally as an 8-hex-char
+  // `randomUUID().slice(0,8)`, but a caller CAN override it — `record(action,
+  // result, { aid })` accepts a caller-supplied string with zero validation
+  // (gate.js) and stamps it onto the line unredacted/unbounded until this row
+  // existed. A `branch-review` finding, reproduced: a hostile `aid` (e.g.
+  // `"Bearer sk-liveSECRETtoken..."`) was written raw to disk at DEFAULT
+  // config — the exact backstop `secrets` exists to be. A normal generated
+  // aid (8 hex chars, far under FIELD_BYTE_CAP) is untouched by this: `clip`
+  // only trims at 200 bytes, and `redact()` returns the original reference
+  // when nothing matched (see secrets.js) — proven by execution, not assumed
+  // (test/audit-aid-redaction.test.js).
+  Object.freeze({ key: "aid",     redactIf: (v) => typeof v === "string",              bound: "clip" }),
+  // Axis-B annotate lines carry reply-derived `where`/`verdict`/`meta`. These are
+  // capped at the source by gate.annotate, but redaction runs AFTER that cap.
+  Object.freeze({ key: "where",   redactIf: (v) => typeof v === "string",              bound: "clip" }),
+  Object.freeze({ key: "verdict", redactIf: (v) => typeof v === "string",              bound: "clip" }),
+  Object.freeze({ key: "meta",    redactIf: (v) => v != null && typeof v === "object", bound: "wholesale" }),
+]);
+
+/** Keys whose object payload collapses wholesale when the LINE is still oversize. */
+const PAYLOAD_KEYS = Object.freeze(LINE_FIELDS.filter((f) => f.bound === "perKey").map((f) => f.key));
+
+/**
+ * Bound one object's own values in place on a copy: a nested object over the cap
+ * becomes a size marker, a string is byte-clipped. Shared by `action` and
+ * `result` — they were two near-identical loops that had drifted (`result` never
+ * bounded its nested objects), which is the same divergence-by-hand this table
+ * exists to remove.
+ * @param {object} obj object to bound
+ * @returns {object} a bounded copy
+ */
+function boundOwnValues(obj) {
+  const out = { ...obj };
+  for (const k of Object.keys(out)) {
+    const v = out[k];
+    if (v !== null && typeof v === "object") {
+      const bytes = Buffer.byteLength(JSON.stringify(v), "utf8");
+      if (bytes > FIELD_BYTE_CAP) out[k] = `[TRUNCATED:${bytes} bytes]`;
+    } else if (typeof v === "string") {
+      out[k] = clipBytes(v, FIELD_BYTE_CAP);
+    }
+  }
+  return out;
+}
 const NEEDS_LOCK = process.platform === "win32";
+
+/**
+ * Truncate a string to at most `max` UTF-8 BYTES, appending a marker if it was
+ * cut. Every bound in the oversize-truncation block is a BYTE bound — the line
+ * cap it feeds is measured in bytes because POSIX `PIPE_BUF` is — but the block
+ * used `String.prototype.slice`, which counts UTF-16 code units. A 200-unit
+ * slice of CJK is 600 bytes and of astral emoji 400: measured, a `reason` of
+ * 5000 CJK characters persisted at 611 bytes against a claimed 211-byte bound,
+ * 2.9x over. `result` was worse still — its guard read `.length > 200`, a code-
+ * unit COUNT, so a 200-character CJK value (600 bytes) was not truncated at all.
+ * Neither breached `MAX_LINE_BYTES` on its own, because the wholesale-collapse
+ * stage below re-bounds the line regardless; but the per-field guarantee the
+ * code and CHANGELOG stated was false, and the margin it was silently eating is
+ * the margin the next forgotten field will need.
+ * @param {string} s value to bound
+ * @param {number} max maximum UTF-8 bytes to keep before the marker
+ * @returns {string} `s` unchanged if it already fits, else a byte-clipped prefix + `[TRUNCATED]`
+ */
+function clipBytes(s, max) {
+  // A non-positive cap is nonsense, and silently wrong rather than loudly wrong:
+  // `s.slice(0, -5)` means "drop the last 5 characters", not "keep none", so a
+  // negative cap would return nearly the whole string while claiming a bound.
+  // Unreachable today (every caller passes a fixed positive constant), kept so
+  // making the cap configurable later cannot turn into a bypass.
+  if (max <= 0) return "[TRUNCATED]";
+  if (Buffer.byteLength(s, "utf8") <= max) return s;
+  // Slice to `max` CODE UNITS first: every code unit costs at least one byte, so
+  // the first `max` bytes always live inside the first `max` units. That keeps
+  // the copy bounded by `max` instead of by the length of a hostile input
+  // (measured over a 150 KB value: 0.201 ms/call before, 0.040 ms after).
+  let out = Buffer.from(s.slice(0, max), "utf8").subarray(0, max).toString("utf8");
+  // subarray can land mid-sequence; the decoder turns the partial tail into a
+  // single U+FFFD, which costs 3 bytes and can push `out` back over `max`.
+  // Only the tail can split, so dropping one code unit is always enough.
+  if (Buffer.byteLength(out, "utf8") > max) out = out.slice(0, -1);
+  return out + "[TRUNCATED]";
+}
 
 /**
  * Resolve the default audit file path: XDG_STATE_HOME, then ~/.local/state, then cwd.
@@ -86,19 +201,9 @@ export class Audit {
       ...fields,
     };
     if (this._redact) {
-      if (line.action) line.action = this._redact(line.action);
-      if (line.result) line.result = this._redact(line.result);
-      // reason strings can echo action-derived data (e.g. net.invalidUrl puts
-      // the full URL in the reason), so redact them too.
-      if (typeof line.reason === "string") line.reason = this._redact(line.reason);
-      // Axis-B annotate lines carry reply-derived `where`/`verdict`/`meta`
-      // (gate.annotate); redact them too so the persisted log keeps the "no raw
-      // secrets" guarantee. `verdict` is a free-text field the caller's judge
-      // writes — it was missed by the 0.7.0 pass that covered `where`/`meta`, so a
-      // judge echoing a key into its verdict wrote it to the shared audit file raw.
-      if (typeof line.where === "string") line.where = this._redact(line.where);
-      if (typeof line.verdict === "string") line.verdict = this._redact(line.verdict);
-      if (line.meta != null && typeof line.meta === "object") line.meta = this._redact(line.meta);
+      for (const { key, redactIf } of LINE_FIELDS) {
+        if (redactIf(line[key])) line[key] = this._redact(line[key]);
+      }
     }
     const { filePath } = this;
     if (filePath === null) {
@@ -109,51 +214,138 @@ export class Audit {
     }
     let serialized = JSON.stringify(line) + "\n";
     if (Buffer.byteLength(serialized, "utf8") > MAX_LINE_BYTES) {
-      // Truncate all large action fields and result strings to keep the line
-      // atomic on POSIX FS (PIPE_BUF). Tag root with _truncated:true so
+      // Re-bound every field that can carry caller-controlled or redaction-
+      // expanded text — action, result, where, verdict, reason, meta — to keep
+      // the line atomic on POSIX FS (PIPE_BUF). Tag root with _truncated:true so
       // downstream consumers can filter without inspecting string contents.
+      // INVARIANT: any field added to the redactor must ALSO be re-bounded here;
+      // omitting one silently reopens the atomicity hole (0.13.0 `verdict`,
+      // and `reason`, were each found that way).
       const truncated = { ...line, _truncated: true };
-      if (truncated.action) {
-        const newAction = { ...truncated.action };
-        for (const k of Object.keys(newAction)) {
-          const v = newAction[k];
-          if (v !== null && typeof v === "object") {
-            const bytes = Buffer.byteLength(JSON.stringify(v), "utf8");
-            if (bytes > 200) newAction[k] = `[TRUNCATED:${bytes} bytes]`;
-          } else if (typeof v === "string" && Buffer.byteLength(v, "utf8") > 200) {
-            newAction[k] = v.slice(0, 200) + "[TRUNCATED]";
-          }
+      for (const { key, bound } of LINE_FIELDS) {
+        const v = truncated[key];
+        if (bound === "clip") {
+          if (typeof v === "string") truncated[key] = clipBytes(v, FIELD_BYTE_CAP);
+        } else if (bound === "perKey") {
+          // `boundOwnValues` spreads its argument's own keys; a truthy STRING
+          // spreads into a char-indexed object (`{0:'o',1:'k'}`), corrupting a
+          // scalar `action`/`result` into an object — the same class the
+          // `wholesale` arm already guards against two lines below.
+          if (v != null && typeof v === "object") truncated[key] = boundOwnValues(v);
+        } else if (v != null && typeof v === "object") { // wholesale
+          const bytes = Buffer.byteLength(JSON.stringify(v), "utf8");
+          if (bytes > FIELD_BYTE_CAP) truncated[key] = { _truncated: true, bytes };
         }
-        truncated.action = newAction;
-      }
-      if (truncated.result) {
-        truncated.result = { ...truncated.result };
-        for (const k of Object.keys(truncated.result)) {
-          if (typeof truncated.result[k] === "string" && truncated.result[k].length > 200) {
-            truncated.result[k] = truncated.result[k].slice(0, 200) + "[TRUNCATED]";
-          }
-        }
-      }
-      // Axis-B annotate lines carry `where`/`meta`. They are size-bounded at the
-      // source (gate.annotate), but redaction runs AFTER that bound and can EXPAND
-      // a field ([REDACTED:...] per match), so re-bound them here like result —
-      // otherwise the atomicity guarantee leaks for secret-heavy reply text.
-      if (typeof truncated.where === "string" && Buffer.byteLength(truncated.where, "utf8") > 200) {
-        truncated.where = truncated.where.slice(0, 200) + "[TRUNCATED]";
-      }
-      // `verdict` is redacted too, so it expands too, so it must be re-bounded too.
-      // Adding a field to the redactor without adding it here reopens the atomicity
-      // hole: redaction runs pattern-by-pattern over ALREADY-redacted text, so a
-      // later pattern matching the `[REDACTED:…]` marker an earlier one inserted
-      // compounds (measured: an 80-char verdict reached 63 KB across 5 patterns).
-      if (typeof truncated.verdict === "string" && Buffer.byteLength(truncated.verdict, "utf8") > 200) {
-        truncated.verdict = truncated.verdict.slice(0, 200) + "[TRUNCATED]";
-      }
-      if (truncated.meta != null && typeof truncated.meta === "object") {
-        const bytes = Buffer.byteLength(JSON.stringify(truncated.meta), "utf8");
-        if (bytes > 200) truncated.meta = { _truncated: true, bytes };
       }
       serialized = JSON.stringify(truncated) + "\n";
+
+      // THE LINE BOUND. Everything above is PER FIELD, and a per-field bound is
+      // not a line bound: `action`/`result` cap each VALUE at 200 bytes but
+      // never the key COUNT, so 200 keys of 190 bytes passed every check above
+      // and still produced a 40,197-byte line stamped `_truncated: true`.
+      // `meta` was never vulnerable because it collapses the WHOLE object once
+      // its total exceeds 200 — that is the shape the guarantee actually needs.
+      // The promise is about the LINE, so it is enforced on the line: collapse
+      // the payload wholesale, then, if even that does not fit, keep only the
+      // fields a consumer needs to route and correlate the entry.
+      if (Buffer.byteLength(serialized, "utf8") > MAX_LINE_BYTES) {
+        // Largest-first, stop-when-it-fits: collapsing is destructive (it is the
+        // step that drops `result.costUsd`/`.tokens`/`.pricing`/`.counts`, the
+        // exact fields the cold-start budget rebuild needs), so it must not fire
+        // on a field that was never the reason the line is oversize. A 29-byte
+        // `result` collapsed alongside an oversize `action` used to zero a live
+        // $0.50 round to $0.00 on restart for no reason — the cap-under-count is
+        // a bypass, not a rounding error.
+        const candidates = PAYLOAD_KEYS
+          .filter((k) => truncated[k] != null && typeof truncated[k] === "object")
+          .map((k) => ({ k, bytes: Buffer.byteLength(JSON.stringify(truncated[k]), "utf8") }))
+          .sort((a, b) => b.bytes - a.bytes);
+        for (const { k, bytes } of candidates) {
+          const src = truncated[k];
+          const collapsed = { _truncated: true, bytes };
+          // `type` survives the collapse. It is not cosmetic: the cold-start
+          // budget rebuild classifies a historical round with
+          // `l.action.type !== "llm"`, so dropping it turns a collapsed llm
+          // round into `undefined !== "llm"` — a TOOL round. That is the live-
+          // vs-rebuilt divergence 0.9.0 closed by construction (sanitizeSpend),
+          // reopened on the toolRounds dimension by this very backstop. It
+          // over-counts, so it fails safe, but the two paths must not disagree.
+          // Bounded by BYTES, not UTF-16 units, because it is caller-controlled
+          // and the whole point of this branch is a byte budget.
+          if (typeof src.type === "string") {
+            collapsed.type = clipBytes(src.type, 120);
+          }
+          // Budget-critical scalars survive the collapse too, for the same
+          // reason `type` does: `sanitizeSpend` (shared by live `record()` and
+          // `_rebuildBudgetFromAudit`) reads exactly these off `result`. Losing
+          // them here means a cold-start rebuild silently under-counts a round
+          // that genuinely cost money — a cap bypass that fails OPEN.
+          if (Number.isFinite(src.costUsd)) collapsed.costUsd = src.costUsd;
+          if (Number.isFinite(src.tokens)) collapsed.tokens = src.tokens;
+          if (typeof src.pricing === "string") collapsed.pricing = clipBytes(src.pricing, 32);
+          if (src.counts && typeof src.counts === "object") {
+            collapsed.counts = boundOwnValues(src.counts);
+          }
+          truncated[k] = collapsed;
+          serialized = JSON.stringify(truncated) + "\n";
+          if (Buffer.byteLength(serialized, "utf8") <= MAX_LINE_BYTES) break;
+        }
+      }
+      if (Buffer.byteLength(serialized, "utf8") > MAX_LINE_BYTES) {
+        // Last resort: keep every SCALAR field, drop the object payloads, but
+        // re-derive a scalars-only `result`/`action.type` (below) so budget
+        // accounting still sees this round.
+        // REACHABLE — corrected: a `branch-review` at HEAD e5e96ef reached this
+        // branch with an oversized `aid` (before `aid` was added to LINE_FIELDS,
+        // above, it was the one caller-controlled string on the line with no
+        // per-field bound, so an oversize `aid` alone forced collapse all the
+        // way down to here). Adding `aid` to LINE_FIELDS CLOSES that specific
+        // path — an oversized `aid` is now clipped to FIELD_BYTE_CAP in the
+        // per-field pass at the top of this block, before the wholesale
+        // collapse even runs, so it no longer reaches this backstop on its
+        // own (verified by execution). The backstop remains reachable by other
+        // means — e.g. many caller-supplied top-level scalar fields outside
+        // LINE_FIELDS, none of which is bounded on its own but whose COUNT is
+        // unbounded — and IS covered:
+        // test/audit-truncation-budget.test.js's "the scalar-only last-resort
+        // fallback must still preserve result spend + action.type" forces it
+        // and asserts on `_dropped`. It remains an unconditional backstop
+        // (rather than an enumeration of today's fields) so the invariant "the
+        // persisted line is <= MAX_LINE_BYTES" holds by construction — the
+        // enumeration approach is what silently missed `verdict` (0.13.0) and
+        // `reason`/`aid` (this branch) in the first place.
+        // Deliberately generic rather than an allowlist of field names — a
+        // hardcoded list silently drops any field added later, and the line's
+        // routing/correlation fields (ts, seq, run_id, parent_run_id, aid,
+        // phase, decision, severity, rule) are all scalars by construction.
+        const minimal = {};
+        for (const [k, v] of Object.entries(truncated)) {
+          if (v === null || typeof v !== "object") {
+            minimal[k] = typeof v === "string" ? clipBytes(v, 120) : v;
+          }
+        }
+        // Even the scalar-only backstop must not zero out a round's spend: the
+        // cold-start rebuild gates on `phase === "record" && result` and reads
+        // `action.type` for the toolRounds count, so dropping both objects
+        // outright silently under-counts a round that genuinely cost money — a
+        // cap bypass that fails OPEN on restart. These re-derived carriers are
+        // scalars-only by construction, so they can never be the reason a line
+        // is still oversize.
+        if (truncated.result && typeof truncated.result === "object") {
+          const r = truncated.result;
+          const rr = {};
+          if (Number.isFinite(r.costUsd)) rr.costUsd = r.costUsd;
+          if (Number.isFinite(r.tokens)) rr.tokens = r.tokens;
+          if (typeof r.pricing === "string") rr.pricing = clipBytes(r.pricing, 32);
+          if (Object.keys(rr).length) minimal.result = rr;
+        }
+        if (truncated.action && typeof truncated.action === "object" && typeof truncated.action.type === "string") {
+          minimal.action = { type: clipBytes(truncated.action.type, 120) };
+        }
+        minimal._truncated = true;
+        minimal._dropped = "line exceeded MAX_LINE_BYTES after field truncation";
+        serialized = JSON.stringify(minimal) + "\n";
+      }
     }
     if (NEEDS_LOCK) {
       // Windows: O_APPEND cross-process atomicity not guaranteed.

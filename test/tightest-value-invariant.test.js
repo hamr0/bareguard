@@ -173,3 +173,40 @@ test("additive-extend defaults: `[]` extends by nothing and cannot disable a shi
   assert.equal(classifyCommand("rm -rf /", { extraDestructive: [], extraSuperDestructive: [] }),
     "super_destructive", "extra* [] must extend by nothing, not replace the tiers");
 });
+
+test("tools.allowlist: a present-but-unusable value is denied, never waved through and never thrown", async () => {
+  // The `[]` fix closed the empty case, but the guard was `!cfg.allowlist`, so
+  // JS falsiness swallowed four more present values — a config-templating bug
+  // producing `allowlist: ""` (an unset env var joined into a string, a falsy
+  // default from a config loader) read as "unconfigured" and fell through to
+  // default ALLOW. A truthy non-array threw `globs.some is not a function`
+  // instead of denying. Same shape as fs.invalidPath / net.invalidUrl /
+  // bash.invalidCmd: present-but-wrong-type is denied, not waved through.
+  // The constructor now rejects a non-array outright (see
+  // test/config-shape-validation.test.js), so the runtime arm is reached the
+  // one way it still can be: `Gate` holds `this.cfg = config` BY REFERENCE, so
+  // a caller can swap the value out after construction. That is why this arm
+  // stays — it is defence-in-depth, not dead code.
+  for (const bad of ["", 0, false, NaN, "search", {}, new Set(["wireMoney"]), 42]) {
+    const cfg = { tools: { allowlist: ["nothing"] } };
+    const gate = new Gate(cfg);
+    cfg.tools.allowlist = bad;
+    const d = await gate.check({ type: "wireMoney" });
+    assert.equal(d.outcome, "deny",
+      `allowlist: ${JSON.stringify(bad) ?? String(bad)} must deny, got ${d.outcome} (rule ${d.rule})`);
+    assert.equal(d.rule, "tools.allowlist.invalid");
+  }
+
+  // absent and null remain "scope not configured" — the ONE loose reading kept,
+  // and both still construct (the constructor skips them, it does not reject)
+  for (const absent of [undefined, null]) {
+    const d = await new Gate({ tools: { allowlist: absent } }).check({ type: "wireMoney" });
+    assert.equal(d.outcome, "allow", `allowlist: ${absent} must stay unconfigured`);
+  }
+
+  // and a real allowlist is untouched — the guard must not over-block
+  assert.equal((await new Gate({ tools: { allowlist: ["wireMoney"] } }).check({ type: "wireMoney" })).outcome, "allow");
+  assert.equal((await new Gate({ tools: { allowlist: ["*"] } }).check({ type: "wireMoney" })).outcome, "allow");
+  assert.equal((await new Gate({ tools: { allowlist: ["zzz"] } }).check({ type: "wireMoney" })).rule, "tools.allowlist.exclusive");
+  assert.equal((await new Gate({ tools: { allowlist: [] } }).check({ type: "wireMoney" })).rule, "tools.allowlist.exclusive");
+});

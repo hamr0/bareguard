@@ -213,12 +213,10 @@ export {};
  * @typedef {object} ToolsConfig
  * @property {string[]} [allowlist]  Scope-only: set + match → allow, set + miss
  *   → deny. Does not silence asks. An EMPTY array counts as set: `[]` is a scope
- *   of nothing and denies every action. (Changed — breaking, UNRELEASED: `[]`
+ *   of nothing and denies every action. (Changed — breaking, v0.14.0: `[]`
  *   previously fell through to default allow. If you passed `[]` for allow-all,
- *   delete the key instead.) Pass an array or omit the key: any other FALSY value
- *   (`null`, `""`, `0`, `false`) is read as unconfigured and leaves scope open,
- *   and a non-array truthy value throws. Both are long-standing behavior, not
- *   part of this change.
+ *   delete the key instead.) Only `undefined`/`null` leave scope unconfigured;
+ *   any other non-array value denies with rule `tools.allowlist.invalid`.
  * @property {string[]} [denylist]
  * @property {Object.<string, RegExp[]>} [denyArgPatterns]  Keyed by tool name.
  */

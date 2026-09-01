@@ -59,7 +59,7 @@
   NO-GO list, §19 for the release history + the 1.0 HOLD.
 - **Part 2 (the harness, design):** start at §0/§3 for the two-axis frame. Axis A is
   Part 1 sharpened (**built & released**); Axis B (`gate.annotate`, §8.2) is the one
-  genuinely new surface (**built, Unreleased**); the floor is user-authored and the
+  genuinely new surface (**built & released — 0.7.0**); the floor is user-authored and the
   agent never re-authors it (the security boundary). §9 is the POC evidence.
 
 ---
@@ -298,7 +298,8 @@ THE 6 STEPS (first match wins; 2b/4b are co-located arms of step 13 `flags`):
   4. content.askPatterns            → askHuman (action; resolved via humanChannel)
   4b. flags ask                     → askHuman (action; action[field] value maps to "ask")
   5. tools.allowlist enforcement    → set+match: allow; set+miss: deny (rule: tools.allowlist.exclusive)
-     (set to [] = scope of nothing = deny all; only an ABSENT key skips this step)
+     (set to [] = scope of nothing = deny all; a non-array denies via tools.allowlist.invalid;
+      only an ABSENT/null key skips this step)
   6. default                        → allow (rule: "default")
 ```
 
@@ -317,10 +318,17 @@ v0.4 of this PRD made allowlist short-circuit ask ("explicit listing =
 explicit consent"). v0.6 reverses that. Allowlist now means **only "which
 tools can be invoked at all":**
 
-- **Unset (key absent):** no effect; flow continues to step 6 (default allow).
+- **Unset (`undefined`/`null`):** no effect; flow continues to step 6 (default allow).
 - **Empty (`[]`):** a configured scope of *nothing* — every action is denied
   (rule: `tools.allowlist.exclusive`). `[]` is NOT "unset". (Changed — breaking,
-  UNRELEASED; previously `[]` was folded into unset and fell through to allow.)
+  v0.14; previously `[]` was folded into unset and fell through to allow.)
+- **Present but not an array** (`""`, `0`, `false`, `NaN`, a string, an object):
+  denied (rule: `tools.allowlist.invalid`), same as `fs.invalidPath` /
+  `net.invalidUrl` / `bash.invalidCmd`. `tools.denyArgPatterns.<tool>` is guarded
+  the same way (rule: `tools.denyArgPatterns.invalid`) — a deny rule the gate
+  cannot evaluate fails closed. Both are reachable only by mutating the config
+  after construction; the constructor rejects these shapes outright. Previously the falsy ones read as unset
+  and fell through to allow, and the truthy ones threw out of the gate.
 - **Set with one or more entries:**
   - tool name matches → `allow` (rule: `tools.allowlist`).
   - tool name does not match → `deny` (rule: `tools.allowlist.exclusive`).
@@ -1029,9 +1037,12 @@ done — locking before the bench run is the one scenario that risks an early 2.
 
 **Last-call breaking-change review (open items, decide before lock):**
 - ~~**Empty `tools.allowlist` fails OPEN**~~ — **DECIDED: flip to fail-closed
-  (breaking; built on `fix/empty-allowlist-fails-closed`, UNRELEASED).** `[]` is now a
-  configured scope of nothing → step 5 runs → `tools.allowlist.exclusive` deny. Only an
-  ABSENT key means not-configured. Rationale: the tightest expressible scope produced
+  (breaking; built on `fix/empty-allowlist-fails-closed`, v0.14).** `[]` is now a
+  configured scope of nothing → step 5 runs → `tools.allowlist.exclusive` deny. Only
+  `undefined`/`null` means not-configured; any other non-array value denies via
+  `tools.allowlist.invalid` (a follow-up on `fix/audit-reason-rebound`, also
+  v0.14 — the original `!cfg.allowlist` guard still let `""`/`0`/`false`/`NaN`
+  read as absent and fail OPEN, and let a truthy non-array throw). Rationale: the tightest expressible scope produced
   the loosest outcome, silently, and every sibling scope primitive (`net.allowDomains`,
   `fs.readScope`/`writeScope`, `bash.allow`) already denied on `[]` — `tools` was the
   sole outlier (measured). Throw-on-construct was rejected: a deny is in-band agent
@@ -1050,8 +1061,17 @@ done — locking before the bench run is the one scenario that risks an early 2.
 `bash.reclassify`/`bash.platform`, and `budget.failClosedOnUnpriced` (v0.9)), the
 `Result.pricing` field (v0.9), **rule strings** (adopters and the seam contract test
 match on them — incl. `flags.<field>`, now live in litectx's write-gate seam,
-`bash.classify`, and `budget.unpriced` (v0.9)), the audit JSONL line format (incl. the
-`unpriced` phase, v0.9, and the `annotate_malformed` phase, v0.13), the
+`bash.classify`, `budget.unpriced` (v0.9), `tools.allowlist.invalid` /
+`tools.denyArgPatterns.invalid` (v0.14), and the ten runtime `<key>.invalid` deny
+rules extending the same fail-closed-on-mutation pattern to the rest of the
+array/map-shaped config surface — `tools.denylist.invalid`,
+`content.denyPatterns.invalid`/`askPatterns.invalid`, `fs.deny.invalid`/
+`readScope.invalid`/`writeScope.invalid`, `net.allowDomains.invalid`,
+`bash.allow.invalid`/`denyPatterns.invalid`, `flags.invalid` (built, not yet
+released — v0.15)), the audit JSONL line format (incl. the
+`unpriced` phase, v0.9, the `annotate_malformed` phase, v0.13, and `aid` now
+redacted/byte-bounded like `reason`/`where`/`verdict` — built, not yet released,
+v0.15), the
 `gate.annotate` fact contract (`surface` must be an explicit boolean — v0.13), the
 budget file format, and the
 `humanChannel` event/decision contract (incl. the `event.classification`/`event.tier`
@@ -1100,12 +1120,12 @@ PROPOSED 2026-06-09; Part 2 OQ3).** Two additive extensions to the shipped `Budg
 resources (sends, rows, bytes) via a cap-map over the same mechanism; (2) a
 soft-threshold `warn` decision (e.g. at 80% of cap) ahead of the existing hard halt.
 
-- *Status:* **IMPLEMENTED (Unreleased).** `budget.resources` (cap-map, halt rule `budget.resource.<name>`,
+- *Status:* **IMPLEMENTED — released in 0.7.0.** `budget.resources` (cap-map, halt rule `budget.resource.<name>`,
   accrued from `result.counts`) + `budget.softRatio` (non-blocking `budget_warn` audit line, never
   routed through `check()`). File format → v2 with v1 read-compat; counts hardened to positive-only for
   configured resources. The **operator** is the driver (cap/monitor non-money resources). The settling
   question below was answered as scoped: post-fact halt kept; `strict`-default-for-money stays a separate
-  call. See CHANGELOG [Unreleased] + `budget-resources.test.js`. *Originally PROPOSED — earned by POC evidence:* The harness
+  call. See CHANGELOG [0.7.0] + `budget-resources.test.js`. *Originally PROPOSED — earned by POC evidence:* The harness
   POC gate E3 (`harness-code-mode/run-e3.mjs`) proved empirically that the cumulative
   tier is the real wall (a per-action regex is decomposable: €200+€200 walked past a
   `>€300` ask; `budget.maxCostUsd: 300` halted the same split) — but E3 had to model €
@@ -1128,10 +1148,10 @@ the gated request and its result together (or deterministically joinable) so
 ask-vs-outcome reconciliation is reconstructable from the log without re-stitching
 JSONL phases.
 
-- *Status:* **IMPLEMENTED (Unreleased).** A per-eval correlation id (`aid`): minted in `check()`, stamped on
+- *Status:* **IMPLEMENTED — released in 0.7.0.** A per-eval correlation id (`aid`): minted in `check()`, stamped on
   every audit line of the eval, returned on the decision, and threaded to the `record` line by `run()` (or
   by the compose seam via `decision.aid` → `record(action, result, { aid })`). Joins even byte-identical
-  repeats — the ambiguous case below. See CHANGELOG [Unreleased] + `audit-correlation.test.js`. *Originally
+  repeats — the ambiguous case below. See CHANGELOG [0.7.0] + `audit-correlation.test.js`. *Originally
   PROPOSED — mechanic shown:* The harness POC gate E2
   proved the value of an independent return-side fact at the approval moment
   (detect-and-feed-A); a2a §12.2 is the evidentiary base ("log the request alongside
@@ -1546,8 +1566,8 @@ The PRD describes a design; most of it already ships. Map of every surface to it
 |---|---|---|
 | **Axis A** | gate the action by shape — the floor: `Gate` (deny/ask + closed allowlist), cumulative `Budget`, `audit`, `redact` | **BUILT & RELEASED — bareguard 0.6.0 (npm).** Axis A is not a thing to build; it *is* the shipped library. The harness POC (E1/E3/E4/E5, §9.2) proved these existing primitives *compose* into the harness pattern with `src/` untouched. |
 | **Write-gate seam / `flags`** | structured field-value gate for a memory adopter's verdict (`provenance`/`injectionRisk`) — the litectx write-gate seam (§5B) | **BUILT & SEAM CLOSED (2026-06-13/14).** First `src/` change since the HOLD: the `flags` primitive (deny@2b / ask@4b, floor supremacy). `seam-contract.test.js` now runs against litectx's real published emitter (`litectx@^0.13.0` devDependency). Additive/backward-compatible; HOLD at 0.5.x unaffected. Seam live, regression-guarded every release — nothing further owed on it. |
-| **Axis B** | reconcile the return vs a per-request declared constraint | **BUILT 2026-06-15 (Unreleased) — the only genuinely-new bareguard surface (§8). #2 resolved = thin primitive `gate.annotate` (§8.2); routing §6.6; boundary §6.8.** E2 proved the runner mechanic; **E6 (§9.2.6) validated the return-time judge end-to-end** under drift (decisive `honored`/`broke`, E6i 7/7). `gate.annotate` ships buffer + route + sinks in `src/` (11 tests, mutation-verified, suite 178); the judge stays caller-side, bareguard never runs an LLM. OQ1 (the operator set) freezes on the first real consumer; injection on a sub-haiku model is the one deferred pre-deploy gate. |
-| **OQ3** | generalize `Budget`'s cumulative count to sends/rows/bytes + soft/hard tiers | **BUILT 2026-06-14 (Unreleased).** `budget.resources` cap-map (halt `budget.resource.<name>`, accrued from `result.counts`) + `budget.softRatio` non-blocking `budget_warn`; v2 file w/ v1 read-compat. Operator is the adopter. Part 1 §19 status → IMPLEMENTED. |
+| **Axis B** | reconcile the return vs a per-request declared constraint | **BUILT 2026-06-15, RELEASED in 0.7.0 — the only genuinely-new bareguard surface (§8). #2 resolved = thin primitive `gate.annotate` (§8.2); routing §6.6; boundary §6.8.** E2 proved the runner mechanic; **E6 (§9.2.6) validated the return-time judge end-to-end** under drift (decisive `honored`/`broke`, E6i 7/7). `gate.annotate` ships buffer + route + sinks in `src/` (11 tests, mutation-verified, suite 178); the judge stays caller-side, bareguard never runs an LLM. OQ1 (the operator set) freezes on the first real consumer; injection on a sub-haiku model is the one deferred pre-deploy gate. |
+| **OQ3** | generalize `Budget`'s cumulative count to sends/rows/bytes + soft/hard tiers | **BUILT 2026-06-14, RELEASED in 0.7.0.** `budget.resources` cap-map (halt `budget.resource.<name>`, accrued from `result.counts`) + `budget.softRatio` non-blocking `budget_warn`; v2 file w/ v1 read-compat. Operator is the adopter. Part 1 §19 status → IMPLEMENTED. |
 | **OQ4** | audit shape: log request + return together | **EXTENSION, demand-gated (§10). PROPOSED into Part 1 §19 (2026-06-09)** — gate/record lines share no per-action id; content-join goes ambiguous under repetition. |
 | **SF-9** | destructive-action classifier for the Software Factory's Ship gate | **A Factory-driven Axis-A *config* (a `shape → ask` rule), not a new axis.** Built when the Factory needs it (§9.3.0). |
 
@@ -1766,7 +1786,7 @@ for safety.** This is what keeps agent self-selection safe despite M1: selecting
   note that off-catalog refusal is a resolver concern, not a scope trick (the
   resolver refuses to BUILD a gate, which is louder than one denying every action
   in turn). The empty-allowlist foot-gun this bullet originally cited is gone —
-  `[]` fails CLOSED as of the UNRELEASED empty-allowlist fix. **All samples verified by execution** against
+  `[]` fails CLOSED as of the v0.14 empty-allowlist fix. **All samples verified by execution** against
   the shipped `Gate` (2026-06-09: E4 re-run + 9 assertions — rules fire exactly as
   documented; the Axis-B fact reaches the human event verbatim).
 - ❌ A library of **agent-authored harnesses promoted to reusable** without a vetting
@@ -2267,7 +2287,7 @@ omission (the symbol you never `impact()`'d). (4) **No demand** — plausible, u
 
 ## 8.2 Build spec — `gate.annotate` — **IMPLEMENTED 2026-06-15** (design measured by E6)
 
-> **Status: BUILT & verified (Unreleased).** Shipped in `src/gate.js` (`annotate()` /
+> **Status: BUILT & verified — released in 0.7.0.** Shipped in `src/gate.js` (`annotate()` /
 > `drainAnnotations()` / exported `routeAnnotation()`), `src/types.js` (`Annotation`,
 > `AxisBConfig`, `axisB` on `GateConfig`, `annotations` on `HumanEvent`), exported from
 > `src/index.js`. Covered by `test/axis-b-annotate.test.js` (the §8.2.4 set + 3 security
@@ -2736,7 +2756,7 @@ any driver). See §0.1.1.
   - **PROPOSED into the stable spec (2026-06-09):** recorded as a future-feature
     candidate in Part 1 §19 with the E3 evidence. Still demand-gated —
     proposing ≠ building.
-  - **BUILT 2026-06-14 (Unreleased).** The demand gate was met by the *operator* (cap/monitor
+  - **BUILT 2026-06-14, RELEASED in 0.7.0.** The demand gate was met by the *operator* (cap/monitor
     runaway `memory.write`s, a 10k-row export — *limits for agents beyond money*). Shipped the
     additive extension this DECISION scoped: `budget.resources` named-resource cumulative counter
     (halt `budget.resource.<name>`, accrued from `result.counts`) + `budget.softRatio` non-blocking
@@ -2748,7 +2768,7 @@ any driver). See §0.1.1.
   - **PROPOSED into the stable spec (2026-06-09):** recorded as a future-feature
     candidate in Part 1 §19. Still demand-gated; must not wait for or
     assume Axis B.
-  - **BUILT 2026-06-14 (Unreleased), with OQ3.** Per-eval correlation id (`aid`): minted in
+  - **BUILT 2026-06-14, RELEASED in 0.7.0, with OQ3.** Per-eval correlation id (`aid`): minted in
     `check()`, on every audit line, returned on the decision, threaded to `record` by `run()` (or
     via `decision.aid` for the compose seam). Joins even byte-identical repeats. Axis B not assumed.
     Part 1 §19 → IMPLEMENTED; `audit-correlation.test.js`.

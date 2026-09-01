@@ -205,12 +205,165 @@ function boundMeta(meta) {
  * terminal allow/deny decisions. See README.md and bareguard.context.md for
  * wiring recipes.
  */
+
+/**
+ * Config keys that MUST be arrays when present. A non-array in any of them was
+ * never validated, and produced four different silent wrongs: a replaced
+ * safe-default deny floor (fail OPEN), a string iterated per-character so one
+ * entry matched everything (deny ALL), a throw out of the gate mid-action, or a
+ * runtime deny. Validate once, loudly, where the operator can see it — matching
+ * `budget`, which already throws on an invalid resource cap or softRatio.
+ * @type {ReadonlyArray<[string, string]>}
+ */
+const ARRAY_SHAPED_CONFIG = Object.freeze([
+  ["tools", "allowlist"], ["tools", "denylist"],
+  ["content", "denyPatterns"], ["content", "askPatterns"],
+  ["fs", "deny"], ["fs", "readScope"], ["fs", "writeScope"],
+  ["net", "allowDomains"],
+  ["bash", "allow"], ["bash", "denyPatterns"],
+  ["bash", "extraDestructive"], ["bash", "extraSuperDestructive"],
+  ["secrets", "keys"], ["secrets", "patterns"], ["secrets", "envVars"],
+  ["axisB", "reversible"],
+]);
+
+/**
+ * Bound a caller-supplied config key before it is interpolated into an error
+ * message. Errors are not redacted and not size-capped by anything downstream.
+ * @param {string} k config key
+ * @returns {string} the key, clipped
+ */
+function clipKey(k) {
+  const s = String(k);
+  return s.length > 64 ? s.slice(0, 64) + "…" : s;
+}
+
+/**
+ * True for a plain object — `{}`-literal shaped, or the null-prototype shape
+ * `safeAction()` deliberately produces gate-wide (0.6.0) — and false for
+ * everything else a config section must not be: an array, a string/number/
+ * boolean (primitives coerce through `Object.getPrototypeOf` to their wrapper
+ * prototype, e.g. `String.prototype`, never `Object.prototype`), or an exotic
+ * object like `Map`/`Set`/`Date`. The prior guard at each of these three call
+ * sites was `typeof s !== "object" || Array.isArray(s)`, which a `Map` passes
+ * (`typeof` is `"object"`, it is not an `Array`) — so `new Gate({ tools: new
+ * Map([["allowlist",["x"]]]) })` constructed with no error, and `s["allowlist"]`
+ * on a Map is always `undefined` (Map entries are not own properties), reading
+ * as "unconfigured" — full fail-OPEN, same failure as the string-section bug
+ * this replaces, just a different exotic type slipping through the same hole.
+ * One structural check closes the whole family (Map, Set, Date, anything else
+ * with a foreign prototype) instead of enumerating bad types one at a time.
+ * @param {*} v value to check
+ * @returns {boolean} true if `v` is a plain object (Object.prototype or null prototype)
+ */
+function isPlainObject(v) {
+  if (v === null || typeof v !== "object") return false;
+  const proto = Object.getPrototypeOf(v);
+  return proto === Object.prototype || proto === null;
+}
+
+/**
+ * Throw if any array-shaped config key is present but not an array.
+ * `undefined`/`null` mean "not configured" and are left alone; `[]` is a legal
+ * array (an empty scope, or the documented pure-allow opt-out).
+ * @param {object} config gate config
+ * @returns {void}
+ */
+function assertArrayShapedConfig(config) {
+  // `tools.denyArgPatterns` is the one config surface that is a MAP of arrays
+  // rather than an array, so the flat [section, key] model above cannot express
+  // it. Its per-tool values are as array-shaped as any key in that list, and the
+  // natural authoring slip — one pattern, forgotten wrapper — threw
+  // `patterns is not iterable` out of check() mid-action.
+  const dap = config?.tools?.denyArgPatterns;
+  if (dap !== undefined && dap !== null) {
+    if (!isPlainObject(dap)) {
+      throw new Error(
+        `invalid bareguard config: tools.denyArgPatterns must be an object mapping tool name to an array of patterns, got ${Array.isArray(dap) ? "array" : typeof dap === "object" ? dap.constructor?.name ?? "object" : typeof dap}`,
+      );
+    }
+    for (const [tool, patterns] of Object.entries(dap)) {
+      if (patterns === undefined || patterns === null) continue;
+      if (!Array.isArray(patterns)) {
+        // The key is interpolated into the message, so bound it. A config key
+        // can be built programmatically from an upstream tool registry, and a
+        // thrown Error is NOT routed through the audit redactor — an unbounded
+        // key would carry arbitrary caller data into whatever logs construction
+        // failures. Measured unbounded: a 2,000,000-char key produced a
+        // 2,000,077-char message.
+        throw new Error(
+          `invalid bareguard config: tools.denyArgPatterns.${clipKey(tool)} must be an array, got ${typeof patterns}`,
+        );
+      }
+    }
+  }
+
+  // `flags` is the second MAP-shaped config surface (§8.2, litectx's gate for
+  // poisoned memory writes) and — unlike `denyArgPatterns` — had NO
+  // construction-time check at all before this: `new Gate({ flags: "oops" })`
+  // constructed silently and then every `flags.*` rule silently no-opped
+  // forever (see `flagsCheck`'s runtime guard for the full story). Two levels
+  // to validate, same as `denyArgPatterns`: the top-level map itself, and each
+  // field's nested value→outcome map (`{ provenance: "deny" }` is a natural
+  // authoring slip for `{ provenance: { web: "deny" } }` and is just as silent
+  // a no-op as the top-level case).
+  const flagsCfg = config?.flags;
+  if (flagsCfg !== undefined && flagsCfg !== null) {
+    if (!isPlainObject(flagsCfg)) {
+      throw new Error(
+        `invalid bareguard config: flags must be an object mapping field name to a value->outcome map, got ${Array.isArray(flagsCfg) ? "array" : typeof flagsCfg === "object" ? flagsCfg.constructor?.name ?? "object" : typeof flagsCfg}`,
+      );
+    }
+    for (const [field, valueMap] of Object.entries(flagsCfg)) {
+      if (valueMap === undefined || valueMap === null) continue;
+      if (!isPlainObject(valueMap)) {
+        // Key bounded before interpolation — same reasoning as `denyArgPatterns.${clipKey(tool)}` above.
+        throw new Error(
+          `invalid bareguard config: flags.${clipKey(field)} must be an object mapping value to "deny"|"ask", got ${Array.isArray(valueMap) ? "array" : typeof valueMap === "object" ? valueMap.constructor?.name ?? "object" : typeof valueMap}`,
+        );
+      }
+    }
+  }
+
+  for (const [section, key] of ARRAY_SHAPED_CONFIG) {
+    const s = config?.[section];
+    if (s === undefined || s === null) continue;
+    // A section that is present but not a plain object (a string, a number, an
+    // array, or an exotic object like `Map`/`Set`/`Date`) used to be treated
+    // the same as "not configured" — `continue`d past silently. First found
+    // with a string (`typeof s !== "object"` is also true for the legitimate
+    // "absent" case): `new Gate({ tools: "search", fs: "/etc" })` constructed
+    // with no error and then evaluated every action as `rule:"default",
+    // outcome:"allow"`. Then found AGAIN with a `Map` after the string fix
+    // shipped (`typeof` a Map is `"object"` and it is not an `Array`, so the
+    // old `typeof s !== "object" || Array.isArray(s)` check let it straight
+    // through): `s[key]` on a string OR a Map both read as a named property
+    // lookup that is always `undefined` (a Map's entries are not its own
+    // properties), so the leaf-level check below never sees either shape at
+    // all — full fail-OPEN for a config typo either way. `isPlainObject`
+    // closes the whole family in one check instead of enumerating bad types
+    // one at a time. Same shape check `tools.denyArgPatterns`/`flags` use above.
+    if (!isPlainObject(s)) {
+      throw new Error(
+        `invalid bareguard config: ${section} must be a plain object, got ${Array.isArray(s) ? "array" : typeof s === "object" ? s.constructor?.name ?? "object" : typeof s}`,
+      );
+    }
+    const v = s[key];
+    if (v === undefined || v === null) continue;
+    if (!Array.isArray(v)) {
+      throw new Error(
+        `invalid bareguard config: ${section}.${key} must be an array, got ${typeof v}`,
+      );
+    }
+  }
+}
+
 export class Gate {
   /**
    * @param {import("./types.js").GateConfig & { _clock?: () => number }} [config]
    *   Gate configuration. `_clock` is a millisecond clock override for tests.
    */
   constructor(config = {}) {
+    assertArrayShapedConfig(config);
     this.cfg = config;
     this.runId = config.runId ?? randomUUID();
     this.parentRunId = config.parentRunId ?? process.env.BAREGUARD_PARENT_RUN_ID ?? null;
