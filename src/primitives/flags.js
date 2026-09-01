@@ -31,6 +31,26 @@
  */
 function flagsCheck(action, cfg, wantOutcome) {
   if (!cfg) return null;
+  // `cfg` is held by reference and can be swapped post-construction, and
+  // `flagsDenyCheck`/`flagsAskCheck` are exported and callable directly — the
+  // same TOCTOU/direct-call exposure as `tools.denyArgPatterns`. A truthy
+  // non-object (or an array) `cfg` used to reach `Object.keys(cfg)`, which is
+  // total (returns indices for a string, own keys for anything else) and
+  // silently no-ops instead of failing closed: a configured deny/ask never
+  // fires. `flags` gates litectx's poisoned-memory-write path, so this is a
+  // fail-open on a real adopter's live path, not a theoretical one.
+  //
+  // Fails to `deny` regardless of which arm is asking (`wantOutcome`), same
+  // as `content.askPatterns.invalid` — the strictest outcome the gate can
+  // still take. An unusable config can't be trusted to have meant "ask"; it
+  // also can't be trusted to have meant "nothing", so the safe assumption is
+  // "would have denied", not "would have asked" or "no opinion".
+  if (typeof cfg !== "object" || Array.isArray(cfg)) {
+    return {
+      outcome: "deny", severity: "action", rule: "flags.invalid",
+      reason: `flags config is not an object (type ${Array.isArray(cfg) ? "array" : typeof cfg})`,
+    };
+  }
   for (const field of Object.keys(cfg)) {
     const valueMap = cfg[field];
     if (!valueMap) continue;
@@ -47,6 +67,20 @@ function flagsCheck(action, cfg, wantOutcome) {
     // total and the gate decision exception-free on a malformed field.
     if (typeof v !== "string" && typeof v !== "number" && typeof v !== "boolean") continue;
     const key = String(v);
+    // The NESTED level has the same shape hole: `{ provenance: "deny" }` (a
+    // string, not a `{ <value>: outcome }` map) is a natural authoring slip
+    // for `{ provenance: { web: "deny" } }`, and `Object.hasOwn` on a string
+    // is total (checks indices) so it silently no-ops the same way. Checked
+    // here — only for a field this action actually reads — rather than
+    // upfront, so an unrelated field's bad shape can't deny an action that
+    // never touches it (same scoping as `tools.denyArgPatterns`'s per-tool
+    // leaf check).
+    if (typeof valueMap !== "object" || Array.isArray(valueMap)) {
+      return {
+        outcome: "deny", severity: "action", rule: "flags.invalid",
+        reason: `flags.${field} is not an object (type ${Array.isArray(valueMap) ? "array" : typeof valueMap})`,
+      };
+    }
     // OWN keys only — a non-own lookup would read an inherited property, so a
     // polluted `Object.prototype` (e.g. `Object.prototype.web = "ask"`) could
     // make a flag fire on an empty/unconfigured value-map. Honor only what the

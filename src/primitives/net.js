@@ -94,7 +94,16 @@ export function netCheck(action, cfg = {}) {
     return { outcome: "deny", severity: "action", rule: "net.denyPrivateIps", reason: `private host: ${host}` };
   }
 
-  if (cfg.allowDomains) {
+  if (cfg.allowDomains !== undefined && cfg.allowDomains !== null) {
+    // `cfg` is held by reference and can be swapped post-construction; a scope
+    // rule the gate cannot evaluate must fail CLOSED, not throw mid-eval
+    // (`.some` on a non-array) or silently no-op (a falsy non-array).
+    if (!Array.isArray(cfg.allowDomains)) {
+      return {
+        outcome: "deny", severity: "action", rule: "net.allowDomains.invalid",
+        reason: `net.allowDomains is not an array (type ${typeof cfg.allowDomains})`,
+      };
+    }
     const allowed = cfg.allowDomains.some(d => host === d || host.endsWith("." + d));
     if (!allowed) {
       return { outcome: "deny", severity: "action", rule: "net.allowDomains", reason: `host ${host} not in allowDomains` };

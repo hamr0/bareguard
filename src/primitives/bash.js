@@ -36,7 +36,14 @@ export function bashCheck(action, cfg = {}) {
   }
   const cmd = rawCmd ?? "";
 
-  if (cfg.denyPatterns) {
+  // `cfg` is held by reference and can be swapped post-construction; a deny/
+  // scope rule the gate cannot evaluate must fail CLOSED, not throw mid-eval
+  // (`for...of`/`.some` on a non-array) or silently no-op. Same class, same
+  // fix shape, as `tools.denylist`/`fs.deny`/`content.denyPatterns`/etc.
+  if (cfg.denyPatterns !== undefined && cfg.denyPatterns !== null) {
+    if (!Array.isArray(cfg.denyPatterns)) {
+      return { outcome: "deny", severity: "action", rule: "bash.denyPatterns.invalid", reason: `bash.denyPatterns is not an array (type ${typeof cfg.denyPatterns})` };
+    }
     for (const re of cfg.denyPatterns) {
       if (re.test(cmd)) {
         return { outcome: "deny", severity: "action", rule: "bash.denyPatterns", reason: `matches ${re}` };
@@ -44,7 +51,10 @@ export function bashCheck(action, cfg = {}) {
     }
   }
 
-  if (cfg.allow) {
+  if (cfg.allow !== undefined && cfg.allow !== null) {
+    if (!Array.isArray(cfg.allow)) {
+      return { outcome: "deny", severity: "action", rule: "bash.allow.invalid", reason: `bash.allow is not an array (type ${typeof cfg.allow})` };
+    }
     const meta = cmd.match(SHELL_META);
     if (meta) {
       return {

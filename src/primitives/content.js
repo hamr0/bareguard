@@ -80,7 +80,19 @@ function serializeForMatch(action) {
  * @returns {{outcome:string,severity:string,rule:string,reason:string}|null} deny decision, or null if no match
  */
 export function contentDenyCheck(action, cfg) {
-  const patterns = cfg?.denyPatterns ?? SAFE_DEFAULT_DENY_PATTERNS;
+  const raw = cfg?.denyPatterns;
+  // `?? SAFE_DEFAULT_DENY_PATTERNS` only falls back on null/undefined, so a
+  // present-but-non-array value (config held by reference, swapped post-
+  // construction) silently REPLACES the safe default deny floor instead of
+  // being rejected — and then `for (const re of patterns)` throws mid-eval on
+  // most non-array shapes anyway. Fail CLOSED instead, same as `tools.allowlist`.
+  if (raw !== undefined && raw !== null && !Array.isArray(raw)) {
+    return {
+      outcome: "deny", severity: "action", rule: "content.denyPatterns.invalid",
+      reason: `content.denyPatterns is not an array (type ${typeof raw})`,
+    };
+  }
+  const patterns = raw ?? SAFE_DEFAULT_DENY_PATTERNS;
   if (!patterns.length) return null;
   const s = serializeForMatch(action);
   for (const re of patterns) {
@@ -99,7 +111,16 @@ export function contentDenyCheck(action, cfg) {
  * @returns {{outcome:string,severity:string,rule:string,reason:string}|null} askHuman decision, or null if no match
  */
 export function contentAskCheck(action, cfg) {
-  const patterns = cfg?.askPatterns ?? SAFE_DEFAULT_ASK_PATTERNS;
+  const raw = cfg?.askPatterns;
+  // Same class as `contentDenyCheck` above: a non-array `askPatterns` would
+  // silently replace the safe default ask floor and then throw mid-eval.
+  if (raw !== undefined && raw !== null && !Array.isArray(raw)) {
+    return {
+      outcome: "deny", severity: "action", rule: "content.askPatterns.invalid",
+      reason: `content.askPatterns is not an array (type ${typeof raw})`,
+    };
+  }
+  const patterns = raw ?? SAFE_DEFAULT_ASK_PATTERNS;
   if (!patterns.length) return null;
   const s = serializeForMatch(action);
   for (const re of patterns) {

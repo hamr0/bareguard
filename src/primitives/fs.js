@@ -59,7 +59,14 @@ export function fsCheck(action, cfg = {}) {
   if (typeof raw !== "string") return null;
   const p = norm(raw);
 
-  if (cfg.deny) {
+  // `cfg` is held by reference and can be swapped post-construction; a deny/
+  // scope rule the gate cannot evaluate must fail CLOSED rather than throw
+  // mid-eval (`for...of`/`.some` on a non-array) or silently no-op (a falsy
+  // non-array, e.g. `""`, reads as "not configured").
+  if (cfg.deny !== undefined && cfg.deny !== null) {
+    if (!Array.isArray(cfg.deny)) {
+      return { outcome: "deny", severity: "action", rule: "fs.deny.invalid", reason: `fs.deny is not an array (type ${typeof cfg.deny})` };
+    }
     for (const d of cfg.deny) {
       if (within(p, d)) {
         return { outcome: "deny", severity: "action", rule: "fs.deny", reason: `path ${raw} matches deny entry ${d}` };
@@ -67,13 +74,19 @@ export function fsCheck(action, cfg = {}) {
     }
   }
 
-  if (action.type === "read" && cfg.readScope) {
+  if (action.type === "read" && cfg.readScope !== undefined && cfg.readScope !== null) {
+    if (!Array.isArray(cfg.readScope)) {
+      return { outcome: "deny", severity: "action", rule: "fs.readScope.invalid", reason: `fs.readScope is not an array (type ${typeof cfg.readScope})` };
+    }
     if (!cfg.readScope.some(s => within(p, s))) {
       return { outcome: "deny", severity: "action", rule: "fs.readScope", reason: `path ${raw} outside readScope` };
     }
   }
 
-  if ((action.type === "write" || action.type === "edit") && cfg.writeScope) {
+  if ((action.type === "write" || action.type === "edit") && cfg.writeScope !== undefined && cfg.writeScope !== null) {
+    if (!Array.isArray(cfg.writeScope)) {
+      return { outcome: "deny", severity: "action", rule: "fs.writeScope.invalid", reason: `fs.writeScope is not an array (type ${typeof cfg.writeScope})` };
+    }
     if (!cfg.writeScope.some(s => within(p, s))) {
       return { outcome: "deny", severity: "action", rule: "fs.writeScope", reason: `path ${raw} outside writeScope` };
     }

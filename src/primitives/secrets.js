@@ -33,7 +33,18 @@ const DEFAULT_SECRET_VALUE_PATTERNS = [/Bearer\s+[A-Za-z0-9._\-+/=]+/, /sk-[\w-]
  */
 function effectiveKeys(cfg) {
   const base = cfg.redactKeys === false ? [] : DEFAULT_SECRET_KEYS;
-  return [...base, ...(cfg.keys ?? [])];
+  // `redact()`'s own contract is never-throw — spreading a present-but-non-
+  // array `keys` (a string spreads into single-char specs, an object throws
+  // "is not iterable") would violate that contract, and it runs synchronously
+  // inside `Audit.emit()`/`gate.check()`, so a throw here stops the gate dead
+  // on every subsequent action. `secrets.keys` is already in
+  // `ARRAY_SHAPED_CONFIG`, so the Gate constructor already throws loudly on a
+  // malformed value at the stage that can afford to throw; this guards the two
+  // paths construction cannot cover — a direct public `redact(cfg)` call and a
+  // post-construction `cfg` swap (held by reference). Falling back to `[]`
+  // keeps `base` (the default-on set) fully active — fail-SAFE, not fail-open.
+  const extra = Array.isArray(cfg.keys) ? cfg.keys : [];
+  return [...base, ...extra];
 }
 
 /**
@@ -43,7 +54,12 @@ function effectiveKeys(cfg) {
  */
 function effectiveValuePatterns(cfg) {
   const base = cfg.redactKeys === false ? [] : DEFAULT_SECRET_VALUE_PATTERNS;
-  return [...base, ...(cfg.patterns ?? [])];
+  // Same class and same reasoning as `effectiveKeys` above: a non-array
+  // `patterns` used to spread chars into the RegExp list, which then crashed
+  // `new RegExp(re.source, ...)` below with a SyntaxError — inside `redact()`,
+  // which must never throw. Fall back to `[]` so `base` stays active.
+  const extra = Array.isArray(cfg.patterns) ? cfg.patterns : [];
+  return [...base, ...extra];
 }
 
 /**
@@ -128,7 +144,14 @@ export function redact(action, cfg = {}) {
   try { serialized = JSON.stringify(work); }
   catch { return changed ? work : action; } // non-serializable; bail
 
-  for (const varName of cfg.envVars ?? []) {
+  // Same class/reasoning as `effectiveKeys`/`effectiveValuePatterns` above: a
+  // non-array `envVars` used to iterate a string's characters as bogus env-var
+  // names (silently wrong, no crash) or throw "is not iterable" for a
+  // non-iterable object — inside `redact()`, which must never throw. Fall
+  // back to `[]`; `envVars` has no default set to preserve, but the key-aware
+  // walk above and `effectiveValuePatterns` below still run unaffected.
+  const envVars = Array.isArray(cfg.envVars) ? cfg.envVars : [];
+  for (const varName of envVars) {
     const val = process.env[varName];
     if (!val || val.length < MIN_ENV_VAR_LEN) continue;
     if (serialized.includes(val)) {

@@ -221,7 +221,9 @@ const ARRAY_SHAPED_CONFIG = Object.freeze([
   ["fs", "deny"], ["fs", "readScope"], ["fs", "writeScope"],
   ["net", "allowDomains"],
   ["bash", "allow"], ["bash", "denyPatterns"],
+  ["bash", "extraDestructive"], ["bash", "extraSuperDestructive"],
   ["secrets", "keys"], ["secrets", "patterns"], ["secrets", "envVars"],
+  ["axisB", "reversible"],
 ]);
 
 /**
@@ -270,9 +272,51 @@ function assertArrayShapedConfig(config) {
       }
     }
   }
+
+  // `flags` is the second MAP-shaped config surface (§8.2, litectx's gate for
+  // poisoned memory writes) and — unlike `denyArgPatterns` — had NO
+  // construction-time check at all before this: `new Gate({ flags: "oops" })`
+  // constructed silently and then every `flags.*` rule silently no-opped
+  // forever (see `flagsCheck`'s runtime guard for the full story). Two levels
+  // to validate, same as `denyArgPatterns`: the top-level map itself, and each
+  // field's nested value→outcome map (`{ provenance: "deny" }` is a natural
+  // authoring slip for `{ provenance: { web: "deny" } }` and is just as silent
+  // a no-op as the top-level case).
+  const flagsCfg = config?.flags;
+  if (flagsCfg !== undefined && flagsCfg !== null) {
+    if (typeof flagsCfg !== "object" || Array.isArray(flagsCfg)) {
+      throw new Error(
+        `invalid bareguard config: flags must be an object mapping field name to a value->outcome map, got ${Array.isArray(flagsCfg) ? "array" : typeof flagsCfg}`,
+      );
+    }
+    for (const [field, valueMap] of Object.entries(flagsCfg)) {
+      if (valueMap === undefined || valueMap === null) continue;
+      if (typeof valueMap !== "object" || Array.isArray(valueMap)) {
+        // Key bounded before interpolation — same reasoning as `denyArgPatterns.${clipKey(tool)}` above.
+        throw new Error(
+          `invalid bareguard config: flags.${clipKey(field)} must be an object mapping value to "deny"|"ask", got ${Array.isArray(valueMap) ? "array" : typeof valueMap}`,
+        );
+      }
+    }
+  }
+
   for (const [section, key] of ARRAY_SHAPED_CONFIG) {
     const s = config?.[section];
-    if (s == null || typeof s !== "object") continue;
+    if (s === undefined || s === null) continue;
+    // A section that is present but not a plain object (a string, a number, an
+    // array…) used to be treated the same as "not configured" — `continue`d
+    // past silently — because `typeof s !== "object"` is also true for the
+    // legitimate "absent" case. That let `new Gate({ tools: "search", fs: "/etc" })`
+    // construct with no error and then evaluate every action as `rule:"default",
+    // outcome:"allow"`: `s[key]` on a string reads a named property, which is
+    // always `undefined`, so the leaf-level check below never sees the string at
+    // all and treats the whole section as unconfigured — full fail-OPEN for a
+    // config typo. Same shape check `tools.denyArgPatterns` already uses above.
+    if (typeof s !== "object" || Array.isArray(s)) {
+      throw new Error(
+        `invalid bareguard config: ${section} must be a plain object, got ${Array.isArray(s) ? "array" : typeof s}`,
+      );
+    }
     const v = s[key];
     if (v === undefined || v === null) continue;
     if (!Array.isArray(v)) {

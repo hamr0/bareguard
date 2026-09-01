@@ -215,7 +215,11 @@ export class Audit {
         if (bound === "clip") {
           if (typeof v === "string") truncated[key] = clipBytes(v, FIELD_BYTE_CAP);
         } else if (bound === "perKey") {
-          if (v) truncated[key] = boundOwnValues(v);
+          // `boundOwnValues` spreads its argument's own keys; a truthy STRING
+          // spreads into a char-indexed object (`{0:'o',1:'k'}`), corrupting a
+          // scalar `action`/`result` into an object — the same class the
+          // `wholesale` arm already guards against two lines below.
+          if (v != null && typeof v === "object") truncated[key] = boundOwnValues(v);
         } else if (v != null && typeof v === "object") { // wholesale
           const bytes = Buffer.byteLength(JSON.stringify(v), "utf8");
           if (bytes > FIELD_BYTE_CAP) truncated[key] = { _truncated: true, bytes };
@@ -233,29 +237,52 @@ export class Audit {
       // the payload wholesale, then, if even that does not fit, keep only the
       // fields a consumer needs to route and correlate the entry.
       if (Buffer.byteLength(serialized, "utf8") > MAX_LINE_BYTES) {
-        for (const k of PAYLOAD_KEYS) {
-          if (truncated[k] != null && typeof truncated[k] === "object") {
-            const src = truncated[k];
-            const collapsed = { _truncated: true, bytes: Buffer.byteLength(JSON.stringify(src), "utf8") };
-            // `type` survives the collapse. It is not cosmetic: the cold-start
-            // budget rebuild classifies a historical round with
-            // `l.action.type !== "llm"`, so dropping it turns a collapsed llm
-            // round into `undefined !== "llm"` — a TOOL round. That is the live-
-            // vs-rebuilt divergence 0.9.0 closed by construction (sanitizeSpend),
-            // reopened on the toolRounds dimension by this very backstop. It
-            // over-counts, so it fails safe, but the two paths must not disagree.
-            // Bounded by BYTES, not UTF-16 units, because it is caller-controlled
-            // and the whole point of this branch is a byte budget.
-            if (typeof src.type === "string") {
-              collapsed.type = clipBytes(src.type, 120);
-            }
-            truncated[k] = collapsed;
+        // Largest-first, stop-when-it-fits: collapsing is destructive (it is the
+        // step that drops `result.costUsd`/`.tokens`/`.pricing`/`.counts`, the
+        // exact fields the cold-start budget rebuild needs), so it must not fire
+        // on a field that was never the reason the line is oversize. A 29-byte
+        // `result` collapsed alongside an oversize `action` used to zero a live
+        // $0.50 round to $0.00 on restart for no reason — the cap-under-count is
+        // a bypass, not a rounding error.
+        const candidates = PAYLOAD_KEYS
+          .filter((k) => truncated[k] != null && typeof truncated[k] === "object")
+          .map((k) => ({ k, bytes: Buffer.byteLength(JSON.stringify(truncated[k]), "utf8") }))
+          .sort((a, b) => b.bytes - a.bytes);
+        for (const { k, bytes } of candidates) {
+          const src = truncated[k];
+          const collapsed = { _truncated: true, bytes };
+          // `type` survives the collapse. It is not cosmetic: the cold-start
+          // budget rebuild classifies a historical round with
+          // `l.action.type !== "llm"`, so dropping it turns a collapsed llm
+          // round into `undefined !== "llm"` — a TOOL round. That is the live-
+          // vs-rebuilt divergence 0.9.0 closed by construction (sanitizeSpend),
+          // reopened on the toolRounds dimension by this very backstop. It
+          // over-counts, so it fails safe, but the two paths must not disagree.
+          // Bounded by BYTES, not UTF-16 units, because it is caller-controlled
+          // and the whole point of this branch is a byte budget.
+          if (typeof src.type === "string") {
+            collapsed.type = clipBytes(src.type, 120);
           }
+          // Budget-critical scalars survive the collapse too, for the same
+          // reason `type` does: `sanitizeSpend` (shared by live `record()` and
+          // `_rebuildBudgetFromAudit`) reads exactly these off `result`. Losing
+          // them here means a cold-start rebuild silently under-counts a round
+          // that genuinely cost money — a cap bypass that fails OPEN.
+          if (Number.isFinite(src.costUsd)) collapsed.costUsd = src.costUsd;
+          if (Number.isFinite(src.tokens)) collapsed.tokens = src.tokens;
+          if (typeof src.pricing === "string") collapsed.pricing = clipBytes(src.pricing, 32);
+          if (src.counts && typeof src.counts === "object") {
+            collapsed.counts = boundOwnValues(src.counts);
+          }
+          truncated[k] = collapsed;
+          serialized = JSON.stringify(truncated) + "\n";
+          if (Buffer.byteLength(serialized, "utf8") <= MAX_LINE_BYTES) break;
         }
-        serialized = JSON.stringify(truncated) + "\n";
       }
       if (Buffer.byteLength(serialized, "utf8") > MAX_LINE_BYTES) {
-        // Last resort: keep every SCALAR field and drop the object payloads.
+        // Last resort: keep every SCALAR field, drop the object payloads, but
+        // re-derive a scalars-only `result`/`action.type` (below) so budget
+        // accounting still sees this round.
         // NOT REACHABLE by any input I could construct — every field that can
         // carry caller data is bounded above, so collapsing action/result has
         // always sufficed. It is kept as an unconditional backstop so the
@@ -272,6 +299,24 @@ export class Audit {
           if (v === null || typeof v !== "object") {
             minimal[k] = typeof v === "string" ? clipBytes(v, 120) : v;
           }
+        }
+        // Even the scalar-only backstop must not zero out a round's spend: the
+        // cold-start rebuild gates on `phase === "record" && result` and reads
+        // `action.type` for the toolRounds count, so dropping both objects
+        // outright silently under-counts a round that genuinely cost money — a
+        // cap bypass that fails OPEN on restart. These re-derived carriers are
+        // scalars-only by construction, so they can never be the reason a line
+        // is still oversize.
+        if (truncated.result && typeof truncated.result === "object") {
+          const r = truncated.result;
+          const rr = {};
+          if (Number.isFinite(r.costUsd)) rr.costUsd = r.costUsd;
+          if (Number.isFinite(r.tokens)) rr.tokens = r.tokens;
+          if (typeof r.pricing === "string") rr.pricing = clipBytes(r.pricing, 32);
+          if (Object.keys(rr).length) minimal.result = rr;
+        }
+        if (truncated.action && typeof truncated.action === "object" && typeof truncated.action.type === "string") {
+          minimal.action = { type: clipBytes(truncated.action.type, 120) };
         }
         minimal._truncated = true;
         minimal._dropped = "line exceeded MAX_LINE_BYTES after field truncation";
