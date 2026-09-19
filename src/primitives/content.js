@@ -87,8 +87,32 @@ function serializeForMatch(action) {
       a = { ...action, args: cleanArgs };
     }
     return JSON.stringify(a);
-  } catch { return String(action); }
+  } catch {
+    // UNREADABLE. The old fallback here was `String(action)`, which could never
+    // work: `gate.check()` hands every step a null-prototype copy (`safeAction`,
+    // gate-wide since 0.6.0), and `String()` on a null-proto object throws
+    // "Cannot convert object to primitive value" — so the catch that existed to
+    // keep the gate alive was itself the thing that killed it. Two hardening
+    // measures, each right on its own, that broke each other.
+    //
+    // Returning null (never a string) makes "I could not read this" a distinct
+    // signal the callers must handle, rather than a value that silently matches
+    // no pattern — which would wave an unreadable action straight past the deny
+    // floor. Reached by a circular action, a BigInt, a throwing `toJSON`, or a
+    // throwing getter.
+    return null;
+  }
 }
+
+// An action that cannot be serialized cannot be pattern-matched, so the deny
+// floor (`rm -rf /`, `DROP TABLE`, `--force`) cannot run on it. Fail CLOSED —
+// the same polarity `tools.allowlist.invalid`, `content.denyPatterns.invalid`
+// and `net.invalidUrl` already use for present-but-unusable input. Frozen so a
+// consumer cannot mutate the shared decision object it is handed.
+const UNSERIALIZABLE = Object.freeze({
+  outcome: "deny", severity: "action", rule: "content.unserializable",
+  reason: "action could not be serialized for content matching",
+});
 
 /**
  * Step-2 universal deny: serialized action matches a deny RegExp.
@@ -113,6 +137,7 @@ export function contentDenyCheck(action, cfg) {
   const patterns = raw ?? SAFE_DEFAULT_DENY_PATTERNS;
   if (!patterns.length) return null;
   const s = serializeForMatch(action);
+  if (s === null) return UNSERIALIZABLE;
   for (const re of patterns) {
     if (re.test(s)) {
       return { outcome: "deny", severity: "action", rule: "content.denyPatterns", reason: `matched ${re}` };
@@ -141,6 +166,12 @@ export function contentAskCheck(action, cfg) {
   const patterns = raw ?? SAFE_DEFAULT_ASK_PATTERNS;
   if (!patterns.length) return null;
   const s = serializeForMatch(action);
+  // DENY, not ask: an unreadable action is not something a human can usefully
+  // adjudicate, and this matches the precedent already set two checks up, where
+  // a malformed ask CONFIG also returns deny rather than ask. Reachable on its
+  // own — `content: { denyPatterns: [] }` returns before the deny path ever
+  // serializes, so this is the first step that touches the action.
+  if (s === null) return UNSERIALIZABLE;
   for (const re of patterns) {
     if (re.test(s)) {
       return { outcome: "askHuman", severity: "action", rule: "content.askPatterns", reason: `matched ${re}` };

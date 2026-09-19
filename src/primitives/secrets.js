@@ -87,30 +87,75 @@ function keyMatches(key, specs) {
  * @param {string[]} specs
  * @returns {{ value: *, changed: boolean }}
  */
-function walkKeys(node, specs) {
-  if (Array.isArray(node)) {
-    let changed = false;
-    const out = node.map((el) => {
-      const r = walkKeys(el, specs);
-      if (r.changed) changed = true;
-      return r.value;
-    });
-    return changed ? { value: out, changed } : { value: node, changed: false };
+// Recursion bound. A real action is a handful of levels deep; 100 is far past
+// any legitimate shape and far short of the ~11k frames V8 allows, so the walk
+// stops on its own terms instead of throwing RangeError partway through. This
+// is NOT interchangeable with the cycle check below: a 50,000-deep chain with
+// no cycle at all blows the stack, and a WeakSet never sees a repeat.
+const MAX_WALK_DEPTH = 100;
+
+/**
+ * @param {*} node
+ * @param {string[]} specs
+ * @param {WeakSet<object>} seen  objects on the current path (cycle detection)
+ * @param {number} depth
+ * @returns {{ value: *, changed: boolean }}
+ */
+function walkKeys(node, specs, seen = new WeakSet(), depth = 0) {
+  // Both arms below recurse, so the two structural bounds are taken once, here,
+  // ahead of the array/object split — not duplicated into each.
+  if (node !== null && typeof node === "object") {
+    // A cycle is the ORDINARY case, not a hostile one: an agent framework that
+    // stamps a session onto each action, while the session holds the action, is
+    // enough. Replacing the repeat (rather than bailing out of the whole walk)
+    // is what keeps key-redaction working on the rest of the object.
+    if (seen.has(node)) return { value: "[REDACTED:circular]", changed: true };
+    if (depth >= MAX_WALK_DEPTH) return { value: "[REDACTED:depth]", changed: true };
   }
-  if (node && typeof node === "object") {
-    let changed = false;
-    const out = Object.create(null);
-    for (const [k, v] of Object.entries(node)) {
-      if (keyMatches(k, specs)) {
-        out[k] = `[REDACTED:key=${k}]`;
-        changed = true;
-      } else {
-        const r = walkKeys(v, specs);
-        if (r.changed) changed = true;
-        out[k] = r.value;
+  if (Array.isArray(node) || (node && typeof node === "object")) {
+    // Track the current PATH, not every object ever seen: add before descending
+    // and remove after. A plain accumulating set would call the SECOND branch of
+    // a diamond (the same object referenced twice, no cycle) circular and blank
+    // real data out of the audit line.
+    seen.add(node);
+    try {
+      if (Array.isArray(node)) {
+        let changed = false;
+        const out = node.map((el) => {
+          const r = walkKeys(el, specs, seen, depth + 1);
+          if (r.changed) changed = true;
+          return r.value;
+        });
+        return changed ? { value: out, changed } : { value: node, changed: false };
       }
+      let changed = false;
+      const out = Object.create(null);
+      for (const [k, v] of Object.entries(node)) {
+        // An own `toJSON` is not data — it is code `JSON.stringify` will CALL
+        // at the serialization step below, on whatever object it is attached
+        // to (here or arbitrarily deeper), and its RETURN VALUE — not the tree
+        // this walk just inspected — is what gets serialized. A key-walk that
+        // faithfully redacted every key it saw is bypassed wholesale if the
+        // copy still carries the shortcut: `JSON.stringify` never looks at the
+        // sibling fields this pass produced. Drop it from the copy so
+        // serialization is forced to fall through to the redacted structure.
+        if (k === "toJSON" && typeof v === "function") {
+          changed = true;
+          continue;
+        }
+        if (keyMatches(k, specs)) {
+          out[k] = `[REDACTED:key=${k}]`;
+          changed = true;
+        } else {
+          const r = walkKeys(v, specs, seen, depth + 1);
+          if (r.changed) changed = true;
+          out[k] = r.value;
+        }
+      }
+      return changed ? { value: out, changed } : { value: node, changed: false };
+    } finally {
+      seen.delete(node);
     }
-    return changed ? { value: out, changed } : { value: node, changed: false };
   }
   return { value: node, changed: false };
 }
@@ -141,9 +186,24 @@ export function redact(action, cfg = {}) {
   let work = action;
   let changed = false;
   if (keySpecs.length) {
-    const r = walkKeys(action, keySpecs);
-    work = r.value;
-    changed = r.changed;
+    // LAST-RESORT GUARD. The two structural hazards (cycles, depth) are handled
+    // inside walkKeys so key-redaction keeps WORKING on them; this catches what
+    // is left — a getter or Proxy trap that throws when `Object.entries` reads
+    // it. Falling THROUGH (rather than returning) is deliberate: the value-based
+    // pass below runs over the serialized form and is an independent backstop,
+    // so a failed key walk degrades to partial redaction instead of none.
+    //
+    // It is not sufficient on its own, which is why the bounds above exist: an
+    // object that defeats the walk but carries a `toJSON` serializes fine, so a
+    // bail-out here would have written the very key this pass exists to blank.
+    try {
+      const r = walkKeys(action, keySpecs);
+      work = r.value;
+      changed = r.changed;
+    } catch {
+      work = action;
+      changed = false;
+    }
   }
 
   // 2. Value-based passes over the serialized form.

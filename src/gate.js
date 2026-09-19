@@ -57,11 +57,35 @@ function actionSummary(action) {
  * @param {import("./types.js").Action} action the action to normalize
  * @returns {import("./types.js").Action} a null-prototype shallow copy (own props preserved)
  */
+// `Object.assign` READS every own enumerable property, which invokes getters —
+// so a field defined as a getter that throws killed this function, and with it
+// `check()`, before a single eval step ran. Copy key by key instead and mark the
+// one field that cannot be read, so the other fields still reach the floors: a
+// broken `action.debug` must not stop `bash.denyPatterns` seeing `args.command`.
+// Marked rather than dropped — a dropped key is indistinguishable from a key the
+// caller never sent, and this is the one shape where the gate genuinely does not
+// know what it was handed.
+const UNREADABLE = "[UNREADABLE]";
+function copyOwnSafely(src) {
+  const out = Object.create(null);
+  for (const k of Object.keys(src)) {
+    try { out[k] = src[k]; } catch { out[k] = UNREADABLE; }
+  }
+  return out;
+}
+
 function safeAction(action) {
   if (action == null || typeof action !== "object") return action;
-  const safe = Object.assign(Object.create(null), action);
-  if (action.args != null && typeof action.args === "object") {
-    safe.args = Object.assign(Object.create(null), action.args);
+  // `Object.keys` itself can throw on a revoked Proxy — there is no readable
+  // action left at that point, so hand back an empty own-props object and let
+  // the floors decide on nothing (tools' closed allowlist denies an absent
+  // `type`), rather than throwing out of the gate.
+  let safe;
+  try { safe = copyOwnSafely(action); } catch { return Object.create(null); }
+  let args;
+  try { args = action.args; } catch { args = undefined; }
+  if (args != null && typeof args === "object") {
+    try { safe.args = copyOwnSafely(args); } catch { safe.args = UNREADABLE; }
   }
   return safe;
 }

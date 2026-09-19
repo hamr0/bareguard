@@ -74,6 +74,44 @@ const PAYLOAD_KEYS = Object.freeze(LINE_FIELDS.filter((f) => f.bound === "perKey
  * @param {object} obj object to bound
  * @returns {object} a bounded copy
  */
+/**
+ * Scalar-only reduction of an audit line: keep every scalar field (clipped),
+ * drop object payloads, but re-derive the spend carriers and `action.type` so a
+ * cold-start budget rebuild still sees the round. Extracted so the two callers
+ * that need it — the oversize-line backstop and the unserializable-line
+ * backstop — cannot drift apart; a second copy is how `verdict`/`reason`/`aid`
+ * were each missed in turn.
+ * @param {object} line
+ * @returns {object} a scalars-only copy
+ */
+function scalarOnlyLine(line) {
+  const minimal = {};
+  for (const [k, v] of Object.entries(line)) {
+    if (v === null || typeof v !== "object") {
+      minimal[k] = typeof v === "string" ? clipBytes(v, 120) : v;
+    }
+  }
+  try {
+    if (line.result && typeof line.result === "object") {
+      const r = line.result;
+      const rr = {};
+      if (Number.isFinite(r.costUsd)) rr.costUsd = r.costUsd;
+      if (Number.isFinite(r.tokens)) rr.tokens = r.tokens;
+      if (typeof r.pricing === "string") rr.pricing = clipBytes(r.pricing, 32);
+      if (Object.keys(rr).length) minimal.result = rr;
+    }
+    if (line.action && typeof line.action === "object" && typeof line.action.type === "string") {
+      minimal.action = { type: clipBytes(line.action.type, 120) };
+    }
+  } catch {
+    // A throwing getter on `result.costUsd` / `action.type`. Losing the spend
+    // carrier over-counts nothing and under-counts one round; losing the whole
+    // LINE loses the record that the round happened at all. Keep the scalars.
+    minimal._dropped_carriers = true;
+  }
+  return minimal;
+}
+
 function boundOwnValues(obj) {
   const out = { ...obj };
   for (const k of Object.keys(out)) {
@@ -218,7 +256,23 @@ export class Audit {
       this.entries.push(line);
       return;
     }
-    let serialized = JSON.stringify(line) + "\n";
+    let serialized;
+    try {
+      serialized = JSON.stringify(line) + "\n";
+    } catch {
+      // UNSERIALIZABLE PAYLOAD. `action` and `result` are arbitrary caller
+      // objects: a self-reference (a framework stamping a session onto the
+      // action while the session holds the action), a BigInt, or a getter /
+      // `toJSON` that throws all make this throw. Unguarded, that threw out of
+      // emit() and out of gate.check() — the gate crashed instead of deciding,
+      // and no line was written at all. A missing audit line is the failure
+      // this file exists to prevent, so degrade to the scalars (which keep the
+      // decision, the rule, the correlation ids and the round's spend) and say
+      // so in-band rather than losing the record.
+      const minimal = scalarOnlyLine(line);
+      minimal._dropped = "payload not serializable";
+      serialized = JSON.stringify(minimal) + "\n";
+    }
     if (Buffer.byteLength(serialized, "utf8") > MAX_LINE_BYTES) {
       // Re-bound every field that can carry caller-controlled or redaction-
       // expanded text — action, result, where, verdict, reason, meta — to keep
@@ -324,30 +378,12 @@ export class Audit {
         // hardcoded list silently drops any field added later, and the line's
         // routing/correlation fields (ts, seq, run_id, parent_run_id, aid,
         // phase, decision, severity, rule) are all scalars by construction.
-        const minimal = {};
-        for (const [k, v] of Object.entries(truncated)) {
-          if (v === null || typeof v !== "object") {
-            minimal[k] = typeof v === "string" ? clipBytes(v, 120) : v;
-          }
-        }
-        // Even the scalar-only backstop must not zero out a round's spend: the
-        // cold-start rebuild gates on `phase === "record" && result` and reads
-        // `action.type` for the toolRounds count, so dropping both objects
-        // outright silently under-counts a round that genuinely cost money — a
-        // cap bypass that fails OPEN on restart. These re-derived carriers are
-        // scalars-only by construction, so they can never be the reason a line
-        // is still oversize.
-        if (truncated.result && typeof truncated.result === "object") {
-          const r = truncated.result;
-          const rr = {};
-          if (Number.isFinite(r.costUsd)) rr.costUsd = r.costUsd;
-          if (Number.isFinite(r.tokens)) rr.tokens = r.tokens;
-          if (typeof r.pricing === "string") rr.pricing = clipBytes(r.pricing, 32);
-          if (Object.keys(rr).length) minimal.result = rr;
-        }
-        if (truncated.action && typeof truncated.action === "object" && typeof truncated.action.type === "string") {
-          minimal.action = { type: clipBytes(truncated.action.type, 120) };
-        }
+        // Spend carriers and `action.type` are re-derived inside scalarOnlyLine:
+        // the cold-start rebuild gates on `phase === "record" && result` and reads
+        // `action.type` for the toolRounds count, so dropping both objects outright
+        // silently under-counts a round that genuinely cost money — a cap bypass
+        // that fails OPEN on restart.
+        const minimal = scalarOnlyLine(truncated);
         minimal._truncated = true;
         minimal._dropped = "line exceeded MAX_LINE_BYTES after field truncation";
         serialized = JSON.stringify(minimal) + "\n";
