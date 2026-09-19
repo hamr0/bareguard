@@ -297,6 +297,26 @@ await gate.raiseCap(dimension, newCap);           // explicit cap raise (separat
 await gate.haltContext();                         // deterministic stats over audit log
 ```
 
+### Primitives manifest (author-time discovery)
+
+`primitives.json` ships alongside the package (`"./primitives.json"` exports
+subpath, plus `pkg.primitives`) so an agent — or an AI assistant wiring this
+in — can discover what bareguard offers and how to call it without parsing
+prose:
+
+```js
+import primitives from "bareguard/primitives.json" with { type: "json" };
+```
+
+Every exported symbol whose JSDoc carries `@when` is a primitive entry
+(`name`, `category`, `when`, `import`, `signature`, `fails`, `example`); 13
+of 14 public exports are manifested, `BudgetUnavailableError` excluded as a
+bare error class. It carries no `version` field — `package.json` is the
+single authority. Nothing in `src/` reads this file; it is author-time only,
+not a runtime tool surface. `npm run build:primitives` regenerates it;
+`npm run check:primitives` (CI) fails the build if the committed file has
+drifted from source.
+
 ## Audit log format
 
 One JSONL file. Default path: `$XDG_STATE_HOME/bareguard/<root-run-id>.jsonl`. Override via `audit.path` in config or `BAREGUARD_AUDIT_PATH` env var.
