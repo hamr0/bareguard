@@ -3,7 +3,7 @@
 All notable changes to bareguard are documented here. Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [SemVer](https://semver.org/).
 
 
-## [Unreleased]
+## [0.16.0] - 2026-09-19
 
 ### Fixed
 
@@ -41,7 +41,7 @@ All notable changes to bareguard are documented here. Format: [Keep a Changelog]
 
   **1.0 SemVer surface added:** the `_dropped_keys` / `_dropped_bytes` audit-line markers, and the genuinely-final guard's `_dropped_core` marker plus its reduced `{ts, seq, run_id, _dropped_keys, _dropped_bytes, _dropped_core}` line shape, with a bare `{_dropped_core: true}` as its own last-resort fallback if even that reduced shape doesn't fit (audit JSONL line format). `_dropped_core` is not reachable with today's fixed must-keep-key set and byte caps — a public-API invariant test in `test/audit-truncation-budget.test.js` holds that claim — but the marker and shape are documented now because the guard that stamps them ships in this line format regardless. When it does fire: the reduced line drops `phase`, `decision`, `dimension`/`newCap`, and the re-derived `action.type`/`result.costUsd`/`.tokens`/`.pricing` spend carriers entirely — none of those survive on a `_dropped_core` line, so a cold-start budget rebuild would not see that round's spend at all. State this plainly rather than implying the spend carriers always survive truncation: they do not, on this one last-resort path.
 
-  3 regression tests added to `test/audit-truncation-budget.test.js` (346 total, was 343): a many-top-level-keys shape asserting the line stays `<= MAX_LINE_BYTES` and that the two new counters are stamped; the same shape combined with an unserializable (BigInt) payload, exercising the other `scalarOnlyLine` caller; and a `phase:"topup"` line proving `dimension`/`newCap` survive many extra keys. The existing "scalar-only last-resort fallback" test was also strengthened with a byte-cap assertion and the two counter assertions — it previously asserted `_dropped` but never the byte cap, which is how 343/343 stayed green against the broken invariant. Fail-first verified against the pre-fix source (`git show` at the branch's prior HEAD): all four assertions red (6024 bytes / missing counters), green after the fix.
+  4 regression tests added to `test/audit-truncation-budget.test.js` (347 total, was 343): a many-top-level-keys shape asserting the line stays `<= MAX_LINE_BYTES` and that the two new counters are stamped; the same shape combined with an unserializable (BigInt) payload, exercising the other `scalarOnlyLine` caller; a `phase:"topup"` line proving `dimension`/`newCap` survive many extra keys; and a public-API invariant test maxing every `MUST_KEEP_KEYS` field plus 40 extra droppable keys to force the scalar-only backstop and pin that the must-keep core never exceeds `MAX_LINE_BYTES` on its own (the genuinely-final guard's invariant — unreachable through the public API with today's constants, but now exercised rather than left as an asserted-only comment; proven fail-first by shrinking `MAX_LINE_BYTES` in an out-of-repo copy of `audit.js`, which turns the `_dropped_core` assertion red). The existing "scalar-only last-resort fallback" test was also strengthened with a byte-cap assertion and the two counter assertions — it previously asserted `_dropped` but never the byte cap, which is how 343/343 stayed green against the broken invariant. Fail-first verified against the pre-fix source (`git show` at the branch's prior HEAD): all four assertions red (6024 bytes / missing counters), green after the fix.
 
 ### Added
 
