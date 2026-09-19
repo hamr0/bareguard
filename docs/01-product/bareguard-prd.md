@@ -286,6 +286,10 @@ PRE-EVAL (cross-cutting, all halt severity if triggered):
 THE 6 STEPS (first match wins; 2b/4b are co-located arms of step 13 `flags`):
   1. tools.denylist                 → deny (action)
   2. content.denyPatterns           → deny (action)
+        (content.unserializable — an action that cannot be serialized for
+         pattern matching (cycle, BigInt, throwing toJSON/getter) fails CLOSED
+         here rather than being waved through unmatched; also reachable on its
+         own from step 4's ask check if content.denyPatterns is configured [])
   2b. flags deny                    → deny (action; action[field] value maps to "deny")
   3. per-action-type deny rules     → deny (action)
         bash.denyPatterns / bash.allow / bash.invalidCmd (when action.type === "bash")
@@ -627,6 +631,14 @@ Children inherit via env var `BAREGUARD_AUDIT_PATH` set by the parent.
   with explicit `_truncated: true` boolean at line root for downstream
   consumers, plus inline `[TRUNCATED:n bytes]` markers in the field that
   was cut.
+- **Unserializable payload:** if the line cannot be `JSON.stringify`d at all
+  (a cyclic `action`/`result`, a `BigInt`, a throwing `toJSON`/getter), it
+  degrades to a scalars-only line tagged `_dropped: "payload not
+  serializable"` instead of throwing out of the gate and losing the line —
+  the decision, rule, correlation ids, and the round's spend (re-derived
+  `result.costUsd`/`.tokens`/`.pricing` and `action.type`) still survive.
+  If even that re-derivation throws (a throwing getter on those fields), the
+  line is tagged `_dropped_carriers: true` instead of losing the whole line.
 
 **Output sink:** file path OR callback function. Nothing else. (Datadog,
 Loki, S3 are caller-side adapters.)
@@ -1102,10 +1114,16 @@ array/map-shaped config surface — `tools.denylist.invalid`,
 `content.denyPatterns.invalid`/`askPatterns.invalid`, `fs.deny.invalid`/
 `readScope.invalid`/`writeScope.invalid`, `net.allowDomains.invalid`,
 `bash.allow.invalid`/`denyPatterns.invalid`, `flags.invalid` (built, not yet
-released — v0.15)), the audit JSONL line format (incl. the
-`unpriced` phase, v0.9, the `annotate_malformed` phase, v0.13, and `aid` now
+released — v0.15), and `content.unserializable` — an action that cannot be
+serialized for content matching now fails closed here instead of throwing out
+of the gate (built, not yet released)), the audit JSONL line format (incl. the
+`unpriced` phase, v0.9, the `annotate_malformed` phase, v0.13, `aid` now
 redacted/byte-bounded like `reason`/`where`/`verdict` — built, not yet released,
-v0.15), the
+v0.15, and the `_dropped: "payload not serializable"` / `_dropped_carriers`
+markers on a line whose payload could not be serialized at all — built, not
+yet released), the redacted-copy markers `[UNREADABLE]` (an own-props copy
+that could not read one of the action's fields), `[REDACTED:circular]`, and
+`[REDACTED:depth]` (built, not yet released), the
 `gate.annotate` fact contract (`surface` must be an explicit boolean — v0.13), the
 budget file format, and the
 `humanChannel` event/decision contract (incl. the `event.classification`/`event.tier`
