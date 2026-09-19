@@ -57,11 +57,35 @@ function actionSummary(action) {
  * @param {import("./types.js").Action} action the action to normalize
  * @returns {import("./types.js").Action} a null-prototype shallow copy (own props preserved)
  */
+// `Object.assign` READS every own enumerable property, which invokes getters —
+// so a field defined as a getter that throws killed this function, and with it
+// `check()`, before a single eval step ran. Copy key by key instead and mark the
+// one field that cannot be read, so the other fields still reach the floors: a
+// broken `action.debug` must not stop `bash.denyPatterns` seeing `args.command`.
+// Marked rather than dropped — a dropped key is indistinguishable from a key the
+// caller never sent, and this is the one shape where the gate genuinely does not
+// know what it was handed.
+const UNREADABLE = "[UNREADABLE]";
+function copyOwnSafely(src) {
+  const out = Object.create(null);
+  for (const k of Object.keys(src)) {
+    try { out[k] = src[k]; } catch { out[k] = UNREADABLE; }
+  }
+  return out;
+}
+
 function safeAction(action) {
   if (action == null || typeof action !== "object") return action;
-  const safe = Object.assign(Object.create(null), action);
-  if (action.args != null && typeof action.args === "object") {
-    safe.args = Object.assign(Object.create(null), action.args);
+  // `Object.keys` itself can throw on a revoked Proxy — there is no readable
+  // action left at that point, so hand back an empty own-props object and let
+  // the floors decide on nothing (tools' closed allowlist denies an absent
+  // `type`), rather than throwing out of the gate.
+  let safe;
+  try { safe = copyOwnSafely(action); } catch { return Object.create(null); }
+  let args;
+  try { args = action.args; } catch { args = undefined; }
+  if (args != null && typeof args === "object") {
+    try { safe.args = copyOwnSafely(args); } catch { safe.args = UNREADABLE; }
   }
   return safe;
 }
@@ -78,6 +102,13 @@ function safeAction(action) {
  * @returns {"pass"|"annotate-floor-ask"|"HITL"|"log"}
  *   pass = audit only · annotate-floor-ask = rides A's already-happening stop ·
  *   HITL = rides A's next ask · log = audit + agent-feedback only (no human)
+ * @when Only when you are building the Axis-B path by hand and need to know where a fact WOULD go before you pay to compute it. `gate.annotate()` already routes internally, so most callers never call this directly.
+ * @category axis-b
+ * @fails Never throws and has no side effects — it is a pure four-way lookup over three booleans. Any `knob` value other than `"strict"` behaves as `"relaxed"`.
+ * @example
+ * import { routeAnnotation } from "bareguard";
+ * routeAnnotation(true, false);            // "annotate-floor-ask" — irreversible + broke
+ * routeAnnotation(true, true, "relaxed"); // "log" — reversible + broke, no human
  */
 export function routeAnnotation(surface, reversible, knob = "strict") {
   if (!surface) return reversible ? "pass" : "annotate-floor-ask"; // honored
@@ -361,6 +392,22 @@ export class Gate {
   /**
    * @param {import("./types.js").GateConfig & { _clock?: () => number }} [config]
    *   Gate configuration. `_clock` is a millisecond clock override for tests.
+   * @signature new Gate(config?: GateConfig)
+   * @when Start here — this IS the chokepoint. Construct one per agent run, `await init()`, then `check()` every action before it runs and `record()` what it cost. Every other export in this package is a piece of this or a helper around it.
+   * @category gate
+   * @fails Throws at CONSTRUCTION on malformed config — a section that is not a plain object, or an array-shaped key (`tools.allowlist`, `bash.denyPatterns`, …) that is not an array. A config typo fails CLOSED rather than silently gating nothing. After construction a policy stop is a returned `outcome`, never a throw; `check()` resolves to a terminal allow/deny and never returns `askHuman` (it resolves that internally through `humanChannel`).
+   * @example
+   * import { Gate } from "bareguard";
+   * const gate = new Gate({
+   *   tools:  { allowlist: ["bash", "read"] },
+   *   bash:   { allow: ["git", "ls"] },
+   *   budget: { maxCostUsd: 5.00 },
+   *   humanChannel: async (event) => ({ decision: "allow" }),
+   * });
+   * await gate.init();
+   * const action = { type: "bash", args: { command: "git status" } };
+   * const decision = await gate.check(action);
+   * if (decision.outcome === "allow") await gate.record(action, { costUsd: 0.01 });
    */
   constructor(config = {}) {
     assertArrayShapedConfig(config);

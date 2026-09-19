@@ -207,6 +207,17 @@ shows full secrets or the suffix. Env-var redaction needs values ≥ 8 chars (a
 short env var like a port isn't redacted). Caller is still responsible for the
 shape of **results** before `gate.record` — but the same redactor runs over them.
 
+`redact()`'s key-aware walk also guards its own structural hazards on a caller
+object: a cycle (an object referencing itself, directly or through a shared
+reference) redacts to `[REDACTED:circular]` at the point of the repeat, and
+recursion past `MAX_WALK_DEPTH` (100 levels) redacts to `[REDACTED:depth]` —
+both leave the rest of the object's key-based redaction intact rather than
+bailing out of the whole walk. An own `toJSON` function on any object in the
+tree is dropped from the redacted copy (it would otherwise let `JSON.stringify`
+bypass the walk's redaction via its return value). `redact()` never throws,
+by contract, on a self-reference, a `BigInt`, a throwing `toJSON`, a throwing
+getter, or sheer nesting depth (50,000 levels, no cycle).
+
 ## Eval order in detail
 
 ```
@@ -220,6 +231,12 @@ PRE-EVAL (cross-cutting, all halt severity)
 THE 6 STEPS (first match wins; all action severity unless noted)
   1. tools.denylist                 → deny
   2. content.denyPatterns           → deny  (universal, e.g., DROP TABLE)
+       content.unserializable       → deny  (an action that cannot be serialized
+                                      for pattern matching — e.g. a cycle, a BigInt,
+                                      a throwing toJSON/getter — fails CLOSED here,
+                                      before the deny patterns ever run; reachable
+                                      from step 4's ask check too, on its own, if
+                                      content.denyPatterns is configured empty)
   2b. flags deny                    → deny  (action[field] value maps to "deny", e.g. injectionRisk:"high")
   3. per-action-type deny rules     → deny
         bash.denyPatterns / bash.allow (when action.type === "bash")
@@ -243,6 +260,7 @@ Universal denies first (1-2b-3), universal asks second (4-4b), capability scope 
 |---|---|---|
 | `tools.denylist` match | action | return error to LLM, continue loop |
 | `content.denyPatterns` match (e.g., `DROP TABLE`) | action | return error to LLM, continue loop |
+| `content.unserializable` (action cannot be pattern-matched at all) | action | return error to LLM, continue loop |
 | `flags.<field>` deny (e.g., `injectionRisk: "high"`) | action | return error to LLM, continue loop |
 | `flags.<field>` ask (e.g., `provenance: "web"`, after humanChannel resolves) | action | terminal allow or deny |
 | `bash.denyPatterns` (e.g., `sudo`) | action | return error to LLM, continue loop |
@@ -296,6 +314,26 @@ await gate.terminate(reason);                     // sticky terminate
 await gate.raiseCap(dimension, newCap);           // explicit cap raise (separate from humanChannel topup)
 await gate.haltContext();                         // deterministic stats over audit log
 ```
+
+### Primitives manifest (author-time discovery)
+
+`primitives.json` ships alongside the package (`"./primitives.json"` exports
+subpath, plus `pkg.primitives`) so an agent — or an AI assistant wiring this
+in — can discover what bareguard offers and how to call it without parsing
+prose:
+
+```js
+import primitives from "bareguard/primitives.json" with { type: "json" };
+```
+
+Every exported symbol whose JSDoc carries `@when` is a primitive entry
+(`name`, `category`, `when`, `import`, `signature`, `fails`, `example`); 13
+of 14 public exports are manifested, `BudgetUnavailableError` excluded as a
+bare error class. It carries no `version` field — `package.json` is the
+single authority. Nothing in `src/` reads this file; it is author-time only,
+not a runtime tool surface. `npm run build:primitives` regenerates it;
+`npm run check:primitives` (CI) fails the build if the committed file has
+drifted from source.
 
 ## Audit log format
 
@@ -354,7 +392,7 @@ These are deliberately NOT in bareguard. Don't look for them — build them or u
 
 1. **Allowlist does NOT silence asks.** Allowlisting `bash` does not bypass `content.askPatterns: [/\bdelete\b/i]`. A `delete` in the bash command still triggers humanChannel. This is intentional (v0.5 §4) — the v0.4 short-circuit was a foot-gun that silently disabled safe defaults. To silence, narrow `content.askPatterns`.
 2. **Budget caps are SOFT.** Cross-process budget can be exceeded by one action's spend before next refresh. Halt fires reliably on the next check after a record. Don't rely on hard cents-precision enforcement.
-3. **Audit line size capped at 3.5KB.** POSIX `O_APPEND` atomicity requires < PIPE_BUF (4KB). Larger `action.args` are auto-truncated with `[TRUNCATED:...]` markers. Don't put 10MB blobs in your action.
+3. **Audit line size capped at 3.5KB.** POSIX `O_APPEND` atomicity requires < PIPE_BUF (4KB). Larger `action.args` are auto-truncated with `[TRUNCATED:...]` markers. Don't put 10MB blobs in your action. If the whole line can't be serialized at all (a cyclic `action`/`result`, a `BigInt`, a throwing `toJSON`/getter), the emitted line degrades to a scalars-only line tagged `_dropped: "payload not serializable"` (plus `_dropped_carriers: true` if even re-deriving `result`/`action.type` for budget accounting failed) rather than losing the line or crashing the gate.
 4. **Glob is `*`-only in v0.1.** No `?`, no `[abc]`, no escapes. `mcp:*/admin_*` matches anything in the middle, including `/`. v0.2 may add `**`.
 5. **Secrets redaction is default-on but narrow.** Key-aware redaction (BG-1) fires with no config for `apiKey`/`api_key`/`authorization` + `Bearer …`/`sk-…` values — but NOT for `*_token`/`*_secret`-named keys (false-positive risk on `page_token`); add those via `secrets.keys`. **Env-var** redaction additionally needs values ≥ 8 chars (a short env var like `PORT=5432` isn't redacted — likely not a secret and would over-match). Disable the whole default-on backstop with `secrets.redactKeys: false`.
 6. **`gate.allows()` is a catalog pre-filter, NOT an authorization gate.** It returns `true` for askHuman actions (so ask-gated tools still show in a catalog and the human is prompted at invoke time) — it only returns `false` for outright `deny`/halt. **Always call `gate.check()` before executing**; never use `allows()` as the security decision.

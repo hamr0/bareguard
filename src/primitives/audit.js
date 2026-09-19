@@ -66,6 +66,174 @@ const LINE_FIELDS = Object.freeze([
 const PAYLOAD_KEYS = Object.freeze(LINE_FIELDS.filter((f) => f.bound === "perKey").map((f) => f.key));
 
 /**
+ * `scalarOnlyLine`'s must-keep core: top-level SCALAR keys its key-count bound
+ * (`boundKeyCount`, below) may never drop, even to fit `MAX_LINE_BYTES`. Two
+ * groups, both confirmed against their actual readers rather than assumed:
+ *   - routing/correlation fields the line FORMAT depends on (this file's own
+ *     header comment; every one of these is a scalar stamped by `emit` or by
+ *     the gate, never caller-payload-shaped): `ts`, `seq`, `run_id`,
+ *     `parent_run_id`, `spawn_depth`, `phase`, `decision`, `severity`, `rule`,
+ *     `aid`.
+ *   - budget-rebuild carriers `gate.js`'s `_rebuildBudgetFromAudit` reads back
+ *     off a persisted line. `result.costUsd`/`.tokens`/`.pricing` and
+ *     `action.type` are re-derived into their own small objects below, so they
+ *     are never top-level scalar keys here. `dimension` and `newCap` ARE
+ *     top-level scalars, read at `gate.js` (`l.dimension === "costUsd" ? capUsd
+ *     = l.newCap ...`) to reconstruct a topped-up cap on cold start — losing
+ *     either on a `phase:"topup"` line silently reopens the cap after a
+ *     restart, the same fail-open class this table exists to close. (`oldCap`
+ *     is written but never read back, so it is not included — it is safe to
+ *     drop.)
+ * The markers this file stamps (`_truncated`, `_dropped`, `_dropped_carriers`,
+ * `_dropped_keys`, `_dropped_bytes`) are protected separately, by their `_`
+ * prefix, so they don't need a place in this list.
+ *
+ * If you add a key here: test/audit-truncation-budget.test.js's "the
+ * must-keep core, every field maxed, never exceeds MAX_LINE_BYTES on its
+ * own" test hardcodes this list's caller-controlled fields through the
+ * public API (this list is private, so the test can't read it) — add the
+ * new key there too, or it goes unexercised.
+ * @type {ReadonlyArray<string>}
+ */
+const MUST_KEEP_KEYS = Object.freeze([
+  "ts", "seq", "run_id", "parent_run_id", "spawn_depth",
+  "phase", "decision", "severity", "rule", "aid",
+  "dimension", "newCap",
+]);
+
+/**
+ * Bound `obj`'s top-level KEY COUNT so `JSON.stringify(obj)` fits inside
+ * `MAX_LINE_BYTES`, given every VALUE is already clipped. `scalarOnlyLine`
+ * clipped every scalar to <=120 bytes per field but never bounded how many
+ * fields there were — 40 caller-supplied extra top-level scalar keys of 150
+ * bytes each produced a 6024-byte line (measured), stamped `_dropped` and
+ * written anyway, over the cap the atomic-append guarantee depends on.
+ *
+ * Drops the largest droppable keys first, one at a time, re-measuring after
+ * each — largest-first so the fewest keys are lost per byte recovered. Never
+ * drops a `MUST_KEEP_KEYS` entry, the re-derived `action`/`result` carriers, or
+ * any `_`-prefixed marker. Stamps `_dropped_keys`/`_dropped_bytes` so the loss
+ * is loud and countable, not silent.
+ * @param {object} obj a scalars-only line (mutated and returned)
+ * @returns {object} `obj`, guaranteed to serialize to <= MAX_LINE_BYTES
+ */
+function boundKeyCount(obj) {
+  if (Buffer.byteLength(JSON.stringify(obj), "utf8") <= MAX_LINE_BYTES) return obj;
+
+  const droppable = Object.keys(obj)
+    .filter((k) => !MUST_KEEP_KEYS.includes(k) && k !== "action" && k !== "result" && !k.startsWith("_"))
+    .map((k) => ({ k, bytes: Buffer.byteLength(JSON.stringify(obj[k]), "utf8") }))
+    .sort((a, b) => b.bytes - a.bytes);
+
+  // Stamp the counters BEFORE measuring each drop, not after the loop breaks:
+  // the markers themselves cost bytes, and checking fit without them, then
+  // adding them once the loop is done, is exactly the bug this function
+  // exists to close, one statement later — a real case measured 17 keys /
+  // 2261 bytes as "enough" without the markers, then the two counters pushed
+  // the line back over MAX_LINE_BYTES uncounted.
+  let droppedKeys = 0, droppedBytes = 0;
+  obj._dropped_keys = droppedKeys;
+  obj._dropped_bytes = droppedBytes;
+  for (const { k, bytes } of droppable) {
+    delete obj[k];
+    droppedKeys++;
+    droppedBytes += bytes;
+    obj._dropped_keys = droppedKeys;
+    obj._dropped_bytes = droppedBytes;
+    if (Buffer.byteLength(JSON.stringify(obj), "utf8") <= MAX_LINE_BYTES) break;
+  }
+  if (droppedKeys === 0) {
+    delete obj._dropped_keys;
+    delete obj._dropped_bytes;
+  }
+  if (Buffer.byteLength(JSON.stringify(obj), "utf8") <= MAX_LINE_BYTES) return obj;
+
+  // GENUINELY FINAL GUARD. Every droppable key is gone and the must-keep core
+  // (each value already <=120 bytes) still does not fit `MAX_LINE_BYTES` — not
+  // reachable with today's fixed ~12-key core and caps, but the invariant "a
+  // persisted line is never over MAX_LINE_BYTES" must hold with NO exception,
+  // not merely for the cases this file happens to have measured. Fall back to
+  // the three fields a consumer needs to place the entry in the stream, each
+  // re-clipped smaller still.
+  //
+  // That "not reachable today" claim is what
+  // test/audit-truncation-budget.test.js's "the must-keep core, every field
+  // maxed, never exceeds MAX_LINE_BYTES on its own (the genuinely-final
+  // guard's invariant)" test holds — through the public Audit API, not by
+  // exporting this function. It sizes every caller-controlled MUST_KEEP_KEYS
+  // value off MAX_LINE_BYTES (not off today's clip length), so the clip is
+  // the only thing bounding it, and asserts `_dropped_core` is never
+  // stamped; it goes red the moment `scalarOnlyLine`'s clip length is raised
+  // far enough that the clipped must-keep core alone exceeds MAX_LINE_BYTES.
+  // It does NOT cover a future must-keep field added to MUST_KEEP_KEYS —
+  // that list is private and the test hardcodes today's fields, so a newly
+  // added key is simply not exercised until this test is updated too (see
+  // the instruction beside MUST_KEEP_KEYS below).
+  const core = {
+    ts: typeof obj.ts === "string" ? clipBytes(obj.ts, 40) : (obj.ts ?? null),
+    seq: typeof obj.seq === "number" ? obj.seq : null,
+    run_id: typeof obj.run_id === "string" ? clipBytes(obj.run_id, 40) : (obj.run_id ?? null),
+    _dropped_keys: droppedKeys,
+    _dropped_bytes: droppedBytes,
+    _dropped_core: true,
+  };
+  if (Buffer.byteLength(JSON.stringify(core), "utf8") <= MAX_LINE_BYTES) return core;
+  // Only reachable if MAX_LINE_BYTES itself is edited in source to an
+  // absurdly small value — it is a module const (line 11), not configuration;
+  // there is no config path that sets it.
+  return { _dropped_core: true };
+}
+
+/**
+ * Scalar-only reduction of an audit line: keep every scalar field (clipped),
+ * drop object payloads, but re-derive the spend carriers and `action.type` so a
+ * cold-start budget rebuild still sees the round. Extracted so the two callers
+ * that need it — the oversize-line backstop and the unserializable-line
+ * backstop — cannot drift apart; a second copy is how `verdict`/`reason`/`aid`
+ * were each missed in turn.
+ *
+ * The result's top-level key COUNT is bounded too (`boundKeyCount`), so the
+ * line this returns always fits `MAX_LINE_BYTES` on its own. `extraMarkers` are
+ * merged in BEFORE that bound runs — a caller that instead added its own
+ * `_dropped`/`_truncated` marker AFTER calling this function would add bytes
+ * the bound never saw, silently re-exceeding the cap it had just enforced; that
+ * is the exact bug class this file exists to close, one call frame later.
+ * @param {object} line
+ * @param {object} [extraMarkers] `_`-prefixed marker fields the caller wants on
+ *   the result (e.g. `{ _dropped: "payload not serializable" }`); merged in
+ *   before the key-count bound runs, and never dropped by it.
+ * @returns {object} a scalars-only copy, <= MAX_LINE_BYTES when serialized
+ */
+function scalarOnlyLine(line, extraMarkers) {
+  const minimal = {};
+  for (const [k, v] of Object.entries(line)) {
+    if (v === null || typeof v !== "object") {
+      minimal[k] = typeof v === "string" ? clipBytes(v, 120) : v;
+    }
+  }
+  try {
+    if (line.result && typeof line.result === "object") {
+      const r = line.result;
+      const rr = {};
+      if (Number.isFinite(r.costUsd)) rr.costUsd = r.costUsd;
+      if (Number.isFinite(r.tokens)) rr.tokens = r.tokens;
+      if (typeof r.pricing === "string") rr.pricing = clipBytes(r.pricing, 32);
+      if (Object.keys(rr).length) minimal.result = rr;
+    }
+    if (line.action && typeof line.action === "object" && typeof line.action.type === "string") {
+      minimal.action = { type: clipBytes(line.action.type, 120) };
+    }
+  } catch {
+    // A throwing getter on `result.costUsd` / `action.type`. Losing the spend
+    // carrier over-counts nothing and under-counts one round; losing the whole
+    // LINE loses the record that the round happened at all. Keep the scalars.
+    minimal._dropped_carriers = true;
+  }
+  if (extraMarkers) Object.assign(minimal, extraMarkers);
+  return boundKeyCount(minimal);
+}
+
+/**
  * Bound one object's own values in place on a copy: a nested object over the cap
  * becomes a size marker, a string is byte-clipped. Shared by `action` and
  * `result` — they were two near-identical loops that had drifted (`result` never
@@ -130,6 +298,12 @@ function clipBytes(s, max) {
  * Resolve the default audit file path: XDG_STATE_HOME, then ~/.local/state, then cwd.
  * @param {string} rootRunId root run id used in the filename
  * @returns {string} absolute path to the per-family JSONL audit file
+ * @when Only to find out WHERE the audit log will land before a Gate exists — e.g. to print the path in a CLI banner, or to tail it. The Gate resolves this itself when you pass no `audit.filePath`.
+ * @category audit
+ * @fails Never throws — a pure path computation; it touches no filesystem and creates nothing. Resolves in order: `XDG_STATE_HOME`, then `~/.local/state`, then the current working directory.
+ * @example
+ * import { defaultAuditPath } from "bareguard";
+ * defaultAuditPath("run-7f3a"); // absolute path to the per-family JSONL log
  */
 function defaultAuditPath(rootRunId) {
   const xdgState = process.env.XDG_STATE_HOME;
@@ -212,7 +386,27 @@ export class Audit {
       this.entries.push(line);
       return;
     }
-    let serialized = JSON.stringify(line) + "\n";
+    let serialized;
+    // Set only when the try below fails: the SAFE scalars-only stand-in for
+    // `line`, used as the oversize block's base instead of the still-
+    // unserializable `line` itself (see the comment at its use below).
+    let unserializableFallback = null;
+    try {
+      serialized = JSON.stringify(line) + "\n";
+    } catch {
+      // UNSERIALIZABLE PAYLOAD. `action` and `result` are arbitrary caller
+      // objects: a self-reference (a framework stamping a session onto the
+      // action while the session holds the action), a BigInt, or a getter /
+      // `toJSON` that throws all make this throw. Unguarded, that threw out of
+      // emit() and out of gate.check() — the gate crashed instead of deciding,
+      // and no line was written at all. A missing audit line is the failure
+      // this file exists to prevent, so degrade to the scalars (which keep the
+      // decision, the rule, the correlation ids and the round's spend) and say
+      // so in-band rather than losing the record.
+      const minimal = scalarOnlyLine(line, { _dropped: "payload not serializable" });
+      unserializableFallback = minimal;
+      serialized = JSON.stringify(minimal) + "\n";
+    }
     if (Buffer.byteLength(serialized, "utf8") > MAX_LINE_BYTES) {
       // Re-bound every field that can carry caller-controlled or redaction-
       // expanded text — action, result, where, verdict, reason, meta — to keep
@@ -221,7 +415,17 @@ export class Audit {
       // INVARIANT: any field added to the redactor must ALSO be re-bounded here;
       // omitting one silently reopens the atomicity hole (0.13.0 `verdict`,
       // and `reason`, were each found that way).
-      const truncated = { ...line, _truncated: true };
+      //
+      // Base this on `unserializableFallback` when the try above failed, NEVER
+      // on the still-unserializable `line` — every `JSON.stringify` from here
+      // down (the per-field re-bound, the wholesale collapse, the scalar-only
+      // last resort) re-serializes whatever this spreads, so spreading the
+      // tainted `line` re-throws the exact TypeError this catch exists to
+      // avoid, one stage later (a BigInt/circular payload that ALSO produces
+      // an oversize line — reproduced via `gate.audit.emit()` directly with a
+      // BigInt field at default config, or a circular one under
+      // `secrets:{redactKeys:false}`).
+      const truncated = { ...(unserializableFallback ?? line), _truncated: true };
       for (const { key, bound } of LINE_FIELDS) {
         const v = truncated[key];
         if (bound === "clip") {
@@ -295,55 +499,27 @@ export class Audit {
         // Last resort: keep every SCALAR field, drop the object payloads, but
         // re-derive a scalars-only `result`/`action.type` (below) so budget
         // accounting still sees this round.
-        // REACHABLE — corrected: a `branch-review` at HEAD e5e96ef reached this
-        // branch with an oversized `aid` (before `aid` was added to LINE_FIELDS,
-        // above, it was the one caller-controlled string on the line with no
-        // per-field bound, so an oversize `aid` alone forced collapse all the
-        // way down to here). Adding `aid` to LINE_FIELDS CLOSES that specific
-        // path — an oversized `aid` is now clipped to FIELD_BYTE_CAP in the
-        // per-field pass at the top of this block, before the wholesale
-        // collapse even runs, so it no longer reaches this backstop on its
-        // own (verified by execution). The backstop remains reachable by other
-        // means — e.g. many caller-supplied top-level scalar fields outside
-        // LINE_FIELDS, none of which is bounded on its own but whose COUNT is
-        // unbounded — and IS covered:
-        // test/audit-truncation-budget.test.js's "the scalar-only last-resort
-        // fallback must still preserve result spend + action.type" forces it
-        // and asserts on `_dropped`. It remains an unconditional backstop
-        // (rather than an enumeration of today's fields) so the invariant "the
-        // persisted line is <= MAX_LINE_BYTES" holds by construction — the
-        // enumeration approach is what silently missed `verdict` (0.13.0) and
-        // `reason`/`aid` (this branch) in the first place.
-        // Deliberately generic rather than an allowlist of field names — a
-        // hardcoded list silently drops any field added later, and the line's
-        // routing/correlation fields (ts, seq, run_id, parent_run_id, aid,
-        // phase, decision, severity, rule) are all scalars by construction.
-        const minimal = {};
-        for (const [k, v] of Object.entries(truncated)) {
-          if (v === null || typeof v !== "object") {
-            minimal[k] = typeof v === "string" ? clipBytes(v, 120) : v;
-          }
-        }
-        // Even the scalar-only backstop must not zero out a round's spend: the
-        // cold-start rebuild gates on `phase === "record" && result` and reads
-        // `action.type` for the toolRounds count, so dropping both objects
-        // outright silently under-counts a round that genuinely cost money — a
-        // cap bypass that fails OPEN on restart. These re-derived carriers are
-        // scalars-only by construction, so they can never be the reason a line
-        // is still oversize.
-        if (truncated.result && typeof truncated.result === "object") {
-          const r = truncated.result;
-          const rr = {};
-          if (Number.isFinite(r.costUsd)) rr.costUsd = r.costUsd;
-          if (Number.isFinite(r.tokens)) rr.tokens = r.tokens;
-          if (typeof r.pricing === "string") rr.pricing = clipBytes(r.pricing, 32);
-          if (Object.keys(rr).length) minimal.result = rr;
-        }
-        if (truncated.action && typeof truncated.action === "object" && typeof truncated.action.type === "string") {
-          minimal.action = { type: clipBytes(truncated.action.type, 120) };
-        }
-        minimal._truncated = true;
-        minimal._dropped = "line exceeded MAX_LINE_BYTES after field truncation";
+        // REACHABLE, and for longer than this file believed: adding `aid` to
+        // LINE_FIELDS (a prior fix) closed the one-oversized-scalar path, but
+        // this branch stayed reachable by many caller-supplied top-level
+        // scalar keys outside LINE_FIELDS — none bounded on its own, and until
+        // now their COUNT wasn't either. Measured: 40 extra keys of 150 bytes
+        // each produced a 6024-byte line, still stamped `_dropped` and written
+        // over MAX_LINE_BYTES — the comment that used to sit here claimed the
+        // invariant "held by construction" while nothing enforced the key
+        // count, so that claim was false. `scalarOnlyLine` now bounds its own
+        // output's key count itself (`boundKeyCount`, with its must-keep core
+        // and `_dropped_keys`/`_dropped_bytes` counters), so the invariant is
+        // actually true here, not just asserted.
+        // Spend carriers and `action.type` are re-derived inside scalarOnlyLine:
+        // the cold-start rebuild gates on `phase === "record" && result` and reads
+        // `action.type` for the toolRounds count, so dropping both objects outright
+        // silently under-counts a round that genuinely cost money — a cap bypass
+        // that fails OPEN on restart.
+        const minimal = scalarOnlyLine(truncated, {
+          _truncated: true,
+          _dropped: "line exceeded MAX_LINE_BYTES after field truncation",
+        });
         serialized = JSON.stringify(minimal) + "\n";
       }
     }

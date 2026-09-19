@@ -68,6 +68,12 @@ const SUPER_RM_SPLIT = new RegExp(
  * Super-destructive (tier 3): machine / irrecoverable. Keyed by platform; the
  * `common` set applies everywhere and is merged with the active platform's set.
  * @type {{ common: RegExp[], linux: RegExp[], darwin: RegExp[], win32: RegExp[] }}
+ * @when Read it to see exactly what bareguard calls tier 3 on your platform, or to compose your own set on top. You do not pass it to `classifyCommand` — it is already the built-in tier-3 set.
+ * @category classify
+ * @fails Plain data; reading never throws. Not frozen — treat it as read-only, since mutating it changes tiering for every Gate in the process.
+ * @example
+ * import { SUPER_DESTRUCTIVE_PATTERNS } from "bareguard";
+ * SUPER_DESTRUCTIVE_PATTERNS.common.some((re) => re.test(cmd)); // is this irrecoverable?
  */
 export const SUPER_DESTRUCTIVE_PATTERNS = {
   common: [
@@ -113,6 +119,12 @@ export const SUPER_DESTRUCTIVE_PATTERNS = {
  * Destructive (tier 2): loss of a named target. Keyed by platform; `common`
  * merges with the active platform's set.
  * @type {{ common: RegExp[], linux: RegExp[], darwin: RegExp[], win32: RegExp[] }}
+ * @when Read it to see exactly what bareguard calls tier 2 (loss of a named target) on your platform, or to compose your own set on top. Already built in to `classifyCommand`; you do not pass it.
+ * @category classify
+ * @fails Plain data; reading never throws. Not frozen — treat it as read-only, since mutating it changes tiering for every Gate in the process.
+ * @example
+ * import { DESTRUCTIVE_PATTERNS } from "bareguard";
+ * DESTRUCTIVE_PATTERNS.win32.length; // what tier 2 means on Windows
  */
 export const DESTRUCTIVE_PATTERNS = {
   common: [
@@ -172,6 +184,12 @@ export const DESTRUCTIVE_PATTERNS = {
  * so it is read-only introspection, never a mutable module-global. `reclassify`
  * can still tier any specific invocation back down.
  * @type {readonly RegExp[]}
+ * @when Opt in to a coarse speed-bump on inline interpreter code (`python3 -c`, `node -e`, `php -r`) by passing it as `extraDestructive`. Deliberately in NO default set: the same action via `python3 script.py` stays `safe`, so a default escalation would be a false-positive flip for every consumer without closing the hole.
+ * @category classify
+ * @fails Frozen, so a mutation attempt throws in strict mode instead of silently changing every Gate in the process. Reading it never throws.
+ * @example
+ * import { classifyCommand, INTERPRETER_PATTERNS } from "bareguard";
+ * classifyCommand("python3 -c 'import shutil'", { extraDestructive: INTERPRETER_PATTERNS }); // "destructive"
  */
 export const INTERPRETER_PATTERNS = Object.freeze([
   // python -c, node -e, perl -e/-E, ruby -e
@@ -205,6 +223,14 @@ function currentPlatform() {
  *   ("safe"|"destructive"|"super_destructive")} [opts.reclassify]  final override
  *   hook for app-specific commands; an invalid return is ignored.
  * @returns {"safe"|"destructive"|"super_destructive"}
+ * @when Reach for this to tier a shell command's blast radius BEFORE running it — e.g. to pick how much ceremony your human channel demands. Use it standalone when you want the tiering without a Gate; inside a Gate, set `bash: { classify: true }` instead and the gate calls it for you.
+ * @category classify
+ * @fails Never throws on its own: a non-string or empty `command` returns `"safe"`, an unknown `platform` falls back to the host's, and non-array `extra*` options are ignored. A `reclassify` callback you supply is called unguarded, so if IT throws the throw propagates. Best-effort and defeatable by construction (base64, heredocs, inline interpreter code) — a speed bump, never a sandbox.
+ * @example
+ * import { classifyCommand } from "bareguard";
+ * classifyCommand("git status");        // "safe"
+ * classifyCommand("rm -rf build");      // "destructive"
+ * classifyCommand("sudo rm -rf /");     // "super_destructive"
  */
 export function classifyCommand(command, opts = {}) {
   if (typeof command !== "string" || command.length === 0) return "safe";
