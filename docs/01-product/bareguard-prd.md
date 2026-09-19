@@ -639,6 +639,25 @@ Children inherit via env var `BAREGUARD_AUDIT_PATH` set by the parent.
   `result.costUsd`/`.tokens`/`.pricing` and `action.type`) still survive.
   If even that re-derivation throws (a throwing getter on those fields), the
   line is tagged `_dropped_carriers: true` instead of losing the whole line.
+- **Key-count bound (the scalars-only backstop's own bound):** the two
+  backstops above (oversize-line, unserializable-payload) both reduce to a
+  scalars-only line whose per-field VALUES are clipped but whose top-level
+  KEY COUNT was, until this fix, unbounded — many caller-supplied top-level
+  scalar keys could still push the reduced line back over 3.5KB. `boundKeyCount`
+  now drops the largest droppable keys first, re-measuring after each, stamping
+  `_dropped_keys`/`_dropped_bytes` so the loss is loud and countable. A frozen
+  `MUST_KEEP_KEYS` table protects the routing/correlation fields the line
+  format depends on plus the budget-rebuild carriers (`dimension`/`newCap` on
+  a `phase:"topup"` line; `action.type`/`result.costUsd`/`.tokens`/`.pricing`
+  are re-derived separately and never top-level scalar keys here). A
+  genuinely-final guard covers the case where even that must-keep core does
+  not fit `MAX_LINE_BYTES` — not reachable with today's fixed key set and byte
+  caps, but present so the "never over the cap" invariant holds with no
+  exception: it falls back to `{ts, seq, run_id, _dropped_keys,
+  _dropped_bytes, _dropped_core: true}`, or a bare `{_dropped_core: true}` if
+  even that doesn't fit. On a `_dropped_core` line, `phase`/`decision`/
+  `dimension`/`newCap` and the re-derived spend carriers are NOT preserved —
+  a cold-start budget rebuild would not see that round at all.
 
 **Output sink:** file path OR callback function. Nothing else. (Datadog,
 Loki, S3 are caller-side adapters.)
@@ -1121,7 +1140,12 @@ of the gate (built, not yet released)), the audit JSONL line format (incl. the
 redacted/byte-bounded like `reason`/`where`/`verdict` — built, not yet released,
 v0.15, and the `_dropped: "payload not serializable"` / `_dropped_carriers`
 markers on a line whose payload could not be serialized at all — built, not
-yet released), the redacted-copy markers `[UNREADABLE]` (an own-props copy
+yet released), the `_dropped_keys` / `_dropped_bytes` markers and the
+genuinely-final guard's `_dropped_core` marker plus its reduced
+`{ts, seq, run_id, _dropped_keys, _dropped_bytes, _dropped_core}` line shape
+(with a bare `{_dropped_core: true}` as its own last-resort fallback) on the
+scalars-only backstop's own key-count bound — built, not yet released), the
+redacted-copy markers `[UNREADABLE]` (an own-props copy
 that could not read one of the action's fields), `[REDACTED:circular]`, and
 `[REDACTED:depth]` (built, not yet released), the
 `gate.annotate` fact contract (`surface` must be an explicit boolean — v0.13), the
