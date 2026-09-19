@@ -257,6 +257,10 @@ export class Audit {
       return;
     }
     let serialized;
+    // Set only when the try below fails: the SAFE scalars-only stand-in for
+    // `line`, used as the oversize block's base instead of the still-
+    // unserializable `line` itself (see the comment at its use below).
+    let unserializableFallback = null;
     try {
       serialized = JSON.stringify(line) + "\n";
     } catch {
@@ -271,6 +275,7 @@ export class Audit {
       // so in-band rather than losing the record.
       const minimal = scalarOnlyLine(line);
       minimal._dropped = "payload not serializable";
+      unserializableFallback = minimal;
       serialized = JSON.stringify(minimal) + "\n";
     }
     if (Buffer.byteLength(serialized, "utf8") > MAX_LINE_BYTES) {
@@ -281,7 +286,17 @@ export class Audit {
       // INVARIANT: any field added to the redactor must ALSO be re-bounded here;
       // omitting one silently reopens the atomicity hole (0.13.0 `verdict`,
       // and `reason`, were each found that way).
-      const truncated = { ...line, _truncated: true };
+      //
+      // Base this on `unserializableFallback` when the try above failed, NEVER
+      // on the still-unserializable `line` — every `JSON.stringify` from here
+      // down (the per-field re-bound, the wholesale collapse, the scalar-only
+      // last resort) re-serializes whatever this spreads, so spreading the
+      // tainted `line` re-throws the exact TypeError this catch exists to
+      // avoid, one stage later (a BigInt/circular payload that ALSO produces
+      // an oversize line — reproduced via `gate.audit.emit()` directly with a
+      // BigInt field at default config, or a circular one under
+      // `secrets:{redactKeys:false}`).
+      const truncated = { ...(unserializableFallback ?? line), _truncated: true };
       for (const { key, bound } of LINE_FIELDS) {
         const v = truncated[key];
         if (bound === "clip") {
