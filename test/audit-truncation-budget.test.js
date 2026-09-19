@@ -193,9 +193,20 @@ test("audit truncation: the must-keep core, every field maxed, never exceeds MAX
   // dimension/newCap per emit) is set at or beyond its 120-byte clip length,
   // action/result carry real spend, and 40 extra 150-byte scalar keys force
   // the line through the oversize path into the scalar-only last resort.
+  //
+  // Each must-keep input is sized off MAX_LINE_BYTES, not off today's
+  // 120-byte clip length: an input of only ~200 bytes is "maxed" only
+  // relative to the clip in force today, so raising the clip later (a
+  // legitimate future change) would make the input itself the limit again
+  // and the guard would silently stop being exercised, while this comment
+  // kept claiming it was. Sized off the cap instead, the clip is the ONLY
+  // thing that can ever bound these values, so this test tracks the clip
+  // length wherever it goes and stays a real exercise of the guard's claim
+  // (proven both directions below, with the clip raised in an out-of-repo
+  // copy of audit.js — see the commit message).
   const dir = await makeTmpDir(); t.after(async () => cleanup(dir));
   const auditPath = path.join(dir, "audit.jsonl");
-  const long = (prefix) => prefix + "x".repeat(200); // well beyond the 120-byte clip
+  const long = (prefix) => prefix + "x".repeat(MAX_LINE_BYTES); // always exceeds the clip, whatever it is
   const a = new Audit({
     filePath: auditPath,
     runId: long("run-"),

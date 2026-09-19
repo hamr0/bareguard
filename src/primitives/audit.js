@@ -87,6 +87,12 @@ const PAYLOAD_KEYS = Object.freeze(LINE_FIELDS.filter((f) => f.bound === "perKey
  * The markers this file stamps (`_truncated`, `_dropped`, `_dropped_carriers`,
  * `_dropped_keys`, `_dropped_bytes`) are protected separately, by their `_`
  * prefix, so they don't need a place in this list.
+ *
+ * If you add a key here: test/audit-truncation-budget.test.js's "the
+ * must-keep core, every field maxed, never exceeds MAX_LINE_BYTES on its
+ * own" test hardcodes this list's caller-controlled fields through the
+ * public API (this list is private, so the test can't read it) — add the
+ * new key there too, or it goes unexercised.
  * @type {ReadonlyArray<string>}
  */
 const MUST_KEEP_KEYS = Object.freeze([
@@ -154,10 +160,15 @@ function boundKeyCount(obj) {
   // test/audit-truncation-budget.test.js's "the must-keep core, every field
   // maxed, never exceeds MAX_LINE_BYTES on its own (the genuinely-final
   // guard's invariant)" test holds — through the public Audit API, not by
-  // exporting this function. It maxes every caller-controlled MUST_KEEP_KEYS
-  // field and asserts `_dropped_core` is never stamped; it goes red the
-  // moment a future must-keep field (or a larger clip length) makes this
-  // branch reachable, pointing straight back here instead of rotting silently.
+  // exporting this function. It sizes every caller-controlled MUST_KEEP_KEYS
+  // value off MAX_LINE_BYTES (not off today's clip length), so the clip is
+  // the only thing bounding it, and asserts `_dropped_core` is never
+  // stamped; it goes red the moment `scalarOnlyLine`'s clip length is raised
+  // far enough that the clipped must-keep core alone exceeds MAX_LINE_BYTES.
+  // It does NOT cover a future must-keep field added to MUST_KEEP_KEYS —
+  // that list is private and the test hardcodes today's fields, so a newly
+  // added key is simply not exercised until this test is updated too (see
+  // the instruction beside MUST_KEEP_KEYS below).
   const core = {
     ts: typeof obj.ts === "string" ? clipBytes(obj.ts, 40) : (obj.ts ?? null),
     seq: typeof obj.seq === "number" ? obj.seq : null,
@@ -167,7 +178,9 @@ function boundKeyCount(obj) {
     _dropped_core: true,
   };
   if (Buffer.byteLength(JSON.stringify(core), "utf8") <= MAX_LINE_BYTES) return core;
-  // Only reachable if MAX_LINE_BYTES itself is configured absurdly small.
+  // Only reachable if MAX_LINE_BYTES itself is edited in source to an
+  // absurdly small value — it is a module const (line 11), not configuration;
+  // there is no config path that sets it.
   return { _dropped_core: true };
 }
 
