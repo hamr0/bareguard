@@ -96,15 +96,6 @@ const MUST_KEEP_KEYS = Object.freeze([
 ]);
 
 /**
- * Bound one object's own values in place on a copy: a nested object over the cap
- * becomes a size marker, a string is byte-clipped. Shared by `action` and
- * `result` — they were two near-identical loops that had drifted (`result` never
- * bounded its nested objects), which is the same divergence-by-hand this table
- * exists to remove.
- * @param {object} obj object to bound
- * @returns {object} a bounded copy
- */
-/**
  * Bound `obj`'s top-level KEY COUNT so `JSON.stringify(obj)` fits inside
  * `MAX_LINE_BYTES`, given every VALUE is already clipped. `scalarOnlyLine`
  * clipped every scalar to <=120 bytes per field but never bounded how many
@@ -158,6 +149,15 @@ function boundKeyCount(obj) {
   // not merely for the cases this file happens to have measured. Fall back to
   // the three fields a consumer needs to place the entry in the stream, each
   // re-clipped smaller still.
+  //
+  // That "not reachable today" claim is what
+  // test/audit-truncation-budget.test.js's "the must-keep core, every field
+  // maxed, never exceeds MAX_LINE_BYTES on its own (the genuinely-final
+  // guard's invariant)" test holds — through the public Audit API, not by
+  // exporting this function. It maxes every caller-controlled MUST_KEEP_KEYS
+  // field and asserts `_dropped_core` is never stamped; it goes red the
+  // moment a future must-keep field (or a larger clip length) makes this
+  // branch reachable, pointing straight back here instead of rotting silently.
   const core = {
     ts: typeof obj.ts === "string" ? clipBytes(obj.ts, 40) : (obj.ts ?? null),
     seq: typeof obj.seq === "number" ? obj.seq : null,
@@ -220,6 +220,15 @@ function scalarOnlyLine(line, extraMarkers) {
   return boundKeyCount(minimal);
 }
 
+/**
+ * Bound one object's own values in place on a copy: a nested object over the cap
+ * becomes a size marker, a string is byte-clipped. Shared by `action` and
+ * `result` — they were two near-identical loops that had drifted (`result` never
+ * bounded its nested objects), which is the same divergence-by-hand this table
+ * exists to remove.
+ * @param {object} obj object to bound
+ * @returns {object} a bounded copy
+ */
 function boundOwnValues(obj) {
   const out = { ...obj };
   for (const k of Object.keys(out)) {

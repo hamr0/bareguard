@@ -41,7 +41,7 @@ All notable changes to bareguard are documented here. Format: [Keep a Changelog]
 
   **1.0 SemVer surface added:** the `_dropped_keys` / `_dropped_bytes` audit-line markers (audit JSONL line format).
 
-  4 regression tests added to `test/audit-truncation-budget.test.js` (350 total, was 346): the many-top-level-keys shape now also asserts the line stays `<= MAX_LINE_BYTES` and that the two new counters are stamped (the existing "scalar-only last-resort fallback" test asserted `_dropped` but never the byte cap — how 343/343 stayed green against the broken invariant); the same shape combined with an unserializable (BigInt) payload, exercising the other `scalarOnlyLine` caller; and a `phase:"topup"` line proving `dimension`/`newCap` survive many extra keys. Fail-first verified against the pre-fix source (`git show` at the branch's prior HEAD): all four assertions red (6024 bytes / missing counters), green after the fix.
+  3 regression tests added to `test/audit-truncation-budget.test.js` (346 total, was 343): a many-top-level-keys shape asserting the line stays `<= MAX_LINE_BYTES` and that the two new counters are stamped; the same shape combined with an unserializable (BigInt) payload, exercising the other `scalarOnlyLine` caller; and a `phase:"topup"` line proving `dimension`/`newCap` survive many extra keys. The existing "scalar-only last-resort fallback" test was also strengthened with a byte-cap assertion and the two counter assertions — it previously asserted `_dropped` but never the byte cap, which is how 343/343 stayed green against the broken invariant. Fail-first verified against the pre-fix source (`git show` at the branch's prior HEAD): all four assertions red (6024 bytes / missing counters), green after the fix.
 
 ### Added
 

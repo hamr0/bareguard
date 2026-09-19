@@ -180,6 +180,74 @@ test("audit truncation: an unserializable payload PLUS many top-level scalar key
   assert.equal(dTok, 9);
 });
 
+test("audit truncation: the must-keep core, every field maxed, never exceeds MAX_LINE_BYTES on its own (the genuinely-final guard's invariant)", async (t) => {
+  // boundKeyCount's last-resort fallback (audit.js, the "GENUINELY FINAL
+  // GUARD" comment) exists for a case its own comment says is "not reachable
+  // with today's fixed ~12-key core and caps" — i.e. that MUST_KEEP_KEYS,
+  // each clipped to its worst-case length, plus the re-derived action/result
+  // carriers, can never itself exceed MAX_LINE_BYTES. That claim has no
+  // in-repo test and cannot be whitebox-tested without exporting internals
+  // (rejected: test-only production code). This proves it through the public
+  // Audit API instead: every MUST_KEEP_KEYS field that IS caller-controlled
+  // (run_id/parent_run_id at construction; phase/decision/severity/rule/aid/
+  // dimension/newCap per emit) is set at or beyond its 120-byte clip length,
+  // action/result carry real spend, and 40 extra 150-byte scalar keys force
+  // the line through the oversize path into the scalar-only last resort.
+  const dir = await makeTmpDir(); t.after(async () => cleanup(dir));
+  const auditPath = path.join(dir, "audit.jsonl");
+  const long = (prefix) => prefix + "x".repeat(200); // well beyond the 120-byte clip
+  const a = new Audit({
+    filePath: auditPath,
+    runId: long("run-"),
+    parentRunId: long("parent-"),
+  });
+  await a.init();
+
+  const fields = {
+    phase: long("phase-"),
+    decision: long("decision-"),
+    severity: long("severity-"),
+    rule: long("rule-"),
+    aid: long("aid-"),
+    dimension: long("dimension-"),
+    newCap: long("newcap-"),
+    action: { type: "tool" },
+    result: { costUsd: 4.2, tokens: 17, pricing: "priced" },
+  };
+  // Extra droppable keys, oversized enough that dropping them all is the
+  // ONLY way the drop loop could bring the line under MAX_LINE_BYTES with the
+  // must-keep core this large — if the invariant were false, this is exactly
+  // the shape that would hit the genuinely-final guard's core fallback
+  // (`{ts, seq, run_id}` only) and lose every other must-keep field.
+  for (let i = 0; i < 40; i++) fields["extra" + i] = "e".repeat(150);
+
+  await a.emit(fields);
+  const [line] = await a.readAll();
+
+  const lineBytes = Buffer.byteLength(JSON.stringify(line), "utf8");
+  assert.ok(lineBytes <= MAX_LINE_BYTES, `line was ${lineBytes} bytes, over the ${MAX_LINE_BYTES}-byte cap`);
+  // Proves the backstop actually ran, not that the line happened to be small.
+  assert.ok(line._dropped_keys > 0);
+  assert.ok(line._dropped_bytes > 0);
+  // The genuinely-final core fallback (`{ts, seq, run_id}` only) never fired —
+  // that is this test's actual claim: the must-keep core fit without it.
+  assert.equal(line._dropped_core, undefined);
+  // Every must-keep field survived, at its clipped (not dropped) worst-case length.
+  for (const key of ["ts", "seq", "run_id", "parent_run_id", "spawn_depth",
+                      "phase", "decision", "severity", "rule", "aid", "dimension", "newCap"]) {
+    assert.ok(Object.prototype.hasOwnProperty.call(line, key), `must-keep key "${key}" was dropped`);
+  }
+  assert.ok(line.run_id.startsWith("run-"));
+  assert.ok(line.phase.startsWith("phase-"));
+  assert.ok(line.aid.startsWith("aid-"));
+  // Budget carriers survived the collapse too.
+  assert.deepEqual(line.action, { type: "tool" });
+  const { unpriced, dUsd, dTok } = sanitizeSpend(line.result);
+  assert.equal(unpriced, false);
+  assert.equal(dUsd, 4.2);
+  assert.equal(dTok, 17);
+});
+
 test("audit truncation: a topup line's dimension/newCap survive many extra top-level scalar keys", async (t) => {
   // `_rebuildBudgetFromAudit` (gate.js) reconstructs a raised cap from
   // `l.dimension`/`l.newCap` on a `phase:"topup"` line — these are never
