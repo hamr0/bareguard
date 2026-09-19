@@ -130,6 +130,12 @@ function clipBytes(s, max) {
  * Resolve the default audit file path: XDG_STATE_HOME, then ~/.local/state, then cwd.
  * @param {string} rootRunId root run id used in the filename
  * @returns {string} absolute path to the per-family JSONL audit file
+ * @when Only to find out WHERE the audit log will land before a Gate exists — e.g. to print the path in a CLI banner, or to tail it. The Gate resolves this itself when you pass no `audit.filePath`.
+ * @category audit
+ * @fails Never throws — a pure path computation; it touches no filesystem and creates nothing. Resolves in order: `XDG_STATE_HOME`, then `~/.local/state`, then the current working directory.
+ * @example
+ * import { defaultAuditPath } from "bareguard";
+ * defaultAuditPath("run-7f3a"); // absolute path to the per-family JSONL log
  */
 function defaultAuditPath(rootRunId) {
   const xdgState = process.env.XDG_STATE_HOME;

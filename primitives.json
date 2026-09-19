@@ -1,0 +1,122 @@
+{
+  "package": "bareguard",
+  "primitives": [
+    {
+      "name": "classifyCommand",
+      "category": "classify",
+      "when": "Reach for this to tier a shell command's blast radius BEFORE running it — e.g. to pick how much ceremony your human channel demands. Use it standalone when you want the tiering without a Gate; inside a Gate, set `bash: { classify: true }` instead and the gate calls it for you.",
+      "import": "import { classifyCommand } from 'bareguard'",
+      "signature": "classifyCommand(command: string, opts?: object) => \"safe\"|\"destructive\"|\"super_destructive\"",
+      "fails": "Never throws on its own: a non-string or empty `command` returns `\"safe\"`, an unknown `platform` falls back to the host's, and non-array `extra*` options are ignored. A `reclassify` callback you supply is called unguarded, so if IT throws the throw propagates. Best-effort and defeatable by construction (base64, heredocs, inline interpreter code) — a speed bump, never a sandbox.",
+      "example": "import { classifyCommand } from \"bareguard\";\nclassifyCommand(\"git status\");        // \"safe\"\nclassifyCommand(\"rm -rf build\");      // \"destructive\"\nclassifyCommand(\"sudo rm -rf /\");     // \"super_destructive\""
+    },
+    {
+      "name": "defaultAuditPath",
+      "category": "audit",
+      "when": "Only to find out WHERE the audit log will land before a Gate exists — e.g. to print the path in a CLI banner, or to tail it. The Gate resolves this itself when you pass no `audit.filePath`.",
+      "import": "import { defaultAuditPath } from 'bareguard'",
+      "signature": "defaultAuditPath(rootRunId: string) => string",
+      "fails": "Never throws — a pure path computation; it touches no filesystem and creates nothing. Resolves in order: `XDG_STATE_HOME`, then `~/.local/state`, then the current working directory.",
+      "example": "import { defaultAuditPath } from \"bareguard\";\ndefaultAuditPath(\"run-7f3a\"); // absolute path to the per-family JSONL log"
+    },
+    {
+      "name": "DESTRUCTIVE_PATTERNS",
+      "category": "classify",
+      "when": "Read it to see exactly what bareguard calls tier 2 (loss of a named target) on your platform, or to compose your own set on top. Already built in to `classifyCommand`; you do not pass it.",
+      "import": "import { DESTRUCTIVE_PATTERNS } from 'bareguard'",
+      "signature": "DESTRUCTIVE_PATTERNS: { common: RegExp[], linux: RegExp[], darwin: RegExp[], win32: RegExp[] }",
+      "fails": "Plain data; reading never throws. Not frozen — treat it as read-only, since mutating it changes tiering for every Gate in the process.",
+      "example": "import { DESTRUCTIVE_PATTERNS } from \"bareguard\";\nDESTRUCTIVE_PATTERNS.win32.length; // what tier 2 means on Windows"
+    },
+    {
+      "name": "Gate",
+      "category": "gate",
+      "when": "Start here — this IS the chokepoint. Construct one per agent run, `await init()`, then `check()` every action before it runs and `record()` what it cost. Every other export in this package is a piece of this or a helper around it.",
+      "import": "import { Gate } from 'bareguard'",
+      "signature": "new Gate(config?: GateConfig)",
+      "fails": "Throws at CONSTRUCTION on malformed config — a section that is not a plain object, or an array-shaped key (`tools.allowlist`, `bash.denyPatterns`, …) that is not an array. A config typo fails CLOSED rather than silently gating nothing. After construction a policy stop is a returned `outcome`, never a throw; `check()` resolves to a terminal allow/deny and never returns `askHuman` (it resolves that internally through `humanChannel`).",
+      "example": "import { Gate } from \"bareguard\";\nconst gate = new Gate({\n  tools:  { allowlist: [\"bash\", \"read\"] },\n  bash:   { allow: [\"git\", \"ls\"] },\n  budget: { maxCostUsd: 5.00 },\n  humanChannel: async (event) => ({ decision: \"allow\" }),\n});\nawait gate.init();\nconst action = { type: \"bash\", args: { command: \"git status\" } };\nconst decision = await gate.check(action);\nif (decision.outcome === \"allow\") await gate.record(action, { costUsd: 0.01 });"
+    },
+    {
+      "name": "globToRegex",
+      "category": "matching",
+      "when": "Only to mirror bareguard's own glob matching outside the gate — previewing which tools an allowlist admits, or testing a pattern you are about to configure. Supports `*` ONLY (matching any character, including `/` and newlines): no `?`, no character classes, no escapes.",
+      "import": "import { globToRegex } from 'bareguard'",
+      "signature": "globToRegex(glob: string) => RegExp",
+      "fails": "Throws a `SyntaxError` only if the escaped pattern is not a valid RegExp; ordinary glob input never does. Regex metacharacters in the input are escaped for you, so `\"a.b\"` matches the literal `a.b`.",
+      "example": "import { globToRegex } from \"bareguard\";\nglobToRegex(\"read_*\").test(\"read_file\"); // true"
+    },
+    {
+      "name": "INTERPRETER_PATTERNS",
+      "category": "classify",
+      "when": "Opt in to a coarse speed-bump on inline interpreter code (`python3 -c`, `node -e`, `php -r`) by passing it as `extraDestructive`. Deliberately in NO default set: the same action via `python3 script.py` stays `safe`, so a default escalation would be a false-positive flip for every consumer without closing the hole.",
+      "import": "import { INTERPRETER_PATTERNS } from 'bareguard'",
+      "signature": "INTERPRETER_PATTERNS: readonly RegExp[]",
+      "fails": "Frozen, so a mutation attempt throws in strict mode instead of silently changing every Gate in the process. Reading it never throws.",
+      "example": "import { classifyCommand, INTERPRETER_PATTERNS } from \"bareguard\";\nclassifyCommand(\"python3 -c 'import shutil'\", { extraDestructive: INTERPRETER_PATTERNS }); // \"destructive\""
+    },
+    {
+      "name": "matchAny",
+      "category": "matching",
+      "when": "The one you usually want over `globToRegex` — test a name against a list of patterns the way `tools.allowlist` / `fs.deny` do. Use it to preview a config, not to enforce; enforcement is the Gate's job.",
+      "import": "import { matchAny } from 'bareguard'",
+      "signature": "matchAny(name: string, globs?: string[]) => boolean",
+      "fails": "Never throws for ordinary input; a missing or empty `globs` returns `false` (no match), which is why an EMPTY `tools.allowlist` is handled by the gate rather than here.",
+      "example": "import { matchAny } from \"bareguard\";\nmatchAny(\"read_file\", [\"read_*\", \"search\"]); // true"
+    },
+    {
+      "name": "PAYLOAD_FIELDS",
+      "category": "content",
+      "when": "Read it to see which `action.args` fields `content` patterns deliberately do NOT scan — the write payload (the document being written), as opposed to the operation. Check it when a deny you expected did not fire on file contents.",
+      "import": "import { PAYLOAD_FIELDS } from 'bareguard'",
+      "signature": "PAYLOAD_FIELDS: readonly string[]",
+      "fails": "Frozen: an accidental push throws in strict mode rather than silently changing matching for every Gate in the process. There is no config knob — the scoping is fixed at the library.",
+      "example": "import { PAYLOAD_FIELDS } from \"bareguard\";\nPAYLOAD_FIELDS; // [\"content\", \"contents\"] — a literal DROP TABLE inside these is not a deny"
+    },
+    {
+      "name": "redact",
+      "category": "secrets",
+      "when": "Only when you are writing your OWN log or human-channel payload and need the same scrubbing the audit line gets. The Gate already redacts every audit line by default — you do not call this to protect the audit.",
+      "import": "import { redact } from 'bareguard'",
+      "signature": "redact(action: T, cfg?: SecretsConfig) => T",
+      "fails": "Never throws, by contract: it runs inside every audit emit, so a throw would stop the gate dead on every later action. A falsy or non-JSON-serializable value comes back unchanged, and a malformed `secrets` config falls back to the built-in defaults rather than erroring. Non-mutating — the original object is never touched, so policy still evaluates the real action.",
+      "example": "import { redact } from \"bareguard\";\nredact({ apiKey: \"sk-live-abcdef0123456789\" });\n// => { apiKey: \"[REDACTED:key=apiKey]\" }"
+    },
+    {
+      "name": "routeAnnotation",
+      "category": "axis-b",
+      "when": "Only when you are building the Axis-B path by hand and need to know where a fact WOULD go before you pay to compute it. `gate.annotate()` already routes internally, so most callers never call this directly.",
+      "import": "import { routeAnnotation } from 'bareguard'",
+      "signature": "routeAnnotation(surface: boolean, reversible: boolean, knob?: \"strict\"|\"relaxed\") => \"pass\"|\"annotate-floor-ask\"|\"HITL\"|\"log\"",
+      "fails": "Never throws and has no side effects — it is a pure four-way lookup over three booleans. Any `knob` value other than `\"strict\"` behaves as `\"relaxed\"`.",
+      "example": "import { routeAnnotation } from \"bareguard\";\nrouteAnnotation(true, false);            // \"annotate-floor-ask\" — irreversible + broke\nrouteAnnotation(true, true, \"relaxed\"); // \"log\" — reversible + broke, no human"
+    },
+    {
+      "name": "SAFE_DEFAULT_ASK_PATTERNS",
+      "category": "content",
+      "when": "Read it to see what `content` escalates to a human at zero config, or spread it into your own `content.askPatterns` to keep the defaults and add to them.",
+      "import": "import { SAFE_DEFAULT_ASK_PATTERNS } from 'bareguard'",
+      "signature": "SAFE_DEFAULT_ASK_PATTERNS: RegExp[]",
+      "fails": "Plain data; reading never throws. Not frozen — treat it as read-only. These raise an ask, never a deny, and the deny step runs first.",
+      "example": "import { Gate, SAFE_DEFAULT_ASK_PATTERNS } from \"bareguard\";\nnew Gate({ content: { askPatterns: [...SAFE_DEFAULT_ASK_PATTERNS, /\\bdeploy\\b/i] } });"
+    },
+    {
+      "name": "SAFE_DEFAULT_DENY_PATTERNS",
+      "category": "content",
+      "when": "Read it to see what `content` denies outright at zero config, or spread it into your own `content.denyPatterns` when you want the defaults PLUS your own. Omitting the config entirely already applies these.",
+      "import": "import { SAFE_DEFAULT_DENY_PATTERNS } from 'bareguard'",
+      "signature": "SAFE_DEFAULT_DENY_PATTERNS: RegExp[]",
+      "fails": "Plain data; reading never throws. Not frozen — treat it as read-only. These guard destructive OPERATIONS, not payload VALUES, and never scan the fields in `PAYLOAD_FIELDS`.",
+      "example": "import { Gate, SAFE_DEFAULT_DENY_PATTERNS } from \"bareguard\";\nnew Gate({ content: { denyPatterns: [...SAFE_DEFAULT_DENY_PATTERNS, /\\bALTER\\s+TABLE\\b/i] } });"
+    },
+    {
+      "name": "SUPER_DESTRUCTIVE_PATTERNS",
+      "category": "classify",
+      "when": "Read it to see exactly what bareguard calls tier 3 on your platform, or to compose your own set on top. You do not pass it to `classifyCommand` — it is already the built-in tier-3 set.",
+      "import": "import { SUPER_DESTRUCTIVE_PATTERNS } from 'bareguard'",
+      "signature": "SUPER_DESTRUCTIVE_PATTERNS: { common: RegExp[], linux: RegExp[], darwin: RegExp[], win32: RegExp[] }",
+      "fails": "Plain data; reading never throws. Not frozen — treat it as read-only, since mutating it changes tiering for every Gate in the process.",
+      "example": "import { SUPER_DESTRUCTIVE_PATTERNS } from \"bareguard\";\nSUPER_DESTRUCTIVE_PATTERNS.common.some((re) => re.test(cmd)); // is this irrecoverable?"
+    }
+  ]
+}

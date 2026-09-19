@@ -27,6 +27,12 @@
  * `content` (shell_write) + `contents` (edit_file). Fail-loud polarity: an
  * unlisted field regresses to a visible false-fire, never a silent hole.
  * @type {readonly string[]}
+ * @when Read it to see which `action.args` fields `content` patterns deliberately do NOT scan — the write payload (the document being written), as opposed to the operation. Check it when a deny you expected did not fire on file contents.
+ * @category content
+ * @fails Frozen: an accidental push throws in strict mode rather than silently changing matching for every Gate in the process. There is no config knob — the scoping is fixed at the library.
+ * @example
+ * import { PAYLOAD_FIELDS } from "bareguard";
+ * PAYLOAD_FIELDS; // ["content", "contents"] — a literal DROP TABLE inside these is not a deny
  */
 export const PAYLOAD_FIELDS = Object.freeze(["content", "contents"]);
 
@@ -35,6 +41,12 @@ export const PAYLOAD_FIELDS = Object.freeze(["content", "contents"]);
  * `DROP TABLE`, unscoped `DELETE FROM`, `rm -rf /`, `--force`, `TRUNCATE TABLE`.
  * Pass `content: { denyPatterns: [] }` to opt out (pure-allow).
  * @type {RegExp[]}
+ * @when Read it to see what `content` denies outright at zero config, or spread it into your own `content.denyPatterns` when you want the defaults PLUS your own. Omitting the config entirely already applies these.
+ * @category content
+ * @fails Plain data; reading never throws. Not frozen — treat it as read-only. These guard destructive OPERATIONS, not payload VALUES, and never scan the fields in `PAYLOAD_FIELDS`.
+ * @example
+ * import { Gate, SAFE_DEFAULT_DENY_PATTERNS } from "bareguard";
+ * new Gate({ content: { denyPatterns: [...SAFE_DEFAULT_DENY_PATTERNS, /\bALTER\s+TABLE\b/i] } });
  */
 export const SAFE_DEFAULT_DENY_PATTERNS = [
   /\bDROP\s+TABLE\b/i,
@@ -49,6 +61,12 @@ export const SAFE_DEFAULT_DENY_PATTERNS = [
  * configured: destructive verbs (delete/drop/revoke/…), force-push, and
  * destructive HTTP methods. Pass `content: { askPatterns: [] }` to opt out.
  * @type {RegExp[]}
+ * @when Read it to see what `content` escalates to a human at zero config, or spread it into your own `content.askPatterns` to keep the defaults and add to them.
+ * @category content
+ * @fails Plain data; reading never throws. Not frozen — treat it as read-only. These raise an ask, never a deny, and the deny step runs first.
+ * @example
+ * import { Gate, SAFE_DEFAULT_ASK_PATTERNS } from "bareguard";
+ * new Gate({ content: { askPatterns: [...SAFE_DEFAULT_ASK_PATTERNS, /\bdeploy\b/i] } });
  */
 export const SAFE_DEFAULT_ASK_PATTERNS = [
   /\b(delete|drop|revoke|truncate|destroy|remove|purge)\b/i,

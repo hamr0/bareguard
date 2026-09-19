@@ -125,6 +125,13 @@ function walkKeys(node, specs) {
  * @param {import("../types.js").SecretsConfig} [cfg] secrets config
  * @returns {T} redacted copy, or the original value if nothing changed / it
  *   could not be processed
+ * @when Only when you are writing your OWN log or human-channel payload and need the same scrubbing the audit line gets. The Gate already redacts every audit line by default — you do not call this to protect the audit.
+ * @category secrets
+ * @fails Never throws, by contract: it runs inside every audit emit, so a throw would stop the gate dead on every later action. A falsy or non-JSON-serializable value comes back unchanged, and a malformed `secrets` config falls back to the built-in defaults rather than erroring. Non-mutating — the original object is never touched, so policy still evaluates the real action.
+ * @example
+ * import { redact } from "bareguard";
+ * redact({ apiKey: "sk-live-abcdef0123456789" });
+ * // => { apiKey: "[REDACTED:key=apiKey]" }
  */
 export function redact(action, cfg = {}) {
   if (!action) return action;

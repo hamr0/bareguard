@@ -78,6 +78,13 @@ function safeAction(action) {
  * @returns {"pass"|"annotate-floor-ask"|"HITL"|"log"}
  *   pass = audit only · annotate-floor-ask = rides A's already-happening stop ·
  *   HITL = rides A's next ask · log = audit + agent-feedback only (no human)
+ * @when Only when you are building the Axis-B path by hand and need to know where a fact WOULD go before you pay to compute it. `gate.annotate()` already routes internally, so most callers never call this directly.
+ * @category axis-b
+ * @fails Never throws and has no side effects — it is a pure four-way lookup over three booleans. Any `knob` value other than `"strict"` behaves as `"relaxed"`.
+ * @example
+ * import { routeAnnotation } from "bareguard";
+ * routeAnnotation(true, false);            // "annotate-floor-ask" — irreversible + broke
+ * routeAnnotation(true, true, "relaxed"); // "log" — reversible + broke, no human
  */
 export function routeAnnotation(surface, reversible, knob = "strict") {
   if (!surface) return reversible ? "pass" : "annotate-floor-ask"; // honored
@@ -361,6 +368,22 @@ export class Gate {
   /**
    * @param {import("./types.js").GateConfig & { _clock?: () => number }} [config]
    *   Gate configuration. `_clock` is a millisecond clock override for tests.
+   * @signature new Gate(config?: GateConfig)
+   * @when Start here — this IS the chokepoint. Construct one per agent run, `await init()`, then `check()` every action before it runs and `record()` what it cost. Every other export in this package is a piece of this or a helper around it.
+   * @category gate
+   * @fails Throws at CONSTRUCTION on malformed config — a section that is not a plain object, or an array-shaped key (`tools.allowlist`, `bash.denyPatterns`, …) that is not an array. A config typo fails CLOSED rather than silently gating nothing. After construction a policy stop is a returned `outcome`, never a throw; `check()` resolves to a terminal allow/deny and never returns `askHuman` (it resolves that internally through `humanChannel`).
+   * @example
+   * import { Gate } from "bareguard";
+   * const gate = new Gate({
+   *   tools:  { allowlist: ["bash", "read"] },
+   *   bash:   { allow: ["git", "ls"] },
+   *   budget: { maxCostUsd: 5.00 },
+   *   humanChannel: async (event) => ({ decision: "allow" }),
+   * });
+   * await gate.init();
+   * const action = { type: "bash", args: { command: "git status" } };
+   * const decision = await gate.check(action);
+   * if (decision.outcome === "allow") await gate.record(action, { costUsd: 0.01 });
    */
   constructor(config = {}) {
     assertArrayShapedConfig(config);

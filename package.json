@@ -13,17 +13,20 @@
     "./types": {
       "types": "./types/types.d.ts",
       "default": "./src/types.js"
-    }
+    },
+    "./primitives.json": "./primitives.json"
   },
   "files": [
     "src",
     "types",
+    "primitives.json",
     "README.md",
     "CHANGELOG.md",
     "LICENSE",
     "NOTICE",
     "bareguard.context.md"
   ],
+  "primitives": "./primitives.json",
   "engines": {
     "node": ">=20"
   },
@@ -31,7 +34,9 @@
     "test": "node --test",
     "build:types": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json",
-    "prepublishOnly": "npm run build:types"
+    "prepublishOnly": "npm run build:primitives && npm run build:types",
+    "build:primitives": "node scripts/gen-primitives.mjs",
+    "check:primitives": "node scripts/gen-primitives.mjs --check"
   },
   "dependencies": {
     "proper-lockfile": "^4.1.2"
