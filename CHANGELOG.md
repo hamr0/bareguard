@@ -55,7 +55,7 @@ All notable changes to bareguard are documented here. Format: [Keep a Changelog]
 
   **1.0 SemVer surface added:** the `primitives.json` published path and its `{package, primitives[]}` shape, the `./primitives.json` exports subpath, and the top-level `primitives` package.json pointer. No `src/` behavior, rule string, audit phase, config key or existing export changed — the only source edits are JSDoc tags.
 
-## [0.15.0]
+## [0.15.0] — 2026-09-01
 
 ### Fixed
 
