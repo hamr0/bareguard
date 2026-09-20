@@ -36,7 +36,8 @@
     "typecheck": "tsc -p tsconfig.json",
     "prepublishOnly": "npm run build:primitives && npm run build:types",
     "build:primitives": "node scripts/gen-primitives.mjs",
-    "check:primitives": "node scripts/gen-primitives.mjs --check"
+    "check:primitives": "node scripts/gen-primitives.mjs --check",
+    "check:lockfile": "node scripts/check-lockfile.mjs"
   },
   "dependencies": {
     "proper-lockfile": "^4.1.2"
