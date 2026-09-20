@@ -1146,7 +1146,7 @@ whose payload could not be serialized at all — v0.16), the
 `_dropped_keys` / `_dropped_bytes` markers and the
 genuinely-final guard's `_dropped_core` marker plus its reduced
 `{ts, seq, run_id, _dropped_keys, _dropped_bytes, _dropped_core}` line shape
-(with a bare `{_dropped_core: true}` as its own last-resort fallback) on the
+(with a bare `{_dropped_core: true}` as its own last-resort fallback on the
 scalars-only backstop's own key-count bound — v0.16), the
 redacted-copy markers `[UNREADABLE]` (an own-props copy
 that could not read one of the action's fields), `[REDACTED:circular]`, and
