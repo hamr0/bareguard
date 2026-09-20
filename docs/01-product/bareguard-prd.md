@@ -1121,7 +1121,9 @@ done — locking before the bench run is the one scenario that risks an early 2.
 
 **What the 1.0 promise covers when cut** (the SemVer surface): exports (`Gate`,
 `redact`, `Budget` errors, `defaultAuditPath`, `globToRegex`/`matchAny`, `classifyCommand`,
-`DESTRUCTIVE_PATTERNS`/`SUPER_DESTRUCTIVE_PATTERNS`), config keys
+`DESTRUCTIVE_PATTERNS`/`SUPER_DESTRUCTIVE_PATTERNS`) and the
+`"./primitives.json"` exports subpath (v0.16 — the PATH is promised, not the
+shape of each manifest entry; §10.3), config keys
 (incl. `flags`, `bash.classify`/`bash.extraDestructive`/`bash.extraSuperDestructive`/
 `bash.reclassify`/`bash.platform`, and `budget.failClosedOnUnpriced` (v0.9)), the
 `Result.pricing` field (v0.9), **rule strings** (adopters and the seam contract test
@@ -1132,22 +1134,22 @@ rules extending the same fail-closed-on-mutation pattern to the rest of the
 array/map-shaped config surface — `tools.denylist.invalid`,
 `content.denyPatterns.invalid`/`askPatterns.invalid`, `fs.deny.invalid`/
 `readScope.invalid`/`writeScope.invalid`, `net.allowDomains.invalid`,
-`bash.allow.invalid`/`denyPatterns.invalid`, `flags.invalid` (built, not yet
-released — v0.15), and `content.unserializable` — an action that cannot be
-serialized for content matching now fails closed here instead of throwing out
-of the gate (built, not yet released)), the audit JSONL line format (incl. the
+`bash.allow.invalid`/`denyPatterns.invalid`, `flags.invalid` (v0.15), and
+`content.unserializable` — an action that cannot be serialized for content
+matching now fails closed here instead of throwing out of the gate
+(v0.16)), the audit JSONL line format (incl. the
 `unpriced` phase, v0.9, the `annotate_malformed` phase, v0.13, `aid` now
-redacted/byte-bounded like `reason`/`where`/`verdict` — built, not yet released,
-v0.15, and the `_dropped: "payload not serializable"` / `_dropped_carriers`
-markers on a line whose payload could not be serialized at all — built, not
-yet released), the `_dropped_keys` / `_dropped_bytes` markers and the
+redacted/byte-bounded like `reason`/`where`/`verdict` — v0.15, and the
+`_dropped: "payload not serializable"` / `_dropped_carriers` markers on a line
+whose payload could not be serialized at all — v0.16), the
+`_dropped_keys` / `_dropped_bytes` markers and the
 genuinely-final guard's `_dropped_core` marker plus its reduced
 `{ts, seq, run_id, _dropped_keys, _dropped_bytes, _dropped_core}` line shape
 (with a bare `{_dropped_core: true}` as its own last-resort fallback) on the
-scalars-only backstop's own key-count bound — built, not yet released), the
+scalars-only backstop's own key-count bound — v0.16), the
 redacted-copy markers `[UNREADABLE]` (an own-props copy
 that could not read one of the action's fields), `[REDACTED:circular]`, and
-`[REDACTED:depth]` (built, not yet released), the
+`[REDACTED:depth]` (v0.16), the
 `gate.annotate` fact contract (`surface` must be an explicit boolean — v0.13), the
 budget file format, and the
 `humanChannel` event/decision contract (incl. the `event.classification`/`event.tier`
