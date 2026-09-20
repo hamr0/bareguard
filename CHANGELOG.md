@@ -71,7 +71,14 @@ All notable changes to bareguard are documented here. Format: [Keep a Changelog]
 
 - **A `Map`-shaped config section passed the same section-shape guard a string-shaped one had already been fixed to reject, because the guard checked for the wrong thing.** `assertArrayShapedConfig`'s three shape guards (the flat `[section, key]` loop, and the dedicated `tools.denyArgPatterns`/`flags` map guards) all used `typeof s !== "object" || Array.isArray(s)` to reject a malformed section — which a `Map` passes (`typeof` is `"object"`, it is not an `Array`). Measured: `new Gate({ tools: new Map([["allowlist", ["x"]]]) })` constructed with no error, and `check({type:"wireMoney"})` returned `rule:"default", outcome:"allow"` — the identical fail-open the string-section fix earlier in this changelog exists to prevent, just a different exotic type slipping through the same idiom. Found by a later review pass after the string case shipped. Replaced the enumeration-of-bad-types idiom at all three sites with one structural check, `isPlainObject`, that accepts `Object.prototype` or a null prototype and rejects everything else — closing `Map`, `Set`, `Date`, and any other exotic object in one stroke rather than adding another special case. The load-bearing requirement was the opposite direction: bareguard deliberately produces null-prototype objects gate-wide (`safeAction()`, 0.6.0), so a naive `s.constructor !== Object` check would have rejected a legitimate config and broken the gate for exactly the shape bareguard itself hands back internally. Verified by execution, not reasoned about: a null-prototype `tools` section, a null-prototype `denyArgPatterns` map (with a null-prototype per-tool array), and a null-prototype `flags` config (top level and nested value-map) all still construct and still gate correctly. `secrets.keys`/`patterns`/`envVars` needed no separate fix — they route through the same shared section loop as `tools` and were confirmed (not assumed) to throw the same way for a `Map`-shaped `secrets` section. 2 regression tests — the `Map` rejection across all four call sites, mutation-verified red against the pre-fix idiom, and the null-proto invariant, which passes either way by design and exists to catch a future fix that "closes" this by checking `.constructor` instead.
 
-## [0.14.0] — 2026-08-31
+## [0.14.0] — 2026-08-31 — NEVER PUBLISHED
+
+> This version was cut on a branch and never released: it has no git tag and
+> is not on npm, which goes 0.13.0 → 0.15.0. Every change below reached
+> consumers in **0.15.0**, whose entry builds on this one and refers back to
+> it. Kept as history rather than folded into 0.15.0 so those references,
+> and the PRD's `v0.14` citations for when each change was *built*, stay
+> readable.
 
 ### Fixed
 

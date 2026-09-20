@@ -1129,7 +1129,8 @@ shape of each manifest entry; §10.3), config keys
 `Result.pricing` field (v0.9), **rule strings** (adopters and the seam contract test
 match on them — incl. `flags.<field>`, now live in litectx's write-gate seam,
 `bash.classify`, `budget.unpriced` (v0.9), `tools.allowlist.invalid` /
-`tools.denyArgPatterns.invalid` (v0.14), and the ten runtime `<key>.invalid` deny
+`tools.denyArgPatterns.invalid` (built v0.14, reached npm in v0.15 — 0.14.0 was
+never published), and the ten runtime `<key>.invalid` deny
 rules extending the same fail-closed-on-mutation pattern to the rest of the
 array/map-shaped config surface — `tools.denylist.invalid`,
 `content.denyPatterns.invalid`/`askPatterns.invalid`, `fs.deny.invalid`/
