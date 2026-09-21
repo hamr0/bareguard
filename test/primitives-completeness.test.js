@@ -12,15 +12,24 @@
 // (CI) covers the third way — the committed file drifting from the source.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
 const manifest = JSON.parse(
   readFileSync(new URL("../primitives.json", import.meta.url), "utf8"),
 );
 const manifested = new Set(manifest.primitives.map((p) => p.name));
+const pkg = JSON.parse(
+  readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+);
 
-// Every public entry point. Keep in sync with package.json "exports".
-const BARRELS = ["../src/index.js", "../src/types.js"];
+// Every public JS entry point, DERIVED from package.json "exports" and resolved
+// through the package NAME (Node self-reference) — exactly what a consumer's
+// `import "bareguard/…"` hits. A hardcoded src-path list would bypass the
+// exports map: a subpath pointing at a missing/renamed file would break
+// consumers while this test stayed green. Data exports (.json) carry no symbols.
+const SPECIFIERS = Object.entries(pkg.exports)
+  .filter(([, entry]) => !(typeof entry === "string" && entry.endsWith(".json")))
+  .map(([sub]) => (sub === "." ? pkg.name : `${pkg.name}/${sub.slice(2)}`));
 
 // Deliberate exclusions — WHY each is out:
 const EXCLUDED = new Set([
@@ -32,12 +41,29 @@ const EXCLUDED = new Set([
 
 async function allExports() {
   const names = new Set();
-  for (const b of BARRELS) {
-    const mod = await import(new URL(b, import.meta.url).href);
+  for (const spec of SPECIFIERS) {
+    const mod = await import(spec);
     for (const n of Object.keys(mod)) if (n !== "default") names.add(n);
   }
   return names;
 }
+
+test("every package.json export subpath resolves", async () => {
+  // A clean, named failure for a broken exports map, instead of an opaque
+  // MODULE_NOT_FOUND surfacing from inside another test.
+  assert.ok(SPECIFIERS.includes(pkg.name), "exports map has no '.' entry");
+  for (const spec of SPECIFIERS) {
+    await assert.doesNotReject(import(spec), `export subpath does not resolve: ${spec}`);
+  }
+  for (const [sub, entry] of Object.entries(pkg.exports)) {
+    if (typeof entry === "string" && entry.endsWith(".json")) {
+      assert.ok(
+        existsSync(new URL(`../${entry.slice(2)}`, import.meta.url)),
+        `data export ${sub} points at a missing file: ${entry}`,
+      );
+    }
+  }
+});
 
 test("every public export is manifested or explicitly excluded", async () => {
   const missing = [...(await allExports())]
