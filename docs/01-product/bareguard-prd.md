@@ -1283,6 +1283,142 @@ runs the dry-run** — that would make it the executor/sandbox it explicitly is 
   already ship a native dry-run, so "try-first" = route to the tool's own `--dry-run`, no VM. **Cookbook recipe
   first; `trial` outcome on demand.**
 
+**rwx: operator-tagged capability letters for agent fleets (PROPOSED 2026-09-21; not built).**
+A second, **mutually exclusive** mode of control beside the closed `tools.allowlist`. The operator
+tags every tool and every bash command with one letter, gives every agent a three-letter ceiling,
+and the gate hands an agent only what its letters cover. The payoff is **review at scale**: one file
+reads `researcher r--`, `fixer rw-`, `deployer rwx`, and a human scans a fleet for `x` instead of
+reading per-agent allowlists. Idea handed over from a bareagent design session (the "agent-as-MCP"
+exploration, parked; `~/PycharmProjects/bareagent/docs/logs/agent-as-mcp-exploration.md`); the
+letter meanings below were re-settled here with hamr and **differ from the handover** (`x` there =
+delegate).
+
+- *The letters (settled):* **`r` = observe** (read, fetch). **`w` = change, reversible** (an edit you
+  can undo). **`x` = change, irreversible** (delete, push, send, pay, deploy). Letters are
+  **independent bits, spelled out** — no letter implies another: `-w-` (write-only sink: a logger,
+  a report-dropper) and `r-x` (a manager that reads and hands off) are both legal. "Reversible" is
+  the operator's call per action type — the same trust model as Axis B (Part 2 §6.6:
+  reversibility read from the action's TYPE via operator config, never from the agent or model).
+  **Unsure → tag it `x`.** Close to the `x` of hamr's IETF draft (non-repeatable), with none of its
+  machinery (no chains, signatures or floors).
+- *Two modes, pick one per gate (settled):* **allowlist mode** (today, the default: `tools.allowlist`,
+  `bash.allow`/`denyPatterns`, optional `bash.classify`) or **rwx mode** (the file below). Not
+  coupled, not layered: two primitives doing the same job, so a gate uses exactly one. Both
+  configured ⇒ **construct-time throw**, same family as `assertArrayShapedConfig` — otherwise nobody
+  knows which one is in charge. With no `rwx` config, behavior is byte-identical to today.
+- *One file, `bareguard.rwx.json` (settled shape, sketch syntax):* three maps. bareguard ships a
+  **starter file** derived from what it already curates (built-in action types + common read/write
+  commands), clearly marked as the shipped list; the operator copies and edits it. Never written to at
+  runtime.
+  ```json
+  {
+    "agents": { "researcher": "r--", "fixer": "rw-", "deployer": "rwx" },
+    "tools":  { "read": "r", "fetch": "r", "write": "w", "edit": "w",
+                "github.create_pr": "w", "deploy": "x" },
+    "bash":   { "ls": "r", "cat": "r", "grep": "r", "git status": "r", "git log": "r",
+                "git add": "w", "git commit": "w", "npm test": "w",
+                "git push": "x", "rm": "x" }
+  }
+  ```
+  Wired as `rwx: { file: "./bareguard.rwx.json", agent: "fixer" }`. Tags live in **operator config,
+  never on the tool definition** — the reason is **authorship**, not visibility: a tool definition is
+  written by the tool's author (for MCP, an outside server that could call itself `r`); config is
+  written only by the operator, the same user-authored/agent-authored split that is the floor's
+  security boundary (Part 2 §2).
+- *Deny by absence, loudly (settled):* an **unlisted tool**, **unlisted command**, or **unlisted agent**
+  is denied — never asked, never guessed. An unlisted agent gets `---`: it starts, but every action
+  denies. The deny is a structured in-band refusal that names the fix:
+  `policy_denied rwx.unlisted: "npm run build" is not in bareguard.rwx.json — add it as r, w or x`.
+  The operator edits the file later, calmly, not mid-run.
+- *Enforcement — two places, both required:* (1) **hide**: the harness hands the model only tools whose
+  letter the agent holds (`gate.allows()` per tool; bareagent's `wireGate.filterTools` already does
+  this loop — per the handover, not re-verified here); (2) **deny backstop**: `gate.check` denies an
+  action whose letter the agent lacks, because a model can still call a hidden tool by name. The model
+  never sees or handles the grant, so prompt injection cannot widen it. The rwx check runs where the
+  allowlist check would; everything else in the eval (fs scopes, `net`, content patterns, `flags`,
+  budget, secrets redaction) runs unchanged on top. The audit line carries the letter.
+- *Bash in rwx mode — two rules only (settled):* (1) a command matches on its **leading word(s)**
+  (`git status …` matches `"git status"`; longest listed prefix wins); (2) **joined commands** (`;` `|`
+  `&&` `||` `$(…)` backticks, redirects) are **denied unless listed exactly**. Readers that can run
+  other programs (`less`, `vim`, `find -exec`, `awk`, `xargs`, `env`) are **left out of the starter
+  file**; an operator adds them knowingly. The `bash` action type itself defaults to `x` in the
+  starter file's `tools` map for agents not using the per-command list.
+- *Letters never go inside a tool (settled):* one action type = one letter. A tool mixing safe and
+  dangerous calls takes its **worst** letter. Finer control is **ask/deny, not letters**: split the tool
+  into separate action types (`git.status` r / `git.commit` w / `git.push` x — preferred), `flags` on a
+  field value (`flags: { subcommand: { push: "ask" } }`), or `tools.denyArgPatterns`. Reason: an agent
+  holding even one part of a tool is handed the whole tool, so a per-part letter stops meaning "what it
+  can touch."
+- *Ask is a separate knob (settled):* letters decide what an agent **gets**; `flags` decides what **asks
+  first**. `x` does **not** auto-ask — asking a human to approve commands they cannot read is theater that
+  trains click-through. **`bash.classify` belongs to allowlist mode**: setting `bash.classify: true` in rwx
+  mode is a construct-time throw (it would look like protection without being any). It stays shipped,
+  off by default, for allowlist users (multis consumes it). The answer to "the human can't judge the
+  command" is **make mistakes cheap, don't ask more**: few letters per agent, `w` kept genuinely undoable
+  (git / a copy / tight `fs.writeScope`), `x` granted rarely and deliberately ahead of time, budget caps
+  against repetition — fence the blast radius (Part 2 intent-drift framing).
+- *Delegation (settled):* **attenuate only** — a child's letters are `min(what the parent requested for
+  it, what the parent holds)`; a child can never outgrow its parent, so an `r-x` manager can only create
+  `r--` helpers and cannot launder `w` through a child. `spawn` gets **no letter of its own**: it is as
+  risky as the letters it hands down (an `r--` agent spawning `r--` helpers stays `r--`). Fan-out stays
+  bounded by the shipped `limits.maxDepth` / `maxChildren` / `spawn.ratePerMinute`. Rejected: `spawn` = `x`
+  (every agent with helpers reads as dangerous; the fleet scan stops working).
+- *Count caps (settled direction):* "rw, but at most N writes" = the shipped `budget.resources` cap-map
+  keyed by letter (`budget: { resources: { w: 20 } }`), kept **separate from the letter string**
+  (`rw-` + `{ w: 20 }`, not `rw+20`). The budget is shared across the run family, so N is the family's
+  total, not N per helper. New surface: the gate accrues the letter count itself in rwx mode instead of
+  relying on the caller's `result.counts`.
+- *Who assigns the letters (settled):* **the operator, in the file's `agents` map.** The harness that
+  creates the agent (bareagent or anyone's loop) passes the agent's **name**; bareguard looks it up.
+  bareagent change = one option plus passing the clamped letters to children on spawn — **not a new
+  bareagent primitive**; the concept (tags, check, clamp, audit letter) lives in bareguard.
+- *Rejected alternatives (don't re-litigate):* **runtime HITL for unlisted commands** ("ask the human
+  r/w/x, remember the answer") — a leak by design: click-through fatigue approves the one bad new command
+  down the line; **ordered ladder** `r<w<x` — hides grants and can't express `r-x`/`-w-`; **`x` =
+  delegate** (the handover's meaning) — delegation is already bounded by attenuation + spawn limits;
+  **tags on the tool definition** — tool-author-written; **untagged = `x`** (the handover's default) —
+  would hand every unknown tool to `rwx` agents; untagged = nobody; **rwx layered on the allowlist** —
+  two lists that must agree; **deriving letters from `bash.classify`** — it is a *danger* list that fails
+  open (unmatched = "safe"), backwards for granting; **letters per part of a tool**.
+- *Known limits (state them in the docs when built):* (1) **a tool can change behind its name** — an MCP
+  server update can turn a read tool into a write tool; the tag trusts the name. (2) **an `r` tool can
+  still have effects** — some "reads" trigger things, and read + network can exfiltrate; `net` domain
+  limits and `secrets` stay on. (3) **"reversible" is operator judgment** — a wrong `w` hides an `x`.
+  (4) **binds only agents running through our gate** — a remote agent's internals are one tool call.
+  (5) **bash leading-word matching is not a parser** — `cat` is `r` but reads any path (bash args are not
+  under `fs.readScope`, a pre-existing bash limit); the joined-command deny is the main guard.
+  (6) **it becomes 1.0 surface** — the `rwx` config keys, the file format, the `rwx.*` rule strings and
+  the audit letter all join the SemVer surface (§19 bareguard 1.0) once shipped.
+- *Open questions (for the POC to answer):* (1) the **trusted channel for a child's letters** — depth
+  passes via `config.spawnDepth` / `BAREGUARD_SPAWN_DEPTH`; letters need the same, and the clamp must run
+  in the **parent's** gate at spawn time (a child cannot verify its parent); how does that interact with a
+  model-run `bash` that sets env (joined/prefixed commands are denied, but confirm)? (2) bash edge forms:
+  `FOO=1 cmd` env prefixes, `\` line continuations, newlines, `command`/`exec`/`sudo` wrappers — deny all
+  as joined? (3) **starter file contents** — which commands earn a shipped `r`/`w`, and how the file is
+  versioned. (4) does `fetch` with a non-GET method stay `r`, or must a POST-capable fetch tool be tagged
+  `w`/`x` (tag by action type ⇒ the operator splits `fetch.get`/`fetch.post`)? (5) does bareguard load
+  the file itself (its first settings **file**; all config is a JS object today) or accept the parsed
+  object and leave file I/O to the caller?
+- *POC plan (before any `src/` change; lives in `harness-code-mode/`, never shipped):* a throwaway
+  `rwx-poc.mjs` wrapping today's `Gate` — no library change — that (a) loads a sample `bareguard.rwx.json`,
+  (b) filters a tool catalog per agent via `gate.allows`, (c) denies unlisted tools/commands/agents
+  loudly, (d) matches bash leading words + denies joined commands, (e) clamps a child's letters on
+  spawn. Graduation evidence to collect: **E-rwx-1** an adversarial bash set (joiners, env prefixes,
+  wrappers, `find -exec`, `less`) all deny under an `r--` agent; **E-rwx-2** a hidden tool called by
+  name denies at `check`; **E-rwx-3** an `r-x` parent cannot produce a `w` child at any depth;
+  **E-rwx-4** a realistic coding-agent run (read/edit/test/commit) under `rw-` completes, counting how
+  many loud denies the starter file causes — the "too many denies" usability number; **E-rwx-5** each
+  guard falsified by reverting it and watching the case go red. Graduate only if E-rwx-4's deny count is
+  tolerable **and** a real adopter wants the fleet view.
+- *Why parked:* **no adopter ask yet** (idle-by-design; Appendix E) — the first likely user is a
+  bareagent fleet. Mostly composable from shipped parts (closed-set deny, `gate.allows`, `flags`,
+  `budget.resources`, spawn limits); the genuinely new surface is the file format, the per-agent ceiling,
+  the child clamp, and the bash leading-word matcher — all 1.0 surface, so POC first, build on demand.
+- *Origin / relation:* bareagent "agent-as-MCP" exploration (2026-09-21, parked — MCP Tasks give a handle,
+  not control); letter meanings and every "settled" item above decided with hamr in the bareguard
+  session of 2026-09-21. Relates to Part 2 §6.6 (reversibility by type), §16 MCP governance
+  (`gate.allows` as ergonomics), §19 0.8 (`bash.classify` best-effort framing).
+
 ## 20. POC retrospective (what we built, why)
 
 bareguard v0.1 was developed via three POC phases (per the original v0.4
