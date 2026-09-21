@@ -70,6 +70,27 @@ if (decision.outcome === "allow") {
 // via humanChannel and gives you a terminal allow/deny.
 ```
 
+## For AI agents — the menu
+
+Building tool-calling automation with bareguard? Read **`primitives.json`** first. It's a compact, machine-readable menu of every verb — the fast path to *using* bareguard without reading the docs: load it, pick a verb, call it. Each entry carries `when` to reach for it, its `import`, `signature`, `fails`, and a runnable `example`:
+
+```jsonc
+{
+  "name": "classifyCommand",
+  "category": "classify",
+  "when": "Tier a shell command's blast radius BEFORE running it — pick how much ceremony your human channel demands.",
+  "import": "import { classifyCommand } from 'bareguard'",
+  "signature": "classifyCommand(command, opts?) => \"safe\"|\"destructive\"|\"super_destructive\"",
+  "fails": "…",
+  "example": "…"
+}
+// 13 entries across: gate · classify · matching · content · secrets · audit · axis-b
+```
+
+Browse it on unpkg (`unpkg.com/bareguard/primitives.json`) before you install, import it (`import menu from 'bareguard/primitives.json' with { type: 'json' }`), or point a tool at it. Generated from the source, so it never drifts.
+
+**Then go deeper:** `bareguard.context.md` (the complete contract — every option, eval order, and the full API) and the rest of this README for the recipes.
+
 ## The trio in one loop
 
 The [Core](#the-bare-ecosystem) is three modules: **bareagent** drives the think→act loop, **litectx** supplies ranked context, and **bareguard** gates every action between them. A loop looks like:
