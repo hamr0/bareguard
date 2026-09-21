@@ -15,7 +15,7 @@ src/**/*.d.ts
 .litectx/
 
 # Throwaway A2A intent-drift bench (code only). Never committed, never shipped.
-# The durable findings live in docs/product/harness-research.md (Part II) (tracked).
+# The durable findings live in docs/wiki/harness-research.md (Part II) (tracked).
 notes/smol/a2a-intent/
 
 # Agent / IDE / tooling scratch — ignore EVERY dot-directory by default
