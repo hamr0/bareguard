@@ -3,7 +3,7 @@
 > The unified research/context behind the harness (Axis A floor + Axis B return
 > reconciliation). Three previously-separate docs are merged here because they are **one
 > argument**: the agentic-web problem space, the A2A experiment that probed it, and where the
-> gate's authority stops. Cross-referenced from [`bareguard-prd.md` (Part 2)](../product/bareguard-prd.md).
+> gate's authority stops. Cross-referenced from [`harness-design.md` (PRD Part 2)](harness-design.md).
 >
 > - **Part I — Agentic-web problem space.** The #1–#4 layering, the egress gate, and the live
 >   IETF/standards landscape. *Research write-up.*
