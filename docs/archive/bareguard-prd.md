@@ -26,9 +26,9 @@
 > | Doc | Role |
 > |---|---|
 > | **`bareguard-prd.md`** (this) | the authority — both parts: primitives, architecture, eval order, audit/budget, releases, and the harness design |
-> | [`../00-context/harness-research.md`](../00-context/harness-research.md) | the evidentiary base (Part I problem space · Part II a2a intent-drift experiment · Part III identity & the gate) — referenced, not duplicated |
-> | [`../02-features/harness-cookbook.md`](../02-features/harness-cookbook.md) | operator-vetted capability bundles (the Part 2 §5.2 recipe tier) |
-> | [`../02-features/usage-guide.md`](../02-features/usage-guide.md), [`../../bareguard.context.md`](../../bareguard.context.md) | human / LLM wiring guides |
+> | [`harness-research.md`](../wiki/harness-research.md) | the evidentiary base (Part I problem space · Part II a2a intent-drift experiment · Part III identity & the gate) — referenced, not duplicated |
+> | [`harness-cookbook.md`](harness-cookbook.md) | operator-vetted capability bundles (the Part 2 §5.2 recipe tier) |
+> | [`usage-guide.md`](usage-guide.md), [`../../bareguard.context.md`](../../bareguard.context.md) | human / LLM wiring guides |
 > | `harness-code-mode/` | the POC seam + E1–E6 gates (never shipped; Part 2 §9) |
 > | `.claude/stash/*`, `CLAUDE.md` | session history / doctrine — never source of truth |
 >
@@ -1191,7 +1191,7 @@ sibling library").
 - *Origin / relation:* prompted by [bindu](https://github.com/GetBindu/bindu)'s
   Ed25519-signed A2A records, but this is integrity of bareguard's **own log**, not
   agent authentication — bareguard authorizes the action, not the actor. See
-  [harness-research.md, Part III "Identity and the gate"](../00-context/harness-research.md#identity-and-the-gate).
+  [harness-research.md, Part III "Identity and the gate"](../wiki/harness-research.md#identity-and-the-gate).
 
 **Budget: generalized cumulative dimensions + soft/hard split (IMPLEMENTED 2026-06-14;
 PROPOSED 2026-06-09; Part 2 OQ3).** Two additive extensions to the shipped `Budget`, *not* a rewrite:
@@ -1732,7 +1732,7 @@ library drifts to "framework with twelve primitives" — which is what
 
 > **Companion within this PRD to Part 1** (the stable spec the harness *uses* and
 > proposes to extend) and to
-> [`../00-context/harness-research.md`](../00-context/harness-research.md) (Part II —
+> [`harness-research.md`](../wiki/harness-research.md) (Part II —
 > the experiment this grew out of). Part 2 is **living**: it *reshapes* overlapping
 > Part-1 primitives, so it is kept as its own part to stop a moving spec from
 > tangling the stable one. **Governing rules:** `.claude/memory/AGENT_RULES.md` —
@@ -1812,7 +1812,7 @@ discipline-fit:
    future-feature candidates with the POC evidence attached. Proposing ≠ building: both stay
    demand-gated; implementation still waits on a real driver.
 4. **The harness cookbook (§5.2)** — ✅ **DONE (2026-06-09):**
-   [`docs/02-features/harness-cookbook.md`](../02-features/harness-cookbook.md).
+   [`docs/product/harness-cookbook.md`](harness-cookbook.md).
 
 With 1, 3, and 4 delivered, **the pre-litectx sanctioned backlog is empty** — what remains
 either waits on litectx (§9.3.4) or on its own demand trigger (Axis B / OQ1, item 2).
@@ -1992,7 +1992,7 @@ for safety.** This is what keeps agent self-selection safe despite M1: selecting
 - ✅ A **cookbook** of operator-vetted capability bundles (tools + gate config),
   e.g. `read-only-research`, `book-with-approval`, `send-comms-HITL`, plus a
   "roll-your-own" skeleton. This is the Appendix-E **(b)-tier (recipe)** — encouraged.
-  **SHIPPED (2026-06-09): [`docs/02-features/harness-cookbook.md`](../02-features/harness-cookbook.md)**
+  **SHIPPED (2026-06-09): [`docs/product/harness-cookbook.md`](harness-cookbook.md)**
   — the E5-validated floor+catalog+resolver pattern, **8 samples**: research /
   book-with-approval / comms-HITL / contract-tested `memory-adopter` /
   `code-mode-sandbox` (E1+E4) / `repo-maintainer` (the SF-9 ship-gate as a recipe) /
@@ -2278,7 +2278,7 @@ action (§6.2), not a free-text listing** — apply locate+math there if you wan
 Axis B owns **#4 — intent fidelity**: *did my agent emit / act on a faithful instruction?*
 It does **not** own **#3 — identity + authorization + the unforgeable number** (who
 authorized what; the payment pre-auth that actually moves money). The two **interlock; neither
-absorbs the other.** Full derivation: [`harness-research.md`](../00-context/harness-research.md)
+absorbs the other.** Full derivation: [`harness-research.md`](../wiki/harness-research.md)
 (Parts I–III).
 
 - **The lie is outside B by construction (F8).** B compares request vs return; an in-spec lie
@@ -3022,7 +3022,7 @@ PRD's business, and only on a real user.
 
 - **Part 1** — the stable spec the harness *uses* and proposes to extend
   (§7). Subject to its Appendix C + E. No change to it until POC graduation (§9.2).
-- **`../00-context/harness-research.md`** (Part II — A2A experiment) — produced F7, F8, §11,
+- **`harness-research.md`** (Part II — A2A experiment) — produced F7, F8, §11,
   M1, §12.4 — the evidentiary base for every "ceiling" claim here. Part I (problem space) frames
   the #1–#4 layering; Part III (identity) the actor/action boundary.
 - **`harness-code-mode/`** — the seam PoC (§9.1) and home for E1–E4.

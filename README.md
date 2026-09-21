@@ -102,7 +102,7 @@ Thirteen small files, each readable in a sitting. The gate runs them in a fixed 
 - **Gate on meaning, not text** — `flags` reads a structured field's value (a memory engine's `provenance` / `injectionRisk`) straight off the action, no regex; the same channel can also confirm before *every* call of a tool.
 - **Prove what happened** — `secrets` auto-redacts every audit line **by default** (API keys / `Bearer …` tokens never hit disk, even with no config), and one `audit` JSONL joins each request to its outcome and its approval, even when two actions look identical.
 
-Full per-primitive reference lives in the **[Usage Guide](docs/02-features/usage-guide.md)** and **[Integration Guide](bareguard.context.md)** — not here.
+Full per-primitive reference lives in the **[Usage Guide](docs/product/usage-guide.md)** and **[Integration Guide](bareguard.context.md)** — not here.
 
 Tested across **Linux + macOS + Windows × Node 20 + 22**: real-subprocess shared-budget contention, halt cascades, single-file audit atomicity, and family-tree stitching across a 3-deep spawn tree.
 
