@@ -13,6 +13,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 
 const manifest = JSON.parse(
   readFileSync(new URL("../primitives.json", import.meta.url), "utf8"),
@@ -63,6 +64,35 @@ test("every package.json export subpath resolves", async () => {
       );
     }
   }
+});
+
+// The existsSync loop above walks Object.entries(pkg.exports) generically, so
+// it verifies whatever key is THERE points at a real file — but it never pins
+// which key that has to be. Renaming the exports KEY "./primitives.json" ->
+// "./prims.json" (target unchanged) leaves that loop 100% green while a real
+// consumer's `require("bareguard/primitives.json")` throws
+// ERR_PACKAGE_PATH_NOT_EXPORTED, because Node's exports map does not fall back
+// to the filesystem path. Kept alongside the generic loop rather than in place
+// of it: the loop still catches a FUTURE data export pointing at a missing
+// file, a case this test does not cover.
+test("primitives.json is reachable through the published subpath", () => {
+  assert.equal(
+    pkg.exports["./primitives.json"],
+    "./primitives.json",
+    "the exports map key must be the literal subpath consumers require " +
+      "('bareguard/primitives.json') — renaming the key breaks that import " +
+      "even though the mapped file still exists",
+  );
+
+  // Resolve through the package NAME with a hardcoded literal specifier, via
+  // Node's self-reference support, so this exercises the exact resolution a
+  // consumer's `require("bareguard/primitives.json")` performs — not a
+  // relative fs read that would stay green under a broken exports map.
+  const require = createRequire(import.meta.url);
+  const loaded = require("bareguard/primitives.json");
+  assert.deepEqual(Object.keys(loaded).sort(), ["package", "primitives"]);
+  assert.equal(loaded.package, "bareguard");
+  assert.ok(Array.isArray(loaded.primitives) && loaded.primitives.length > 0);
 });
 
 test("every public export is manifested or explicitly excluded", async () => {
