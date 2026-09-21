@@ -3,7 +3,7 @@
 The human-facing companion to the [Integration Guide](../../bareguard.context.md)
 (LLM-optimized). This is where the deployment patterns, foot-guns, and recipes
 live so the README can stay an overview. For the runtime contract and full eval
-order see the [PRD §9](../01-product/bareguard-prd.md); for what bareguard will
+order see the [PRD §9](bareguard-prd.md); for what bareguard will
 never do, the [NO-GO list](../non-roadmap.md).
 
 ## How it works
@@ -97,7 +97,7 @@ Each Gate attaches `_ctx` by accepting whatever the runner puts on the action �
 
 > **Scaling caveat:** `proper-lockfile` contention on the shared budget file scales fine to a few hundred concurrent writers. Past ~1K active principals sharing one budget file, drop shared budget and move to per-principal budgets. bareguard does not solve high-fan-out budget consensus, and won't.
 
-See also [harness-research.md, Part III "Identity and the gate"](../00-context/harness-research.md#identity-and-the-gate) for using this with a runner-verified agent identity (DID / token) on `_ctx`.
+See also [harness-research.md, Part III "Identity and the gate"](harness-research.md#identity-and-the-gate) for using this with a runner-verified agent identity (DID / token) on `_ctx`.
 
 ### 3. In-process concurrent Gates
 

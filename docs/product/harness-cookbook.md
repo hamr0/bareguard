@@ -1,6 +1,6 @@
 # Harness cookbook — operator-vetted capability bundles
 
-> The recipe library promised by [`bareguard-prd.md`](../01-product/bareguard-prd.md) Part 2 §5.2.
+> The recipe library promised by [`bareguard-prd.md`](bareguard-prd.md) Part 2 §5.2.
 > A **harness bundle** is a named preset of `{ tool menu + extra restrictions }` for a
 > situation. It is **ergonomics, not a guard** (D2): a bundle can only **tighten** the
 > floor — smaller menu, more asks — never loosen it. If the agent picks the wrong

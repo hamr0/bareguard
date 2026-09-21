@@ -3,7 +3,7 @@
 > For AI assistants and developers wiring bareguard into a project.
 > v0.7.1 | Node.js >= 20 | 1 production dep (`proper-lockfile`) | ships TypeScript types | Apache-2.0
 >
-> Full design spec: [`docs/01-product/bareguard-prd.md`](docs/01-product/bareguard-prd.md) — unified PRD (v0.7).
+> Full design spec: [`docs/product/bareguard-prd.md`](docs/product/bareguard-prd.md) — unified PRD (v0.7).
 
 ## What this is
 
@@ -668,10 +668,10 @@ Routing is `routeAnnotation(surface, reversible, knob)` (pure, exported): a `bro
 
 ## See also
 
-- [`docs/01-product/bareguard-prd.md`](docs/01-product/bareguard-prd.md) — unified PRD (v0.7).
-- [`docs/02-features/harness-cookbook.md`](docs/02-features/harness-cookbook.md) — operator-vetted capability bundles: tighten-only presets over one floor.
-- [`docs/04-process/non-roadmap.md`](docs/04-process/non-roadmap.md) — the NO-GO list.
-- [`docs/04-process/decisions-log.md`](docs/04-process/decisions-log.md) — decisions resolved across versions.
+- [`docs/product/bareguard-prd.md`](docs/product/bareguard-prd.md) — unified PRD (v0.7).
+- [`docs/product/harness-cookbook.md`](docs/product/harness-cookbook.md) — operator-vetted capability bundles: tighten-only presets over one floor.
+- [`docs/product/non-roadmap.md`](docs/product/non-roadmap.md) — the NO-GO list.
+- [`docs/product/decisions-log.md`](docs/product/decisions-log.md) — decisions resolved across versions.
 - [`CHANGELOG.md`](CHANGELOG.md) — release-by-release diff.
 - [bareagent](https://github.com/hamr0/bareagent) — the loop runner that imports bareguard.
 - [beeperbox](https://github.com/hamr0/beeperbox) — 50+ messenger reach via MCP.
