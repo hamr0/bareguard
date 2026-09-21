@@ -14,7 +14,7 @@
 //     per-repo table, so it needs no maintenance;
 //   * a non-callable export (a frozen pattern table) manifests as a VALUE, so
 //     its signature is not rendered as a phantom call.
-// See docs/01-product/bareguard-prd.md § "Primitives manifest".
+// See docs/product/bareguard-prd.md § "Primitives manifest".
 import { readFileSync, writeFileSync, readdirSync, existsSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { join, resolve, basename } from 'node:path';
