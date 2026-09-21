@@ -3,7 +3,7 @@
 > The unified research/context behind the harness (Axis A floor + Axis B return
 > reconciliation). Three previously-separate docs are merged here because they are **one
 > argument**: the agentic-web problem space, the A2A experiment that probed it, and where the
-> gate's authority stops. Cross-referenced from [`bareguard-prd.md` (Part 2)](bareguard-prd.md).
+> gate's authority stops. Cross-referenced from [`bareguard-prd.md` (Part 2)](../product/bareguard-prd.md).
 >
 > - **Part I — Agentic-web problem space.** The #1–#4 layering, the egress gate, and the live
 >   IETF/standards landscape. *Research write-up.*
@@ -992,7 +992,7 @@ bareguard deliberately owns the half that **doesn't require knowing who you are*
 Its contract is: by the time an action reaches the gate, identity is already
 settled upstream (the OS, the messaging platform, an A2A peer's signature,
 whatever); the gate's only job is whether the action *itself* is permitted. That
-is why the [NO-GO list](non-roadmap.md) says "Identity / authn / authz — caller's
+is why the [NO-GO list](../product/non-roadmap.md) says "Identity / authn / authz — caller's
 concern. bareguard sees actions, not principals."
 
 ## You can still policy per-principal — no auth code in the gate
@@ -1046,4 +1046,4 @@ mutation / deletion / reorder, but it is **not** a signature (no authorship proo
 and a *global* chain is impossible without a per-emit lock — bareguard's audit is
 multi-writer and lock-free. A per-`run_id` chain is feasible but only protects
 within a run. This is a **parked future-feature candidate**, not shipped: see PRD
-§19 "Future features" and [non-roadmap.md](non-roadmap.md).
+§19 "Future features" and [non-roadmap.md](../product/non-roadmap.md).

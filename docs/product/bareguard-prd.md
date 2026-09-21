@@ -26,7 +26,7 @@
 > | Doc | Role |
 > |---|---|
 > | **`bareguard-prd.md`** (this) | the authority — both parts: primitives, architecture, eval order, audit/budget, releases, and the harness design |
-> | [`harness-research.md`](harness-research.md) | the evidentiary base (Part I problem space · Part II a2a intent-drift experiment · Part III identity & the gate) — referenced, not duplicated |
+> | [`harness-research.md`](../wiki/harness-research.md) | the evidentiary base (Part I problem space · Part II a2a intent-drift experiment · Part III identity & the gate) — referenced, not duplicated |
 > | [`harness-cookbook.md`](harness-cookbook.md) | operator-vetted capability bundles (the Part 2 §5.2 recipe tier) |
 > | [`usage-guide.md`](usage-guide.md), [`../../bareguard.context.md`](../../bareguard.context.md) | human / LLM wiring guides |
 > | `harness-code-mode/` | the POC seam + E1–E6 gates (never shipped; Part 2 §9) |
@@ -1191,7 +1191,7 @@ sibling library").
 - *Origin / relation:* prompted by [bindu](https://github.com/GetBindu/bindu)'s
   Ed25519-signed A2A records, but this is integrity of bareguard's **own log**, not
   agent authentication — bareguard authorizes the action, not the actor. See
-  [harness-research.md, Part III "Identity and the gate"](harness-research.md#identity-and-the-gate).
+  [harness-research.md, Part III "Identity and the gate"](../wiki/harness-research.md#identity-and-the-gate).
 
 **Budget: generalized cumulative dimensions + soft/hard split (IMPLEMENTED 2026-06-14;
 PROPOSED 2026-06-09; Part 2 OQ3).** Two additive extensions to the shipped `Budget`, *not* a rewrite:
@@ -1732,7 +1732,7 @@ library drifts to "framework with twelve primitives" — which is what
 
 > **Companion within this PRD to Part 1** (the stable spec the harness *uses* and
 > proposes to extend) and to
-> [`harness-research.md`](harness-research.md) (Part II —
+> [`harness-research.md`](../wiki/harness-research.md) (Part II —
 > the experiment this grew out of). Part 2 is **living**: it *reshapes* overlapping
 > Part-1 primitives, so it is kept as its own part to stop a moving spec from
 > tangling the stable one. **Governing rules:** `.claude/memory/AGENT_RULES.md` —
@@ -2278,7 +2278,7 @@ action (§6.2), not a free-text listing** — apply locate+math there if you wan
 Axis B owns **#4 — intent fidelity**: *did my agent emit / act on a faithful instruction?*
 It does **not** own **#3 — identity + authorization + the unforgeable number** (who
 authorized what; the payment pre-auth that actually moves money). The two **interlock; neither
-absorbs the other.** Full derivation: [`harness-research.md`](harness-research.md)
+absorbs the other.** Full derivation: [`harness-research.md`](../wiki/harness-research.md)
 (Parts I–III).
 
 - **The lie is outside B by construction (F8).** B compares request vs return; an in-spec lie

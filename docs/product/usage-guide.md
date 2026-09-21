@@ -97,7 +97,7 @@ Each Gate attaches `_ctx` by accepting whatever the runner puts on the action â€
 
 > **Scaling caveat:** `proper-lockfile` contention on the shared budget file scales fine to a few hundred concurrent writers. Past ~1K active principals sharing one budget file, drop shared budget and move to per-principal budgets. bareguard does not solve high-fan-out budget consensus, and won't.
 
-See also [harness-research.md, Part III "Identity and the gate"](harness-research.md#identity-and-the-gate) for using this with a runner-verified agent identity (DID / token) on `_ctx`.
+See also [harness-research.md, Part III "Identity and the gate"](../wiki/harness-research.md#identity-and-the-gate) for using this with a runner-verified agent identity (DID / token) on `_ctx`.
 
 ### 3. In-process concurrent Gates
 
