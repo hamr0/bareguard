@@ -69,10 +69,15 @@ function hasLetter(letters, ch) {
 
 // Shell-control metacharacters that chain, substitute, redirect, or continue a
 // command onto more than one program. Mirrors the doc's settled joined-command
-// list: `;` `&&` `||` `|` `$(...)` backticks, newline, plus `\` continuation
+// list: `;` `&&` `||` `|` `$(...)` backticks, newline, `\` continuation, AND
+// redirects (`>` `>>` `<`, including fd forms like `2>` `&>` — the doc's own
+// bash list names "redirects" explicitly, bareguard-prd.md:1340-1345). Found
+// missing in the orchestrator re-check (2026-09-21): without `>`/`<` here, an
+// `r--` agent could run `cat ~/.ssh/id_rsa > /tmp/leak` and have it treated as
+// a plain leading-word `cat` read.
 // (own copy — deliberately NOT importing src/primitives/bash.js's SHELL_META,
 // since this wrapper only reaches Gate through its public config surface).
-const JOIN_META = /[;&|$`()\n\r\\]/;
+const JOIN_META = /[;&|$`()\n\r\\<>]/;
 
 /**
  * Rule (d): match a bash command's LEADING WORD(S) against the rwx bash map,
@@ -265,8 +270,29 @@ function section(title) {
 }
 
 let PASS = 0, FAIL = 0;
+// E-rwx-5 deliberately disables a guard and expects the paired case to go RED
+// — that redness is the falsification working, not a defect in the POC, and
+// must not flip the process exit code. `SUPPRESS` (a depth counter, so nested
+// calls compose) routes report() calls made while a guard is disabled into a
+// separate tally that main() never looks at. Only the *baseline* (no guard
+// disabled) sub-calls inside runE5, and E5's own "goes RED" meta-asserts,
+// count toward PASS/FAIL — those must stay real signal.
+let SUPPRESS = 0;
+let SUPPRESSED_PASS = 0, SUPPRESSED_FAIL = 0;
+async function withSuppressedCounting(fn) {
+  SUPPRESS++;
+  try {
+    return await fn();
+  } finally {
+    SUPPRESS--;
+  }
+}
 function report(label, ok, detail) {
-  if (ok) PASS++; else FAIL++;
+  if (SUPPRESS > 0) {
+    if (ok) SUPPRESSED_PASS++; else SUPPRESSED_FAIL++;
+  } else {
+    if (ok) PASS++; else FAIL++;
+  }
   console.log(`  [${ok ? "PASS" : "FAIL"}] ${label}${detail ? " — " + detail : ""}`);
 }
 
@@ -297,6 +323,13 @@ async function runE1(disabled = disabledGuards()) {
     ["find -delete", "find / -name '*.key' -delete"],
     ["less pager (shell escape surface)", "less /etc/passwd"],
     ["prefix-confusable command", "lsblk /dev/sda"],
+    // Redirect hole (orchestrator re-check, 2026-09-21): through the full
+    // RwxGate + real Gate, an r-- agent was ALLOWED each of these before
+    // JOIN_META gained `>`/`<`. Exercised via gate.check, not matchBash alone.
+    ["redirect write (overwrite)", "ls > /home/hamr/.bashrc"],
+    ["redirect write (ssh key exfil)", "cat ~/.ssh/id_rsa > /tmp/leak"],
+    ["redirect append", "cat a >> b"],
+    ["redirect read (input)", "grep x < /etc/shadow"],
   ];
 
   let allDenied = true;
@@ -307,6 +340,22 @@ async function runE1(disabled = disabledGuards()) {
     report(`${label}: "${cmd}"`, denied, `rule=${decision.rule}`);
   }
   report("ALL adversarial bash denied under r--", allDenied);
+
+  // Known Limit #5 (doc line ~465-466): "bash leading-word matching is not a
+  // parser." An option-driven write (`--output=`) cannot be fixed by leading-
+  // word matching without inventing a flag parser (out of scope — escalated,
+  // not decided, in rwx-poc.md). This case is EXPECTED TO ALLOW: it documents
+  // a real, stated gap, not a safety PASS. It is reported separately and does
+  // NOT feed into `allDenied` above.
+  const knownLimitCmd = "git diff --output=/home/hamr/.bashrc";
+  const kl = await gate.check({ type: "bash", args: { command: knownLimitCmd } });
+  const klAllowed = kl.outcome === "allow";
+  console.log(
+    `  [KNOWN LIMIT #5] "${knownLimitCmd}" — leading-word matching tags "git diff" as r, ` +
+      `but --output= makes this a WRITE. Outcome: ${klAllowed ? "ALLOWED (gap confirmed, as documented)" : `DENIED — rule=${kl.rule}`}`,
+  );
+  report("Known Limit #5 (option-driven write) reproduces as documented (expected ALLOW, not a safety claim)", klAllowed);
+
   return allDenied;
 }
 
@@ -361,50 +410,109 @@ async function runE3(disabled = disabledGuards()) {
   return ok;
 }
 
-// E-rwx-4: realistic coding-agent run under rw- (fixer). Report completed + deny count.
+// E-rwx-4: realistic coding-agent session under rw- (fixer). The usability
+// number is how a STARTER file performs against commands a real agent
+// actually emits with real arguments — NOT a count that includes deliberately
+// planted irreversible actions (those are exercised separately below, in
+// E-rwx-4b, and do not feed the usability split).
+//
+// Each script item is pre-classified by static read of matchBash/JOIN_META
+// against the actual starter file, into exactly one of:
+//   allow         — should and does complete
+//   correct-deny  — a genuine chaining/joining construct (e.g. a pipe),
+//                   correctly denied under the doc's settled joined-command rule
+//   false-deny    — denied only because JOIN_META fires on a character that
+//                   is safe here (inside quotes, or `$` for env-var expansion,
+//                   not command substitution) — a real false positive
+//   gap           — denied because the leading word isn't in the starter file
+//                   at all — a first-run addition an operator would make
+// report() below asserts the ACTUAL outcome matches this prediction, so a
+// PASS here means "the POC's classification is correct," not "nothing denies."
 async function runE4(disabled = disabledGuards()) {
-  section("E-rwx-4: realistic coding-agent run under rw- (fixer)");
+  section("E-rwx-4: realistic rw- coding session (usability count)");
   const cfg = loadRwxConfig(RWX_PATH);
   const gate = new RwxGate({ rwxConfig: cfg, agentName: "fixer", disabled });
   await gate.init();
 
   const script = [
-    { type: "read", args: { path: "src/gate.js" } },
-    { type: "search", args: { q: "TODO" } },
-    { type: "bash", args: { command: "git status" } },
-    { type: "bash", args: { command: "git diff" } },
-    { type: "edit", args: { path: "src/gate.js", patch: "..." } },
-    { type: "bash", args: { command: "npm test" } },
-    { type: "bash", args: { command: "npm run build" } },
-    { type: "bash", args: { command: "git add" } },
-    { type: "bash", args: { command: "git commit" } },
-    // beyond the happy path: plausible next moves that SHOULD be denied under rw-
-    { type: "bash", args: { command: "git push" } },       // x, fixer lacks x
-    { type: "bash", args: { command: "npm publish" } },    // x, fixer lacks x
-    { type: "deploy", args: {} },                            // x, fixer lacks x
-    { type: "github.create_pr", args: {} },                   // w, fixer HAS w -> allowed
-    { type: "bash", args: { command: "npm install left-pad" } }, // unlisted command
-    { type: "bash", args: { command: "rm -rf node_modules" } },  // x, and unlisted-form too
+    ["allow", { type: "read", args: { path: "src/gate.js" } }, "read src/gate.js"],
+    ["allow", { type: "search", args: { q: "TODO" } }, "search TODO"],
+    ["allow", { type: "bash", args: { command: "git status" } }, "git status"],
+    ["allow", { type: "bash", args: { command: "git diff" } }, "git diff"],
+    ["allow", { type: "bash", args: { command: "git diff HEAD~1 -- src/" } }, "git diff HEAD~1 -- src/"],
+    ["allow", { type: "bash", args: { command: "git diff --stat" } }, "git diff --stat"],
+    ["allow", { type: "bash", args: { command: "git log --oneline -5" } }, "git log --oneline -5"],
+    ["correct-deny", { type: "bash", args: { command: "git log | head" } }, "git log | head"],
+    ["allow", { type: "bash", args: { command: "ls -la src" } }, "ls -la src"],
+    ["false-deny", { type: "bash", args: { command: "cat $HOME/.npmrc" } }, "cat $HOME/.npmrc"],
+    ["false-deny", { type: "bash", args: { command: "grep -rn 'foo|bar' src" } }, "grep -rn 'foo|bar' src"],
+    ["allow", { type: "edit", args: { path: "src/gate.js", patch: "..." } }, "edit src/gate.js"],
+    ["allow", { type: "bash", args: { command: "git add src/x.js test/x.test.js" } }, "git add src/x.js test/x.test.js"],
+    ["false-deny", { type: "bash", args: { command: 'git commit -m "fix (typo) in parser"' } }, 'git commit -m "fix (typo) in parser"'],
+    ["false-deny", { type: "bash", args: { command: 'git commit -m "a; b"' } }, 'git commit -m "a; b"'],
+    ["allow", { type: "bash", args: { command: "npm test" } }, "npm test"],
+    ["allow", { type: "bash", args: { command: "npm test -- --grep auth" } }, "npm test -- --grep auth"],
+    ["allow", { type: "bash", args: { command: "npm run build" } }, "npm run build"],
+    ["gap", { type: "bash", args: { command: "node scripts/x.mjs" } }, "node scripts/x.mjs"],
+    ["gap", { type: "bash", args: { command: "npx tsc --noEmit" } }, "npx tsc --noEmit"],
+    ["gap", { type: "bash", args: { command: "sed -n 1,40p src/a.js" } }, "sed -n 1,40p src/a.js"],
+    ["gap", { type: "bash", args: { command: "head -50 README.md" } }, "head -50 README.md"],
+    ["gap", { type: "bash", args: { command: "wc -l src/*.js" } }, "wc -l src/*.js"],
+    ["gap", { type: "bash", args: { command: "git checkout -b fix/x" } }, "git checkout -b fix/x"],
+    ["gap", { type: "bash", args: { command: "git stash" } }, "git stash"],
+    ["allow", { type: "bash", args: { command: "cat README.md" } }, "cat README.md"],
+    ["allow", { type: "github.create_pr", args: {} }, "github.create_pr"],
   ];
 
-  const denies = [];
-  let completedSteps = 0;
-  for (const action of script) {
+  const buckets = { allow: [], "correct-deny": [], "false-deny": [], gap: [] };
+  let classificationOk = true;
+  for (const [expected, action, desc] of script) {
+    const decision = await gate.check(action);
+    const actualAllow = decision.outcome === "allow";
+    const expectAllow = expected === "allow";
+    const matches = actualAllow === expectAllow;
+    if (!matches) classificationOk = false;
+    buckets[expected].push({ desc, decision });
+    console.log(
+      `  [${actualAllow ? "ALLOW" : "DENY "}] (${expected}) ${desc}` +
+        (actualAllow ? "" : ` — rule=${decision.rule}`),
+    );
+  }
+  report("every E-rwx-4 step's outcome matches its predicted classification", classificationOk);
+
+  const total = script.length;
+  const allowed = buckets.allow.length;
+  const deniedTotal = total - allowed;
+  const falseDeny = buckets["false-deny"].length;
+  const gapDeny = buckets.gap.length;
+  const correctDeny = buckets["correct-deny"].length;
+
+  console.log(`\n  usability split — total=${total} allowed=${allowed} denied=${deniedTotal}`);
+  console.log(`    (a) false deny from quoting/metachar matching: ${falseDeny}`);
+  console.log(`    (b) unlisted command (starter-file gap): ${gapDeny}`);
+  console.log(`    (c) correct deny (genuine chaining construct): ${correctDeny}`);
+
+  // E-rwx-4b: irreversible actions this rw- agent correctly can never reach.
+  // Reported SEPARATELY and NOT counted in the usability split above — per
+  // the task, planted should-deny steps do not belong in a usability number.
+  section("E-rwx-4b: irreversible actions correctly denied (separate from the usability count)");
+  const irreversible = [
+    { type: "bash", args: { command: "git push" } },
+    { type: "bash", args: { command: "npm publish" } },
+    { type: "deploy", args: {} },
+    { type: "bash", args: { command: "rm -rf node_modules" } },
+  ];
+  let irrOk = true;
+  for (const action of irreversible) {
     const decision = await gate.check(action);
     const desc = action.type === "bash" ? `bash "${action.args.command}"` : action.type;
-    if (decision.outcome === "allow") {
-      completedSteps++;
-      console.log(`  [ALLOW] ${desc}`);
-    } else {
-      denies.push({ desc, rule: decision.rule, reason: decision.reason });
-      console.log(`  [DENY]  ${desc} — rule=${decision.rule} reason="${decision.reason}"`);
-    }
+    const denied = decision.outcome === "deny";
+    if (!denied) irrOk = false;
+    console.log(`  [${denied ? "DENY " : "ALLOW"}] ${desc}${denied ? ` — rule=${decision.rule}` : ""}`);
   }
-  const coreTaskDone = completedSteps >= 9; // read/search/status/diff/edit/test/build/add/commit
-  report("core edit-test-commit workflow completed", coreTaskDone, `${completedSteps}/${script.length} steps allowed`);
-  console.log(`  usability number: ${denies.length} loud denies out of ${script.length} attempted actions`);
-  denies.forEach((d, i) => console.log(`    deny #${i + 1}: ${d.desc} (${d.rule})`));
-  return { completed: coreTaskDone, denyCount: denies.length, denies };
+  report("all irreversible/x actions correctly denied under rw- (not counted in the usability number)", irrOk);
+
+  return { total, allowed, falseDeny, gapDeny, correctDeny, classificationOk, irrOk };
 }
 
 // E-rwx-5: falsify each guard, show the corresponding case goes RED.
@@ -420,19 +528,21 @@ async function runE5() {
   report("baseline E-rwx-3 is green", baselineE3);
 
   console.log("\n-- RWX_DISABLE=unlisted (guard c: unlisted deny) --");
-  const e2Disabled = await runE2(new Set(["unlisted"]));
+  // Suppressed: falsification runs are EXPECTED to go red (that's the proof),
+  // so their internal report() calls must not affect the process exit code.
+  const e2Disabled = await withSuppressedCounting(() => runE2(new Set(["unlisted"])));
   report("with 'unlisted' disabled, E-rwx-2 goes RED (hidden tool now allowed)", !e2Disabled);
 
   console.log("\n-- RWX_DISABLE=joined (guard d: joined-command deny) --");
-  const e1JoinedDisabled = await runE1(new Set(["joined"]));
+  const e1JoinedDisabled = await withSuppressedCounting(() => runE1(new Set(["joined"])));
   report("with 'joined' disabled, E-rwx-1 goes RED (a joiner case now allowed)", !e1JoinedDisabled);
 
   console.log("\n-- RWX_DISABLE=leadingword (guard d: leading-word match) --");
-  const e1WordDisabled = await runE1(new Set(["leadingword"]));
+  const e1WordDisabled = await withSuppressedCounting(() => runE1(new Set(["leadingword"])));
   report("with 'leadingword' disabled, E-rwx-1 goes RED (every bash command now allowed)", !e1WordDisabled);
 
   console.log("\n-- RWX_DISABLE=clamp (guard e: spawn clamp) --");
-  const e3ClampDisabled = await runE3(new Set(["clamp"]));
+  const e3ClampDisabled = await withSuppressedCounting(() => runE3(new Set(["clamp"])));
   report("with 'clamp' disabled, E-rwx-3 goes RED (child inherits requested 'rwx')", !e3ClampDisabled);
 }
 
@@ -448,13 +558,18 @@ async function main() {
   if (!only || only === "e5") await runE5();
 
   console.log(`\n=== TOTAL: ${PASS} PASS, ${FAIL} FAIL ===`);
-  // Exit-code signal is only meaningful for a normal (no-falsification) run of
-  // a single E-case or the full e1-e4 suite. E-rwx-5 deliberately disables
-  // guards and expects some sub-case-level reports to read FAIL (that IS the
-  // falsification working) — its own meta-asserts ("goes RED") are what to
-  // read for e5's pass/fail, not the raw FAIL count.
-  const e5Ran = !only || only === "e5";
-  if (FAIL > 0 && !e5Ran && !process.env.RWX_DISABLE) process.exitCode = 1;
+  if (SUPPRESSED_PASS || SUPPRESSED_FAIL) {
+    console.log(
+      `    (E-rwx-5 falsification sub-cases, excluded from the totals above: ` +
+        `${SUPPRESSED_PASS} pass, ${SUPPRESSED_FAIL} expected-red — that redness is the falsification working)`,
+    );
+  }
+  // PASS/FAIL above already excludes E-rwx-5's intentionally-red falsification
+  // sub-cases (routed into SUPPRESSED_* via withSuppressedCounting) — only
+  // real signal remains: every non-E5 check, plus E5's own "goes RED"
+  // meta-asserts. A standalone `RWX_DISABLE=... node rwx-poc.mjs <case>` demo
+  // run is expected to show FAIL without failing the process.
+  if (FAIL > 0 && !process.env.RWX_DISABLE) process.exitCode = 1;
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

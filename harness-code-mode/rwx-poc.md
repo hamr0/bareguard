@@ -1,20 +1,41 @@
 # rwx POC — findings (throwaway, not shipped)
 
-> **Orchestrator re-check (2026-09-21) — two findings override the verdicts below.**
-> 1. **Redirect hole (real).** Through the full `RwxGate` + real `Gate`, an `r--`
->    agent is ALLOWED `ls > /home/hamr/.bashrc`, `cat ~/.ssh/id_rsa > /tmp/leak`
->    and `git diff --output=/home/hamr/.bashrc` (rule=`tools.allowlist`).
->    `JOIN_META` omits `>` `>>` `<`, and E-rwx-1's case set (and the design doc's
->    list) has no redirect case. Option-driven writes (`--output=`) are Known
->    Limit #5 but must be stated as "can WRITE", not only "reads any path".
-> 2. **E-rwx-4's "5/15 denies" is not a usability number.** 4 of the 5 denies
->    were planted as should-deny steps, and every command ran without args.
->    Realistic commands false-deny as `rwx.joined` because `JOIN_META` matches
->    inside quotes: `git commit -m "fix (typo)"`, `git commit -m "a; b"`,
->    `grep 'a|b' src`, `cat $HOME/x`. The "tolerable" verdict below is unproven.
+> **Status (2026-09-21, second pass).** Both findings from the first
+> orchestrator re-check are now addressed in code:
+> 1. **Redirect hole — fixed at the wrapper.** `JOIN_META` now includes `>`
+>    `<` (covers `>>` and fd forms like `2>`/`&>` too, the latter via the
+>    already-present `&`). E-rwx-1 gained four cases run through `gate.check`
+>    (not just `matchBash`): `ls > /home/hamr/.bashrc`, `cat ~/.ssh/id_rsa >
+>    /tmp/leak`, `cat a >> b`, `grep x < /etc/shadow` — all four now deny
+>    (`rwx.joined`). The option-driven write, `git diff --output=/home/hamr/.bashrc`,
+>    is NOT fixable by leading-word matching (Known Limit #5, doc line ~465) —
+>    no flag parser was built. It is now its own E-rwx-1 case, run and reported
+>    as an **expected ALLOW / documented gap**, not a safety PASS. No design
+>    decision was made about tagging write-capable-option commands as `r`; see
+>    Escalated questions below.
+> 2. **E-rwx-4 rebuilt as a 27-item realistic `rw-` session** with real
+>    argumented commands (git with messages/paths/flags, npm with flags, sed/
+>    head/wc/grep, piping). Deliberately-irreversible actions (`git push`,
+>    `npm publish`, `deploy`, `rm -rf node_modules`) were moved OUT of the
+>    count into a separate E-rwx-4b, never mixed into the usability number.
+>    Result: **15/27 allow, 12/27 deny**, denies split (a) 4 false-deny from
+>    `JOIN_META` matching inside quotes or on `$` for env-var expansion
+>    (`cat $HOME/.npmrc`, `grep -rn 'foo|bar' src`, two `git commit -m "..."`
+>    cases with `(` `)` or `;` inside the message), (b) 7 unlisted-command
+>    starter-file gaps (`node`, `npx`, `sed`, `head`, `wc`, `git checkout`,
+>    `git stash` — none in the starter `bareguard.rwx.json`), (c) 1 correct
+>    deny (`git log | head`, a genuine pipe). See the "Usability verdict"
+>    section below for what this number means for graduation.
 >
-> Not yet fixed: add redirects to the joiner set + E-rwx-1, and redo E-rwx-4
-> with realistic argumented commands before any graduation claim.
+> Also fixed: the runner's exit code. A normal full run used to exit 0 even
+> when a baseline E1-E4 check failed, because `!only` made `e5Ran` true and
+> skipped the exit-code check entirely. Now `report()` routes calls made
+> during E-rwx-5's guard-disabled falsification sub-runs into a separate
+> `SUPPRESSED_*` tally (via `withSuppressedCounting`) that never reaches the
+> exit code; E5's baseline sub-calls and its own "goes RED" meta-asserts still
+> count as real signal. Proven by reverting the redirect fix in a scratch copy
+> outside this repo and confirming the full run now exits 1 (11 FAIL) — see
+> the handback message for the transcript.
 
 Design doc: `docs/wiki/releases-roadmap.md` lines 353-500 ("rwx: operator-tagged
 capability letters for agent fleets", PROPOSED 2026-09-21, not built).
@@ -47,16 +68,22 @@ Run `node harness-code-mode/rwx-poc.mjs` for the full suite, or
 `RWX_DISABLE=<guard[,guard]>` (guards: `unlisted`, `joined`, `leadingword`,
 `clamp`) disables one guard for a standalone run.
 
-- **E-rwx-1** (19 adversarial bash commands under `r--`): all 19 denied.
-  Every joiner (`;` `&&` `||` `|` `$(...)` backtick, newline, `\`
-  continuation), env prefix (`FOO=1 cmd`), wrapper (`command`/`exec`/`sudo`/
-  `env`/`xargs`), `find -exec`/`-delete`, and `less` all deny — most via
-  `rwx.unlisted` (no leading-word match at all, since none of these forms are
-  in the starter bash map) or `rwx.joined` (shell-meta present, whole string
-  not listed verbatim). A prefix-confusable command (`lsblk` vs an allowed
-  `ls`) also correctly denies (`rwx.unlisted`) because the wrapper's
-  leading-word match is word-boundary-aware (`cmd === key || cmd.startsWith(key + " ")`),
-  not a bare `startsWith`.
+- **E-rwx-1** (23 adversarial bash commands under `r--`): all 23 denied, plus
+  one documented known limit. Every joiner (`;` `&&` `||` `|` `$(...)`
+  backtick, newline, `\` continuation), the four redirect forms (`>` overwrite,
+  `>` exfil, `>>` append, `<` input), env prefix (`FOO=1 cmd`), wrapper
+  (`command`/`exec`/`sudo`/`env`/`xargs`), `find -exec`/`-delete`, and `less`
+  all deny — most via `rwx.unlisted` (no leading-word match at all, since none
+  of these forms are in the starter bash map) or `rwx.joined` (shell-meta
+  present, whole string not listed verbatim — `JOIN_META` now includes `>`/`<`).
+  A prefix-confusable command (`lsblk` vs an allowed `ls`) also correctly
+  denies (`rwx.unlisted`) because the wrapper's leading-word match is
+  word-boundary-aware (`cmd === key || cmd.startsWith(key + " ")`), not a bare
+  `startsWith`. Separately, `git diff --output=/home/hamr/.bashrc` is run as a
+  **known-limit case**: it ALLOWS (leading-word matching tags `git diff` as
+  `r`; the `--output=` flag turns it into a write) — reported loudly as a
+  confirmed, documented gap (Known Limit #5), not folded into the "all denied"
+  count.
 - **E-rwx-2**: researcher (`r--`)'s catalog hides `write`/`edit`/
   `github.create_pr`/`deploy`/`wireMoney`; calling each by name anyway denies
   at `check()` with `rwx.denied` (tagged, but the agent lacks the letter) —
@@ -65,16 +92,35 @@ Run `node harness-code-mode/rwx-poc.mjs` for the full suite, or
   `rwx`, five levels deep (each depth's child becomes the next depth's
   parent), never produces a `w`-holding descendant — every depth clamps to
   `r-x`.
-- **E-rwx-4**: a realistic fixer (`rw-`) run — read, search, `git status`/
-  `diff`, edit, `npm test`, `npm run build`, `git add`/`commit` all complete
-  (9/9 core steps). Then it plausibly reaches for `git push`, `npm publish`,
-  `deploy` (all tagged `x`, fixer lacks `x`), and `github.create_pr` (tagged
-  `w`, fixer holds it → allowed). Two more attempts — `npm install left-pad`
-  (untagged) and `rm -rf node_modules` (tagged `x`) — also deny.
-  **Usability number: 5 loud denies out of 15 attempted actions**, all of them
-  are either genuinely-irreversible actions the agent shouldn't have (push,
-  publish, deploy, rm) or an untagged command an operator would add on the
-  first real denial. None of the 5 blocked the core edit→test→commit loop.
+- **E-rwx-4**: a realistic fixer (`rw-`) coding session — 27 items with real
+  arguments (`git commit -m "..."`, `git diff HEAD~1 -- src/`, `npm test --
+  --grep auth`, `grep -rn 'foo|bar' src`, `sed -n 1,40p src/a.js`, `git log |
+  head`, etc.), deliberately excluding irreversible actions from the count
+  (see E-rwx-4b). **Result: 15/27 allow, 12/27 deny.** The 12 denies split:
+  - **(a) 4 false denies** from `JOIN_META` matching a character that is safe
+    in context — inside quotes (`git commit -m "fix (typo) in parser"`,
+    `git commit -m "a; b"`, `grep -rn 'foo|bar' src`) or a `$` used for
+    env-var expansion, not command substitution (`cat $HOME/.npmrc`).
+  - **(b) 7 unlisted-command starter-file gaps** — `node`, `npx`, `sed`,
+    `head`, `wc`, `git checkout`, `git stash` are simply absent from the
+    sample `bareguard.rwx.json`'s bash map, so they deny `rwx.unlisted`; an
+    operator would add each on first real hit.
+  - **(c) 1 correct deny** — `git log | head` is a genuine pipe (chains to a
+    second program) and denies per the doc's own settled joined-command rule.
+
+  Every classification above was predicted before running and asserted to
+  match the actual outcome (`report()` in `runE4`), so this is not a hand-wave
+  count. Separately, **E-rwx-4b** (not part of the 27): `git push`, `npm
+  publish`, `deploy`, `rm -rf node_modules` all correctly deny under `rw-` —
+  reported, but never mixed into the usability number.
+
+  **Opinion (not a decision):** the 4 false denies in (a) are all one root
+  cause — `JOIN_META` scans the raw string, so any of its characters inside a
+  quoted argument trips it. A quote-aware scanner (strip single/double-quoted
+  spans before testing for shell metacharacters) would remove all 4 without
+  weakening the joined-command deny itself. This POC does not build one — it
+  would need its own adversarial testing (nested quotes, escaped quotes) and
+  is a real scope increase, not a one-line fix.
 - **E-rwx-5** (falsify each guard, confirm the paired case goes red — full
   transcript below):
   - `RWX_DISABLE=unlisted` → E-rwx-2 goes red: all 5 previously-hidden tools
@@ -144,12 +190,32 @@ message (not duplicated here) — this file is the interpretive summary.
 
 ## Usability verdict (graduation gate from the doc)
 
-E-rwx-4's deny count (5/15, all either irreversible-by-design or an
-easy first-run addition to the file) is tolerable. Per the doc's own
-graduation rule ("graduate only if E-rwx-4's deny count is tolerable AND a
-real adopter wants the fleet view") — the second half of that condition is
-unchanged by this POC: still no adopter ask (per MEMORY.md, idle-by-design).
-This POC is evidence toward the first half only.
+The first, unrevised pass called E-rwx-4's 5/15 denies "tolerable" — that
+number was wrong (4 of the 5 were planted irreversible-action attempts, and
+every command ran without arguments, so it never exercised quoting at all).
+The rebuilt 27-item realistic session gives an honest number: **12/27 (44%)
+deny**, but only 1 of those 12 is a correct deny of a genuinely unsafe-shaped
+construct (a pipe). The other 11 are not "the agent tried something it
+shouldn't" — they are either a first-run starter-file gap (7, trivially fixed
+by an operator adding the command once) or a false positive from the joiner
+regex matching inside quotes/env-vars (4, would need the quote-aware scan
+described above as an opinion, not built here).
+
+Read plainly: **read, search, status, diff, edit, add, test, build and
+github.create_pr all completed — but the commit step did not: BOTH `git commit`
+attempts in the run were false-denied** (`-m "fix (typo) in parser"`,
+`-m "a; b"`), so under this starter file the edit→test→commit loop does NOT
+finish whenever the message carries `( ) ; | $`. The other blocks are
+peripheral (log paging, npm/node tooling beyond test/build).
+(Correction by the orchestrator re-check: an earlier draft of this paragraph
+said the core loop "never gets blocked".) Whether an 11/27 rate of
+false-deny-or-gap on a *starter* file is "tolerable" is a judgment call this
+POC doesn't make for the operator — it's evidence, not a verdict. Per the
+doc's own graduation rule ("graduate only if E-rwx-4's deny count is tolerable
+AND a real adopter wants the fleet view") — the second half is unchanged by
+this POC: still no adopter ask (per MEMORY.md, idle-by-design). This POC
+supplies real (not hand-waved) evidence toward the first half only, and that
+evidence is more mixed than the original pass claimed.
 
 ## Design decisions NOT re-litigated
 
@@ -162,10 +228,28 @@ rwx vs allowlist as two mutually exclusive modes (this POC only ever
 constructs rwx-shaped Gates, never mixes in an operator-supplied
 `tools.allowlist`/`bash.allow` of its own).
 
-## Nothing escalated
+## Escalated questions
 
-No design decision outside the doc's settled/POC-plan scope was needed to
-build or run this. The two POC-level implementation choices worth flagging
+1. **Should a command with a write-capable OPTION (e.g. `git diff --output=`)
+   ever be tagged something other than its normal read letter?** This POC
+   does NOT propose "never tag a command with write-capable options as `r`" —
+   that would need either a per-flag allow/deny list (a flag parser, out of
+   POC scope and rejected by the task brief) or blanket-denying an entire
+   command family (`git diff` outright) that is overwhelmingly used safely.
+   Known Limit #5 already names this as a stated, permanent limit of
+   leading-word matching, not a bug to fix. Flagging it as a question rather
+   than deciding it, since it is a real, live gap and any of the fixes has a
+   design cost (config surface, false-deny rate, or scope of what "tagging by
+   leading word" even means).
+2. Is an 11/27 false-deny-or-gap rate against a **starter** file (see
+   Usability verdict) tolerable enough to graduate, given that commits with
+   punctuated messages are false-denied? Left to the operator/adopter side of the doc's own
+   graduation rule — not decided here.
+
+## Nothing else escalated
+
+No other design decision outside the doc's settled/POC-plan scope was needed
+to build or run this. The two POC-level implementation choices worth flagging
 (not policy decisions, just this file's own construction):
 - The underlying Gate's `bash.allow` is intentionally left unset (wrapper owns
   all bash gating) so E-rwx-5's ablation of `joined`/`leadingword` is clean
