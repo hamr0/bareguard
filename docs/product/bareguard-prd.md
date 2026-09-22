@@ -23,7 +23,7 @@ sources: [docs/archive/bareguard-prd.md]
 >
 > **Owner:** hamr0 · **Language:** Node.js (ESM, Node 20 LTS+); ships `.d.ts`
 > generated from JSDoc. **One production dep:** `proper-lockfile`.
-> **Implementation status:** released on npm through 0.8.0; pre-1.0 on a deliberate
+> **Implementation status:** released on npm through 0.16.0; pre-1.0 on a deliberate
 > HOLD (Part 1 §19). **Supersedes** the separate `harness-prd.md` (folded in as
 > Part 2, 2026-06-23) and the v0.1–v0.6 PRD lineage.
 >
@@ -975,3 +975,278 @@ hand-written JS trips ~130 unrelated strict errors that don't affect the public
 types.) v0.5.0's separate strict consumer-resolution fixture was dropped in
 v0.5.2 — it checked a stub while missing the real null hazards in the source, so
 `strictNullChecks` on the source itself is both simpler and more thorough. (bareguard-prd.md:950-962)
+
+---
+
+## 23. rwx: operator-tagged capability letters for agent fleets (APPROVED FEATURE — hamr, 2026-09-22)
+
+A second, **mutually exclusive** mode of control beside the closed `tools.allowlist`. The
+operator tags every tool and every bash command with one letter, gives every agent a
+three-letter ceiling, and the gate hands an agent only what its letters cover. The payoff is
+**review at scale**: one file reads `researcher r--`, `fixer rw-`, `deployer rwx`, and a human
+scans a fleet for `x` instead of reading per-agent allowlists. Idea handed over from a bareagent
+design session (the "agent-as-MCP" exploration, parked;
+`~/PycharmProjects/bareagent/docs/logs/agent-as-mcp-exploration.md`); the letter meanings below
+were re-settled with hamr in the bareguard session of 2026-09-21 and **differ from the
+handover** (`x` there = delegate). Moved from Future features (candidate) to an approved
+feature by hamr on 2026-09-22, on the strength of the POC evidence in §23.14; target release
+0.17.0 (see §23.17). The design below is settled; nothing in this section is open except
+§23.18. (bareguard-prd.md:981-994)
+
+### 23.1 The letters (settled; shared verbatim with rwxmap D87, 2026-09-22)
+
+- **`r` = read:** changes nothing.
+- **`w` = write:** changes things, the caller's own OR anyone else's, in a way a later write
+  can set back. Sets, edits, creates, toggles (enable/disable, archive/unarchive,
+  pause/resume…), cancels of something that can be resumed.
+- **`x` = execute:** cannot be undone. Deletes and removals (any DELETE method, always, unless
+  a trash/restore is named), revokes, expires, voids, sends, publishes, charges, pays,
+  refunds, triggers a run.
+- **Unsure → `x`.**
+
+Whose thing it is is **not** a class test (editing another user's role is `w`; gate it with
+`flags` if it should ask). A plain create is `w` (a delete undoes it); a create that also
+sends, charges or runs is `x`. For bash, "triggers a run" means starting external work (CI, a
+job, a deploy); running a local program is tagged by what that program changes. Letters
+are **independent bits, spelled out** — no letter implies another: `-w-` (write-only sink: a
+logger, a report-dropper) and `r-x` (a manager that reads and hands off) are both legal.
+"Reversible" is the operator's call per action type — the same trust model as Axis B (Part 2
+§6.6: reversibility read from the action's TYPE via operator config, never from the agent or
+model). **Unsure → tag it `x`.** Close to the `x` of hamr's IETF draft (non-repeatable), with
+none of its machinery (no chains, signatures or floors). (bareguard-prd.md:996-1016)
+
+### 23.2 Two modes, pick one per gate
+
+**allowlist mode** (today, the default: `tools.allowlist`, `bash.allow`/`denyPatterns`,
+optional `bash.classify`) or **rwx mode** (§23.3). Not coupled, not layered: two primitives
+doing the same job, so a gate uses exactly one. Both configured ⇒ **construct-time throw**,
+same family as `assertArrayShapedConfig` — otherwise nobody knows which one is in charge. With
+no `rwx` config, behavior is byte-identical to today. (bareguard-prd.md:1018-1024)
+
+### 23.3 One file, `bareguard.rwx.json`
+
+Three maps. bareguard ships a **starter file** derived from what it already curates (built-in
+action types + common read/write commands), clearly marked as the shipped list; the operator
+copies and edits it. Never written to at runtime.
+
+```json
+{
+  "agents": { "researcher": "r--", "fixer": "rw-", "deployer": "rwx" },
+  "tools":  { "read": "r", "fetch": "r", "write": "w", "edit": "w",
+              "github.create_pr": "w", "deploy": "x" },
+  "bash":   { "ls": "r", "cat": "r", "grep": "r", "git status": "r", "git log": "r",
+              "git add": "w", "git commit": "w", "npm test": "w",
+              "git push": "x", "rm": "x" }
+}
+```
+
+Wired as `rwx: { file: "./bareguard.rwx.json", agent: "fixer" }`. Tags live in **operator
+config, never on the tool definition** — the reason is **authorship**, not visibility: a tool
+definition is written by the tool's author (for MCP, an outside server that could call itself
+`r`); config is written only by the operator, the same user-authored/agent-authored split
+that is the floor's security boundary (Part 2 §2). (bareguard-prd.md:1026-1047)
+
+### 23.4 Deny by absence, loudly
+
+An **unlisted tool**, **unlisted command**, or **unlisted agent** is denied — never asked,
+never guessed. An unlisted agent gets `---`: it starts, but every action denies. The deny is a
+structured in-band refusal that names the fix: `policy_denied rwx.unlisted: "npm run build" is
+not in bareguard.rwx.json — add it as r, w or x`. The operator edits the file later, calmly,
+not mid-run. (bareguard-prd.md:1049-1055)
+
+### 23.5 Enforcement — two places, both required
+
+(1) **hide**: the harness hands the model only tools whose letter the agent holds
+(`gate.allows()` per tool; bareagent's `wireGate.filterTools` already does this loop — per the
+handover, not re-verified here); (2) **deny backstop**: `gate.check` denies an action whose
+letter the agent lacks, because a model can still call a hidden tool by name. The model never
+sees or handles the grant, so prompt injection cannot widen it. The rwx check runs where the
+allowlist check would; everything else in the eval (fs scopes, `net`, content patterns,
+`flags`, budget, secrets redaction) runs unchanged on top. The audit line carries the letter. (bareguard-prd.md:1057-1065)
+
+### 23.6 Bash in rwx mode — two rules only
+
+(1) a command matches on its **leading word(s)** (`git status …` matches `"git status"`;
+longest listed prefix wins); (2) **joined commands** (`;` `|` `&&` `||` `$(…)` backticks,
+redirects — `>` `>>` `<` included, closed by the POC per §23.14) are **denied unless listed
+exactly**. Readers that can run other programs (`less`, `vim`, `find -exec`, `awk`, `xargs`,
+`env`) are **left out of the starter file**; an operator adds them knowingly. The `bash` action
+type itself defaults to `x` in the starter file's `tools` map for agents not using the
+per-command list. (bareguard-prd.md:1067-1075)
+
+### 23.7 Letters never go inside a tool
+
+One action type = one letter. A tool mixing safe and dangerous calls takes its **worst**
+letter. Finer control is **ask/deny, not letters**: split the tool into separate action types
+(`git.status` r / `git.commit` w / `git.push` x — preferred), `flags` on a field value
+(`flags: { subcommand: { push: "ask" } }`), or `tools.denyArgPatterns`. Reason: an agent
+holding even one part of a tool is handed the whole tool, so a per-part letter stops meaning
+"what it can touch." (bareguard-prd.md:1077-1084)
+
+### 23.8 Ask is a separate knob
+
+Letters decide what an agent **gets**; `flags` decides what **asks first**. `x` does **not**
+auto-ask — asking a human to approve commands they cannot read is theater that trains
+click-through. **`bash.classify` belongs to allowlist mode**: setting `bash.classify: true` in
+rwx mode is a construct-time throw (it would look like protection without being any). It stays
+shipped, off by default, for allowlist users (multis consumes it). The answer to "the human
+can't judge the command" is **make mistakes cheap, don't ask more**: few letters per agent, `w`
+kept genuinely undoable (git / a copy / tight `fs.writeScope`), `x` granted rarely and
+deliberately ahead of time, budget caps against repetition — fence the blast radius (Part 2
+intent-drift framing). (bareguard-prd.md:1086-1096)
+
+### 23.9 Delegation
+
+**Attenuate only** — a child's letters are `min(what the parent requested for it, what the
+parent holds)`; a child can never outgrow its parent, so an `r-x` manager can only create `r--`
+helpers and cannot launder `w` through a child. `spawn` gets **no letter of its own**: it is as
+risky as the letters it hands down (an `r--` agent spawning `r--` helpers stays `r--`). Fan-out
+stays bounded by the shipped `limits.maxDepth`/`maxChildren`/`spawn.ratePerMinute`. Rejected:
+`spawn` = `x` (every agent with helpers reads as dangerous; the fleet scan stops working). (bareguard-prd.md:1098-1105)
+
+### 23.10 Count caps
+
+"rw, but at most N writes" = the shipped `budget.resources` cap-map keyed by letter
+(`budget: { resources: { w: 20 } }`), kept **separate from the letter string** (`rw-` +
+`{ w: 20 }`, not `rw+20`). The budget is shared across the run family, so N is the family's
+total, not N per helper. New surface: the gate accrues the letter count itself in rwx mode
+instead of relying on the caller's `result.counts`. (bareguard-prd.md:1107-1113)
+
+### 23.11 Who assigns the letters
+
+**The operator, in the file's `agents` map.** The harness that creates the agent (bareagent or
+anyone's loop) passes the agent's **name**; bareguard looks it up. bareagent change = one
+option plus passing the clamped letters to children on spawn — **not a new bareagent
+primitive**; the concept (tags, check, clamp, audit letter) lives in bareguard (§23.17). (bareguard-prd.md:1115-1120)
+
+### 23.12 Alignment with rwxmap
+
+rwxmap is a **separate project**: an offline labeller that reads an OpenAPI spec or MCP tool
+list and emits one row per operation with `class` (r/w/x), `destructive`, and `evidence`
+(`list` = matched a frozen word list, `floor` = only the HTTP method decided). It does not run
+inside bareguard and bareguard does not depend on it.
+
+- Both projects now use the same four-line definition, §23.1, as their shared D87 (2026-09-22).
+  letter = class, so **no conversion** between the two vocabularies.
+- rwxmap gains an offline exporter: spec → a DRAFT `tools` section of `bareguard.rwx.json`,
+  keyed by **operationId** (never method+path), letters only.
+- `evidence` and `destructive` **never** enter `bareguard.rwx.json`; they ride a sidecar review
+  report instead.
+- `floor` PUT/PATCH rows are **omitted** from the draft so bareguard's deny-by-absence (§23.4)
+  forces a human decision; `floor` DELETE rows are exported as `x`.
+- The exporter emits only the `tools` section, never the `agents` map — grants stay hand-written
+  by the operator (§23.11).
+- A human reviews the sidecar, adds letters for the omitted rows, and commits the file. Nothing
+  writes `bareguard.rwx.json` at runtime (§23.3, §23.4).
+- bareguard has **no `destructive` axis**: "r-x but never delete" is expressed as an `r-x`
+  grant plus a `flags` deny on the delete action type — the same tools-vs-content /
+  ask-vs-letters separation as §23.7/§23.8, not a new primitive.
+
+Exporter contract, answered for rwxmap on 2026-09-22 (bareguard side, spec not yet shipped):
+
+- A `tools` entry's value is a **bare one-letter string** (`"r"`/`"w"`/`"x"`). Three letters are
+  an agent GRANT only; an object-valued entry is a config-shape error (§23.3).
+- The exporter **never** emits `flags`. Denial is the operator's call at grant time; emitting it
+  from a spec would put an agent-authored rule in operator config, crossing the authorship line
+  (Part 2 §2). The sidecar MAY list `destructive: true` rows as a clearly-labelled suggestion.
+- bareguard **does not namespace keys**: a `tools` key is matched literally against the action's
+  `type`. The exporter emits `<vendor>.<operationId>` with a dot, matching the existing
+  `github.create_pr`/`fetch.get` convention; the dot is an ordinary character (no nesting, no
+  wildcards, no prefix match). The `bash` map is the only place with prefix semantics (§23.6).
+- The sidecar is **human-facing only** — bareguard never reads it. "What's missing" is already
+  in-band: an unlisted tool denies with `rwx.unlisted` naming the fix (§23.4).
+  (bareguard-prd.md:1122-1158)
+
+### 23.13 Implementation decisions (approved by hamr, 2026-09-22)
+
+Six decisions, approved alongside the POC evidence in §23.14, closing all but two of the open
+questions the POC was scoped to answer (§23.18):
+
+1. **Quote-aware metachar scan.** Today's POC denies `git commit -m "fix (typo)"` because the
+   joiner regex matches inside quotes. Fix: skip over quoted spans — single-quoted text is
+   fully literal; **inside double quotes**, `$( )`, `` ` `` and `$VAR` still count as dangerous
+   (hamr: "double quote gets blocked"). Needs adversarial testing (nested/escaped quotes,
+   unterminated quotes) before it ships — the bash-matching module has ReDoS history, so any
+   new regex is re-timed per the antigen on unvalidated new patterns.
+2. **Child letters travel on the same channel as spawn depth** (`config.spawnDepth` /
+   `BAREGUARD_SPAWN_DEPTH` equivalent, per §9's existing multi-agent stitching); the clamp
+   (§23.9) runs in the **parent's** gate at spawn time; a child never verifies its own letters.
+3. **`fetch` is split by action type** (`fetch.get` r, `fetch.post` w or x) rather than gaining
+   a second axis — tag-by-action-type, consistent with §23.7. Make this explicit in
+   `bareguard.context.md` too, once shipped.
+4. **bareguard takes the parsed object, never a file path** — all config is a JS object today
+   (per §10's public API); the caller does the file I/O. bareguard does not gain its own
+   settings-file loader by this decision (see the open question at §23.18).
+5. **Option-hidden writes are a stated known limit, not a bug** (§23.16 item 5): `git
+   diff --output=`, `sed -i`, `tar -x`, `curl -o`, `find -delete`. No flag parser is built. The
+   shipped starter file must not tag such commands `r`.
+6. **A starter `bareguard.rwx.json` ships**, drafted for hamr's review before release; note
+   explicitly in it that `sed` cannot be tagged `r` (decision 5). (bareguard-prd.md:1160-1184)
+
+### 23.14 POC evidence
+
+`harness-code-mode/rwx-poc.md` (throwaway, on `main`, never shipped — wraps the real `Gate`
+from outside through its public `tools.allowlist` surface only, no `src/` change). E-rwx-1
+through E-rwx-5 (§23's POC plan, unchanged from the candidate write-up) all pass green. The
+POC's first pass had left a **redirect hole** (`>`, `>>`, `<` not in the joined-command
+metacharacter set); this was found and closed before the evidence above was accepted — `cat
+a >> b` and similar now deny under `rwx.joined`. Usability measurement: **27 real commands**
+under an `rw-` agent — **15 allowed, 12 denied** — split **4** quote/metachar false denies
+(including *both* `git commit -m "..."` attempts, the case decision 1 above fixes), **7**
+starter-file gaps (an unlisted command, not a false deny), **1** correct deny (a genuine pipe).
+The retracted claim from the first POC pass — "core loop never blocked" — does not appear
+here; the 4 false denies are real and are what decision 1 (§23.13) is for. (bareguard-prd.md:1186-1198)
+
+### 23.15 Rejected alternatives (don't re-litigate)
+
+**Runtime HITL for unlisted commands** ("ask the human r/w/x, remember the answer") — a leak
+by design: click-through fatigue approves the one bad new command down the line; **ordered
+ladder** `r<w<x` — hides grants and can't express `r-x`/`-w-`; **`x` = delegate** (the
+handover's meaning) — delegation is already bounded by attenuation + spawn limits; **tags on
+the tool definition** — tool-author-written; **untagged = `x`** (the handover's default) —
+would hand every unknown tool to `rwx` agents; untagged = nobody; **rwx layered on the
+allowlist** — two lists that must agree; **deriving letters from `bash.classify`** — it is a
+*danger* list that fails open (unmatched = "safe"), backwards for granting; **letters per part
+of a tool**. (bareguard-prd.md:1200-1210)
+
+### 23.16 Known limits (state in the docs when built)
+
+(1) **a tool can change behind its name** — an MCP server update can turn a read tool into a
+write tool; the tag trusts the name. (2) **an `r` tool can still have effects** — some "reads"
+trigger things, and read + network can exfiltrate; `net` domain limits and `secrets` stay on.
+(3) **"reversible" is operator judgment** — a wrong `w` hides an `x`. (4) **binds only agents
+running through our gate** — a remote agent's internals are one tool call. (5) **bash
+leading-word matching is not a parser** — `cat` is `r` but reads any path (bash args are not
+under `fs.readScope`, a pre-existing bash limit); the joined-command deny is the main guard;
+option-hidden writes (`sed -i`, `tar -x`, `curl -o`, `find -delete`, `git diff --output=`) are
+this same limit's sharpest edge (§23.13 decision 5) — no flag parser is built, and the starter
+file must not tag such commands `r`. (6) **it is 1.0 surface** — see §23.17. (bareguard-prd.md:1212-1223)
+
+### 23.17 Status and the 1.0 surface
+
+rwx moved from a parked candidate to an **approved feature** (hamr, 2026-09-22); target
+release is a new minor, **0.17.0**. Once shipped, the `rwx` config keys, the
+`bareguard.rwx.json` file format, the `rwx.*` rule strings (e.g. `rwx.unlisted`, `rwx.joined`),
+and the audit letter all **join the 1.0 SemVer surface** (Future features / SemVer-surface
+list) alongside the rest of §19's list. Downstream: **bareagent** must pass the agent's
+**name** and the clamped letters to its children on spawn (§23.9, §23.11) — this is a bareagent
+change, not a new bareagent primitive. (bareguard-prd.md:1225-1233)
+
+### 23.18 Open questions (remaining open)
+
+The POC's original five open questions are narrowed to two by the decisions in §23.13 (the
+trusted channel for a child's letters, bash edge forms, and the `fetch` split are settled):
+
+1. Whether bareguard ever ships its own settings-file **loader** helper, versus always taking
+   the parsed object and leaving file I/O to the caller (§23.13 decision 4 settles *what*
+   bareguard accepts today; whether a convenience loader is ever added is still open).
+2. How the starter file is **versioned** as bareguard's own curated defaults change underneath
+   an operator's edited copy. (bareguard-prd.md:1235-1244)
+
+### 23.19 Origin / relation
+
+bareagent "agent-as-MCP" exploration (2026-09-21, parked — MCP Tasks give a handle, not
+control); letter meanings and every settled item above decided with hamr in the bareguard
+session of 2026-09-21, approved as a feature 2026-09-22. Relates to Part 2 §6.6 (reversibility
+by type), §16 MCP governance (`gate.allows` as ergonomics), §19 0.8 (`bash.classify`
+best-effort framing). (bareguard-prd.md:1246-1252)
