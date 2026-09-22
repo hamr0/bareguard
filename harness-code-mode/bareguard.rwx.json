@@ -1,0 +1,33 @@
+{
+  "_comment": "SAMPLE / STARTER rwx file for the rwx-poc.mjs throwaway POC. Not shipped, not read by src/. Shape per docs/wiki/releases-roadmap.md lines 353-500 (rwx section) / bareguard-prd.md:1309-1327.",
+  "agents": {
+    "researcher": "r--",
+    "fixer": "rw-",
+    "deployer": "rwx"
+  },
+  "tools": {
+    "read": "r",
+    "fetch": "r",
+    "search": "r",
+    "write": "w",
+    "edit": "w",
+    "github.create_pr": "w",
+    "deploy": "x",
+    "wireMoney": "x"
+  },
+  "bash": {
+    "ls": "r",
+    "cat": "r",
+    "grep": "r",
+    "git status": "r",
+    "git log": "r",
+    "git diff": "r",
+    "git add": "w",
+    "git commit": "w",
+    "npm test": "w",
+    "npm run build": "w",
+    "npm publish": "x",
+    "git push": "x",
+    "rm": "x"
+  }
+}
