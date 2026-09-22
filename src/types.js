@@ -381,6 +381,8 @@ export {};
  * @property {ContentConfig} [content]
  * @property {FlagsConfig} [flags]
  * @property {AxisBConfig} [axisB]  Axis-B return-time-judge routing (§6.6/§8.2).
+ * @property {RwxConfig} [rwx]  Operator-tagged capability letters (§23) —
+ *   mutually exclusive with `tools.allowlist`/`bash.allow`/`bash.classify`.
  * @property {SecretsConfig} [secrets]
  * @property {RateConfig} [defer]
  * @property {RateConfig} [spawn]
@@ -399,4 +401,38 @@ export {};
  * Budget dimension that can be raised via `topup` / `raiseCap`: `"costUsd"`,
  * `"tokens"`, or a generic resource name (OQ3).
  * @typedef {"costUsd"|"tokens"|string} BudgetDimension
+ */
+
+/**
+ * `rwx` config (PRD §23) — a second, MUTUALLY EXCLUSIVE mode of control
+ * beside `tools.allowlist` / `bash.allow` / `bash.classify` (configuring both
+ * throws at construct time). Takes the PARSED object, never a file path —
+ * bareguard does not load `bareguard.rwx.json` itself (§23.13 decision 4);
+ * the caller reads the file and passes its three maps in. An unlisted tool,
+ * command, or agent is denied loudly (never asked): rule `rwx.unlisted`. A
+ * listed-but-insufficient letter denies with `rwx.denied`; a joined/chained
+ * bash command not listed verbatim denies with `rwx.joined`; a malformed
+ * `rwx` config (or a value mutated post-construction into an unusable shape)
+ * denies with `rwx.invalid`, following the `<key>.invalid` fail-closed family.
+ *
+ * @typedef {object} RwxConfig
+ * @property {string} [agent]  This gate's agent name, looked up in `agents`.
+ * @property {Object.<string,string>} [agents]  Agent name → 3-char letters
+ *   string (`[r-][w-][x-]`, e.g. `"rw-"`). An agent not present here holds
+ *   `"---"` — it starts, but every action denies (§23.4).
+ * @property {Object.<string,string>} [tools]  Tool/action `type` → a single
+ *   letter `"r"|"w"|"x"`. One action type = one letter (§23.7); a tool mixing
+ *   safe and dangerous calls takes its worst letter — split it into separate
+ *   action types instead of asking for a per-part letter.
+ * @property {Object.<string,string>} [bash]  Command leading-word(s) → a
+ *   single letter `"r"|"w"|"x"` (e.g. `"git status"`, `"git commit"`).
+ *   Longest listed prefix wins, word-boundary aware. A joined/chained command
+ *   (`;` `&&` `||` `|` `$(...)`/backticks, newline, `\` continuation,
+ *   redirects `>`/`>>`/`<`) is denied unless listed verbatim in full — quoted
+ *   spans are scanned quote-aware (§23.13 decision 1): fully literal inside
+ *   single quotes; `$`/backtick still count inside double quotes.
+ * @property {string} [letters]  Explicit override of this gate's own letters
+ *   (skips the `agents` lookup) — how a spawned child receives its
+ *   parent-clamped grant (see `Gate#clampRwxLetters`), carried on the same
+ *   channel `spawnDepth` travels on. Falls back to `BAREGUARD_RWX_LETTERS`.
  */
