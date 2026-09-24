@@ -127,6 +127,23 @@ Full per-primitive reference lives in the **[Usage Guide](docs/product/usage-gui
 
 Tested across **Linux + macOS + Windows × Node 20 + 22**: real-subprocess shared-budget contention, halt cascades, single-file audit atomicity, and family-tree stitching across a 3-deep spawn tree.
 
+## rwx — capability letters for agent fleets (v0.17.0)
+
+A second, **mutually exclusive** mode of control beside `tools.allowlist`/`bash.allow` — for when you're running a *fleet*, not one agent. Tag every tool and bash command once with a letter (`r` read, `w` write-and-undoable, `x` cannot-be-undone), give each agent a three-letter ceiling, and a human reviews the fleet by scanning for `x` instead of reading per-agent allowlists:
+
+```js
+const gate = new Gate({
+  rwx: {
+    agent: "fixer",
+    agents: { researcher: "r--", fixer: "rw-", deployer: "rwx" },
+    tools:  { read: "r", write: "w", deploy: "x" },
+    bash:   { "git status": "r", "git commit": "w", "git push": "x" },
+  },
+});
+```
+
+An unlisted tool, command, or agent is **denied, never asked** (`rwx.unlisted`) — the fix is to add a row, not to widen a letter. A starter file ships at [`bareguard.rwx.json`](bareguard.rwx.json): copy it, edit the `agents` map for your fleet, and pass the parsed object in — bareguard never loads the file itself. Full spec (eval-order slot, bash quoting rules, delegation clamp, audit fields, count caps): **[`bareguard.context.md`](bareguard.context.md#rwx-mode-operator-tagged-capability-letters-23)**, PRD [§23](docs/product/bareguard-prd.md).
+
 ## Axis B — reconcile the return (facts, never spin)
 
 Axis A (everything above) gates what the agent is about to *do*. **Axis B** is the complement: after a result comes back, it carries a **fact** about whether that result *honored* the request, so a human approval shows independent facts instead of the agent's own summary. It's a detector, never an enforcer — it annotates an Axis-A stop, it never blocks alone.
