@@ -116,7 +116,6 @@ test("starter bareguard.rwx.json: every r-tagged bash key is in the reviewed all
     // retags it "w" — see bareguard.rwx.json's own "_notes" and PRD §23.16
     // item 7.
     "git status",
-    "npm ls",
   ]);
 
   const starter = loadStarter();
