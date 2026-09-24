@@ -322,11 +322,13 @@ instead of per-agent allowlists.
 rwx: {
   agent:   "fixer",                                    // this gate's agent name
   agents:  { researcher: "r--", fixer: "rw-", deployer: "rwx" },
-  tools:   { read: "r", "fetch.get": "r", "fetch.post": "w", write: "w", deploy: "x" },
+  tools:   { read: "r", "fetch.get": "r", "fetch.post": "w", write: "w",
+             edit: { letter: "w", marker: "loose" }, deploy: "x" },
   bash:    { "git status": "r", "git commit": "w", "git push": "x" },
   letters: "rw-",   // optional: explicit override — how a spawned child receives
                      // its parent-clamped grant; skips the `agents` lookup. Falls
                      // back to the BAREGUARD_RWX_LETTERS env var.
+  askOn:   "none",  // optional (default): "none" | "loose" — see below.
 }
 ```
 
@@ -373,6 +375,7 @@ asked, never guessed**:
 | `rwx.denied` | the tool/command IS listed, but the agent's letters don't cover its tagged letter |
 | `rwx.joined` | a bash command contains a joined/chained/redirect construct and isn't listed **verbatim** |
 | `rwx.invalid` | the `rwx` config (or a value mutated after construction) is shape-broken and cannot be evaluated — fails closed, same family as every other `<key>.invalid` rule |
+| `rwx.ask` | (D103, only under `askOn:"loose"`) the letter IS covered, but the matched entry's marker is `"loose"` — asks via `humanChannel` instead of allowing; never fires for a letter that would otherwise deny |
 
 An agent name absent from `rwx.agents` resolves to letters `"---"` — it
 starts, but every action denies with `rwx.unlisted`. Verified:
@@ -416,6 +419,60 @@ with `tools: { "fetch.get": "r", "fetch.post": "w" }`, checking
 letter, but a bare `{type:"fetch"}` denies `rwx.unlisted` — the plain type is
 not implicitly covered by either split entry.
 
+### Marker-carrying entries + `rwx.askOn` (D103, settled with rwxmap, 2026-09-24)
+
+A `tools`/`bash` map entry is EITHER a bare letter string — `"w"`, unchanged,
+forever legal, the **human-written** form — OR an object
+`{ letter: "w", marker: "loose" }`, the shape an offline labeller like
+rwxmap can emit. `marker` is exactly `"tight"|"loose"|"settled"` — **not**
+`"strict"`. Any other key on the object (e.g. rwxmap's `evidence`) is
+ignored — it never enters `bareguard.rwx.json`. A malformed entry (missing/
+non-string `letter`, a `letter` not one of r/w/x, or a value that is
+neither a string nor a plain object) denies `rwx.invalid` at read time and
+throws at construct time — same family as every other rwx shape guard.
+
+**The marker only ever tightens.** It never grants a letter a bare
+`rwx.denied` would still deny, never skips a deny, and never turns a deny
+into an ask or an allow. `tight` and `settled` never ask, no matter what
+`askOn` is set to. A missing or unrecognized marker string on an object
+entry normalizes to `"loose"` (typo-safety: it asks rather than silently
+sailing through as if it were `tight`/`settled`).
+
+`rwx.askOn` is a new opt-in knob: `"none"` (default) or `"loose"`. With
+`askOn: "none"` — the default — behavior is byte-identical to every prior
+release, whether or not any entry carries a marker. With
+`askOn: "loose"`, an action whose matched entry's normalized marker is
+`"loose"` asks via `humanChannel` **instead of** allowing — at the exact
+same step-5 slot rwx already occupies, so everything ahead of it (steps 1–4,
+4b) still fires first, unchanged. The letter is still required first: an
+agent lacking the letter denies `rwx.denied` and never reaches the ask.
+
+Verified — `rwx: { agent: "fixer", agents: { fixer: "rw-" }, tools: { edit:
+{ letter: "w", marker: "loose" } }, askOn: "loose" }`, agent holds `rw-`
+(has `w`), `humanChannel` answers `{decision:"allow"}`:
+
+```
+humanChannel event: {"kind":"ask","rule":"rwx.ask",
+  "reason":"\"edit\" is tagged \"w\" with marker \"loose\" — rwx.askOn:\"loose\" asks before allowing (letter is held)",
+  "rwxLetters":"rw-","rwxLetter":"w","rwxMarker":"loose", ...}
+audit gate line (askHuman): {"phase":"gate","decision":"askHuman","rule":"rwx.ask",
+  "rwxLetters":"rw-","rwxLetter":"w","rwxMarker":"loose", ...}
+audit gate line (final):    {"phase":"gate","decision":"allow","rule":"humanChannel.allow", ...}
+check() resolves to:        {"outcome":"allow","rule":"humanChannel.allow", ...}
+```
+
+`gate.clampRwxLetters` (delegation, §23.9) and `budget.resources` accrual
+(§23.10) both already resolve object-form entries to their letter
+transparently — neither reads or cares about `marker`.
+
+**This starter file (`bareguard.rwx.json`) stays bare-letter only.** A
+marker is the shape an *offline labeller* derives from its own evidence; the
+starter is the human-written form, and adding markers to a shipped example
+would blur that line. If you generate a draft `tools` section from a spec
+(e.g. via rwxmap), review it — including every `settled` row, which is a
+mechanically-derived residual, not a confirmed state (PRD §23.20) — before
+committing it as your own `bareguard.rwx.json`.
+
 ### `gate.allows()` filtering (the hide half of enforcement, §23.5)
 
 Enforcement is two places: (1) **hide** — your harness calls
@@ -453,13 +510,20 @@ below.
 
 ### Audit fields
 
-The audit line carries the letter: an rwx decision (allow or deny) attaches
-`rwxLetters` (the agent's full 3-letter grant) and, once a specific
-tool/command has been matched against the maps, `rwxLetter` (the single
-letter that matched). Both ride the plain, non-redacted audit fields (same
-treatment as `rule`/`severity`) — verified on a live audit line:
-`{"...","rule":"rwx.allow","rwxLetters":"rw-","rwxLetter":"r"}`. Absent
-entirely on a non-rwx gate's audit line — byte-identical to today.
+The audit line carries the letter: an rwx decision (allow, deny, or the
+D103 `askHuman`) attaches `rwxLetters` (the agent's full 3-letter grant)
+and, once a specific tool/command has been matched against the maps,
+`rwxLetter` (the single letter that matched) and, for an object-form entry,
+`rwxMarker` (its normalized `"tight"|"loose"|"settled"` marker). All three
+ride the plain, non-redacted audit fields (same treatment as
+`rule`/`severity`) — verified on a live audit line:
+`{"...","rule":"rwx.allow","rwxLetters":"rw-","rwxLetter":"r"}` for a
+bare-string entry (no `rwxMarker` — bare strings carry none), and
+`{"...","rule":"rwx.ask","rwxLetters":"rw-","rwxLetter":"w","rwxMarker":"loose"}`
+for an object-form entry under `askOn:"loose"` (both captured live, see the
+[marker-carrying entries](#marker-carrying-entries--rwxaskon-d103-settled-with-rwxmap-2026-09-24)
+section above). Absent entirely on a non-rwx gate's audit line —
+byte-identical to today.
 
 ### `budget.resources` accrual by letter (§23.10)
 

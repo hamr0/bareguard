@@ -363,8 +363,9 @@ for `x`). No longer a parked candidate with no adopter ask — hamr approved it 
 definitions (shared verbatim with rwxmap's D87), the `bareguard.rwx.json` file format, deny-by-
 absence, enforcement, bash matching, delegation/count-cap rules, the rwxmap alignment, the six
 2026-09-22 implementation decisions, the POC evidence, rejected alternatives, known limits, the
-1.0-surface status, and the two open questions that remain — is Part 1 §23
-(`bareguard-prd.md:981-1252`).
+1.0-surface status, the two open questions that remain, and the marker-carrying-entries +
+`rwx.askOn` extension settled with rwxmap's D103 (2026-09-24) — is Part 1 §23
+(`bareguard-prd.md:981-1307`).
 
 ## §20 POC retrospective (what we built, why)
 

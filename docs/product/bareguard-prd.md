@@ -1250,3 +1250,58 @@ control); letter meanings and every settled item above decided with hamr in the 
 session of 2026-09-21, approved as a feature 2026-09-22. Relates to Part 2 §6.6 (reversibility
 by type), §16 MCP governance (`gate.allows` as ergonomics), §19 0.8 (`bash.classify`
 best-effort framing). (bareguard-prd.md:1246-1252)
+
+### 23.20 Marker-carrying entries + `rwx.askOn` (D103, settled with rwxmap, 2026-09-24)
+
+**Settled with the rwxmap project's D103 (2026-09-24), superseding §23.12's "a `tools` entry's
+value is a bare one-letter string … an object-valued entry is a config-shape error" and its
+"`floor` PUT/PATCH rows are omitted from the draft."** A `tools`/`bash` map entry is now
+**either** the bare letter string (unchanged, forever legal, the HUMAN-WRITTEN form) **or** an
+object `{ letter, marker }`, where `marker` is exactly `tight` | `loose` | `settled` — not
+"strict." Any other object key is ignored: rwxmap's `evidence` field (`list`/`floor`, §23.12)
+never enters `bareguard.rwx.json`, the same boundary that already kept `destructive` out. A
+malformed entry — missing/non-string `letter`, a `letter` not one of r/w/x, or a value that is
+neither a string nor a plain object — is a fail-closed `rwx.invalid` deny at read time (the
+same `<key>.invalid` family as every other rwx guard), not a throw mid-`check()`; the same
+shape error throws at construct time, earlier and non-TOCTOU. The marker can only **tighten**:
+it never grants a letter a bare `rwx.denied` would still deny, never skips a deny, and never
+turns a deny into an ask or an allow. A new opt-in `rwx.askOn` knob — `"none"` (default,
+byte-identical to every prior release) or `"loose"` — asks via the existing `humanChannel`, at
+the same step-5 slot rwx already occupies, when the matched entry's marker is `loose`; the
+letter is still required, so an agent lacking the letter still denies unchanged. A missing or
+unrecognized marker string on an object entry normalizes to `loose` (typo-safety: it asks
+rather than silently sailing through as `tight`/`settled` would). `tight` and `settled` never
+ask — measured against rwxmap's own tuning pool, the `tight` bucket contains zero too-loose
+rows, so asking on it would cost asks and catch nothing.
+
+**`settled` is not a signed or confirmed state — it is a residual.** rwxmap derives it
+mechanically as "neither tight nor loose": 55.0% of the tuning pool's rows, of which 3999 are
+pure method-floor guesses (§23.12's `evidence: "floor"`), with a measured residual of 0.6%
+too-loose (27 of 4603 rows). Document this, in this PRD's own voice, as **"nothing flagged,
+~0.6% residual" — never as confirmation.** No human reviewed a `settled` row before rwxmap
+emitted it; no provider signed it. A genuinely human-confirmed state would be a **fourth**
+marker value, written by a human only after export and review — rwxmap does not have one, and
+never emits one. Do not read `settled` as safer than `loose`; it is merely *unflagged*.
+
+**Published marker-bucket numbers, rwxmap's 8376-row tuning pool** (bareguard never re-derives
+or re-validates these — they ride here as the exporter's own stated accuracy, exactly as
+rwxmap reported them, 2026-09-24): `tight` n=2116 (25.3%) — exact 28.0%, too-loose 0.0%,
+too-tight 72.0%. `loose` n=1657 (19.8%) — exact 96.6%, too-loose 3.3% (55 rows), too-tight
+0.1%. `settled` n=4603 (55.0%) — exact 98.5%, too-loose 0.6% (27 rows), too-tight 0.9%. Whole
+pool: 1.0% too-loose, 18.7% too-tight. On rwxmap's **burned** M3 exam (cloudflare/pagerduty/
+sentry, 4279 unseen rows, scored once, never re-tuned against): 82.3% exact / 0.8% too-loose /
+16.9% too-tight with the mechanical exporter alone, and 93.0% / 0.5% / 6.5% with rwxmap's
+optional Jev tier layered on top.
+
+**A generated `bareguard.rwx.json` (or draft `tools` section) is a mechanical STARTING POINT,
+not a conformance standard — the same status as an MCP tool-description hint: a suggestion the
+consumer weighs, not a claim the consumer trusts by default.** State the residual risk loudly
+in the operator-facing docs rather than engineering it away with a fourth "trust me" marker.
+
+**The boundary, restated and still load-bearing:** bareguard never runs rwxmap and never
+depends on it, at build time or at runtime — nothing in `src/` imports it, calls it, or checks
+for its presence. The consumer runs rwxmap **offline**, reviews its output (including every
+`settled` row, per the residual above), and commits the result as an ordinary, human-reviewed
+`bareguard.rwx.json`. bareguard reads only what the operator committed — a marker on a row is
+data the operator chose to keep, never a signal bareguard goes looking for elsewhere.
+(bareguard-prd.md:1254-1307)
