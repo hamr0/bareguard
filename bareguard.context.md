@@ -13,6 +13,13 @@ thirteen primitives (bash, fs, net, budget, content, flags, secrets, audit,
 limits, tools, defer-rate, spawn-rate, approval). Single audit log per
 agent family. One `humanChannel` callback for all human escalations.
 
+**rwx (PRD §23)** is not a fourteenth primitive — `primitives.json`/
+`check:primitives` still count 13, because a primitive is any export whose
+JSDoc carries `@when`, and nothing in `src/primitives/rwx.js` is exported
+publicly or tagged `@when`. rwx is `Gate` **config wiring**: a second,
+mutually exclusive mode for the step-5 slot `tools.allowlist` occupies today.
+See [rwx mode](#rwx-mode-operator-tagged-capability-letters-23) below.
+
 ```
 npm install bareguard
 ```
@@ -31,6 +38,7 @@ One entry point:
 | Join a request to its outcome in the audit | every `check()` returns `decision.aid`; pass it to `record(action, result, { aid })` (or use `gate.run`, which threads it) — joins even byte-identical actions |
 | Cap concurrent / nested children | `limits.maxChildren`, `limits.maxDepth` — action severity |
 | Allowlist commands per-tool | `bash.allow: ["git", "ls"]` |
+| Tag every tool/command with a capability letter, review a fleet at a glance | `rwx: { agent, agents, tools, bash }` — a second, mutually exclusive mode instead of `tools.allowlist`/`bash.allow`/`bash.classify` (§23, see [rwx mode](#rwx-mode-operator-tagged-capability-letters-23)) |
 | Deny destructive command patterns | `bash.denyPatterns: [/sudo/, /rm\s+-rf/]` |
 | Tier shell commands by severity → map to ceremony | `bash.classify: true` — classifies each command `safe`/`destructive`/`super_destructive` (Linux/macOS/Windows); tiers 2–3 raise the ask with `event.classification` + `event.tier`; the `humanChannel` maps severity → ceremony (PIN, 2-key, auto-deny). Best-effort/defeatable, **not** a sandbox. Tune via `extraDestructive` / `extraSuperDestructive` / `reclassify` |
 | Restrict file paths the agent can read/write | `fs.readScope`, `fs.writeScope`, `fs.deny` |
@@ -249,8 +257,20 @@ THE 6 STEPS (first match wins; all action severity unless noted)
   5. tools.allowlist enforcement    → set+match: allow; set+miss: deny (rule: tools.allowlist.exclusive)
      (set to [] = scope of nothing = deny all; a non-array denies via tools.allowlist.invalid;
       only an ABSENT/null key skips this step)
+     — OR, if `rwx` config is present, rwx mode runs in this SAME slot instead
+       (mutually exclusive with tools.allowlist/bash.allow/bash.classify, §23.2):
+       an unlisted tool/command/agent denies rwx.unlisted, a listed-but-insufficient
+       letter denies rwx.denied, an unmatchable rwx config denies rwx.invalid, and a
+       joined/chained bash command not listed verbatim denies rwx.joined. See
+       [rwx mode](#rwx-mode-operator-tagged-capability-letters-23) below.
   6. default                        → allow
 ```
+
+**rwx runs where `tools.allowlist` runs — nothing earlier changes.** `flags` at
+2b/4b, `content.denyPatterns` at step 2, and every other universal deny/ask
+still fire first: e.g. an rwx-held `bash` command matching a *universal*
+`content.denyPatterns` default (like `rm -rf /`) denies at step 2 with rule
+`content.denyPatterns`, never reaching rwx's own `rwx.joined` check at step 5.
 
 Universal denies first (1-2b-3), universal asks second (4-4b), capability scope third (5), default last (6). Allowlist is **scope-only** — does not silence asks (this is a v0.5 amendment to v0.4's original spec). **`flags` reads a named field's value directly** (`action.provenance` / `action.injectionRisk`), never `JSON.stringify` — so an adopter passes a structured verdict, not text. Both arms sit before the allowlist, so a flagged action is gated even when its `type` is allowlisted (floor supremacy). Rule id is `flags.<field>` (e.g. `flags.injectionRisk`).
 
@@ -268,6 +288,10 @@ Universal denies first (1-2b-3), universal asks second (4-4b), capability scope 
 | `net.allowDomains`, `net.denyPrivateIps` | action | return error to LLM, continue loop |
 | `tools.allowlist.exclusive` (not in scope) | action | return error to LLM, continue loop |
 | `tools.denyArgPatterns` | action | return error to LLM, continue loop |
+| `rwx.unlisted` (tool/command/agent not in the rwx maps) | action | return error to LLM, continue loop |
+| `rwx.denied` (listed, but the agent's letters don't cover it) | action | return error to LLM, continue loop |
+| `rwx.joined` (chained/redirected bash not listed verbatim) | action | return error to LLM, continue loop |
+| `rwx.invalid` (malformed rwx config/letters read at runtime) | action | operator config bug — a rule the gate cannot evaluate fails closed |
 | `fs.invalidPath`, `net.invalidUrl`, `bash.invalidCmd` (path/url/cmd present but not a string) | action | return error to LLM, continue loop |
 | `tools.allowlist.invalid` (allowlist present but not an array) | action | operator config bug — fix the config; the gate denies until then |
 | `tools.denyArgPatterns.invalid` (a per-tool pattern list present but not an array) | action | operator config bug — a deny rule the gate cannot evaluate fails closed |
@@ -280,6 +304,175 @@ Universal denies first (1-2b-3), universal asks second (4-4b), capability scope 
 **Action severity:** the LLM sees a structured error and can adapt (try a different tool, ask the user, give up gracefully).
 
 **Halt severity:** the run is over unless a human approves a topup. The LLM **must not** see this — it would loop trying to retry. bareguard handles this by calling humanChannel internally and only returning terminal allow/deny to the runner.
+
+## rwx mode: operator-tagged capability letters (§23)
+
+A second, **mutually exclusive** mode of control beside the closed
+`tools.allowlist`/`bash.allow`/`bash.denyPatterns`. Instead of one shared
+allowlist, the operator tags every tool and every bash command with a single
+letter — `r` (read, changes nothing), `w` (write, a later write can set it
+back), `x` (execute, cannot be undone — unsure, tag `x`) — and gives every
+agent a three-letter ceiling (`"rw-"`, `"r-x"`, …). The payoff is review at
+scale: one small file reads `researcher r--`, `fixer rw-`, `deployer rwx`,
+instead of per-agent allowlists.
+
+### Config shape — a parsed object, never a file path
+
+```js
+rwx: {
+  agent:   "fixer",                                    // this gate's agent name
+  agents:  { researcher: "r--", fixer: "rw-", deployer: "rwx" },
+  tools:   { read: "r", "fetch.get": "r", "fetch.post": "w", write: "w", deploy: "x" },
+  bash:    { "git status": "r", "git commit": "w", "git push": "x" },
+  letters: "rw-",   // optional: explicit override — how a spawned child receives
+                     // its parent-clamped grant; skips the `agents` lookup. Falls
+                     // back to the BAREGUARD_RWX_LETTERS env var.
+}
+```
+
+bareguard **never reads `bareguard.rwx.json` itself** — it takes the parsed
+object; your caller does the file I/O (§23.13 decision 4). Verified: passing
+a file *path* string as `rwx` throws at construct time (`rwx must be a plain
+object`), not a silent no-op.
+
+### Two modes, exclusive — both construct-time throws
+
+Configuring `rwx` **together with** `tools.allowlist` / `bash.allow` /
+`bash.denyPatterns` throws at construct time (`rwx is mutually exclusive
+with …`, verified above) — nobody is left guessing which mode is in charge.
+Setting `bash.classify: true` in rwx mode **also throws** (`bash.classify is
+not usable together with rwx`) — `bash.classify` is a *danger* list that
+fails open (unmatched = "safe"), backwards for a mode built on deny-by-absence;
+it stays available, unchanged, for allowlist-mode users. With no `rwx` config
+at all, behavior is byte-identical to today — no code path changes.
+
+### Where it runs in the eval order
+
+rwx runs in the **exact same step-5 slot** `tools.allowlist` occupies — see
+[Eval order in detail](#eval-order-in-detail). Everything before it still
+fires unchanged: `content.denyPatterns`/`content.unserializable` (step 2),
+`flags` deny (2b), per-action-type deny rules (step 3, e.g.
+`fs.readScope`/`net.allowDomains`), `content.askPatterns` (step 4), and
+`flags` ask (4b) — all run **before** rwx, even for a tool/command the agent
+holds the letter for. Verified: `flags: { injectionRisk: { high: "deny" } }`
+denies a `write` action with `rule: "flags.injectionRisk"` even though the
+agent holds `w` for `write` in its rwx grant — rwx never gets evaluated.
+Likewise, a bash command matching a *universal* `content.denyPatterns`
+default (e.g. `rm -rf /`) denies at step 2 with `rule: "content.denyPatterns"`
+before rwx's own joined-command check ever runs.
+
+### Deny by absence, loudly — the rule ids
+
+An unlisted tool, unlisted command, or unlisted agent is **denied, never
+asked, never guessed**:
+
+| Rule | Fires when |
+|---|---|
+| `rwx.allow` | the action's letter is covered by the agent's grant — terminal allow |
+| `rwx.unlisted` | the tool/command/agent is not present in the rwx maps at all |
+| `rwx.denied` | the tool/command IS listed, but the agent's letters don't cover its tagged letter |
+| `rwx.joined` | a bash command contains a joined/chained/redirect construct and isn't listed **verbatim** |
+| `rwx.invalid` | the `rwx` config (or a value mutated after construction) is shape-broken and cannot be evaluated — fails closed, same family as every other `<key>.invalid` rule |
+
+An agent name absent from `rwx.agents` resolves to letters `"---"` — it
+starts, but every action denies with `rwx.unlisted`. Verified:
+`rwx: { agent: "ghost", agents: { fixer: "rw-" } }` → `check({type:"read"})`
+→ `{"outcome":"deny","rule":"rwx.unlisted","reason":"agent \"ghost\" is not
+in the rwx agents map — it holds \"---\""}`.
+
+### Bash — two rules only (§23.6)
+
+1. **Leading-word match, longest listed prefix wins**, word-boundary aware
+   (`"ls"` never matches `"lsblk"`). `git status --short` matches the key
+   `"git status"`.
+2. **Joined/chained commands are denied unless listed verbatim in full.**
+   "Joined" means `;` `&` `|` `` ` `` `$` `(` `)` newline/`\` continuation,
+   **and redirects** `>` `>>` `<` (closed during the POC per §23.14). A quote-
+   aware scan (§23.13 decision 1) avoids false denies on quoted metacharacters:
+   single-quoted spans are fully literal (`grep 'a;b|c' file.txt` is NOT
+   joined — verified, allows on the `grep` prefix); inside double quotes,
+   `$`/backtick still count as live expansion but other metacharacters don't
+   (`git commit -m "fix (typo)"` is NOT joined — verified, allows). An
+   **unterminated** quote (single or double) fails closed as joined —
+   verified. `$VAR` used **outside** any quotes (e.g. `echo $HOME`) is a live
+   metacharacter and denies as joined too — verified; this is a stated known
+   limit, not a bug (§23.16).
+
+Readers that can run other programs (`less`, `vim`, `find -exec`, `awk`,
+`xargs`, `env`) are deliberately left out of bareguard's shipped starter
+file — add them only if you've thought about it.
+
+### `fetch.get` / `fetch.post` — split by action type, not a second axis (§23.13 decision 3)
+
+rwx has no "verb" axis inside a tool — one action `type` = one letter
+(§23.7). A `fetch` tool that both reads (GET) and writes (POST) can't be
+tagged once, so the convention is to **emit a different `action.type`** for
+each verb (`"fetch.get"`, `"fetch.post"`) and tag each separately in
+`rwx.tools`, exactly like `github.create_pr`. bareguard does not special-case
+these strings — it matches `action.type` **literally** against the map, so
+the split only works if your caller sets `action.type` accordingly. Verified:
+with `tools: { "fetch.get": "r", "fetch.post": "w" }`, checking
+`{type:"fetch.get"}` and `{type:"fetch.post"}` each allow with the tagged
+letter, but a bare `{type:"fetch"}` denies `rwx.unlisted` — the plain type is
+not implicitly covered by either split entry.
+
+### `gate.allows()` filtering (the hide half of enforcement, §23.5)
+
+Enforcement is two places: (1) **hide** — your harness calls
+`await gate.allows(action)` per candidate tool before handing the model its
+catalog, so a tool the agent's letters don't cover is never offered; (2)
+**deny backstop** — `gate.check()` still denies it even if a model calls a
+hidden tool by name, so prompt injection can't widen the grant (the model
+never sees or handles the letters). Verified: with
+`tools: { read: "r", deploy: "x" }` and agent letters `"rw-"`,
+`gate.allows("read")` → `true`, `gate.allows("deploy")` → `false`.
+
+### Delegation — attenuate only (§23.9)
+
+`gate.clampRwxLetters(requestedLetters = "rwx")` computes a child's letters
+as `min(what the parent requested for it, what the parent itself holds)` per
+letter — a child can never outgrow its parent. Pass the result as the
+child's `rwx.letters` (or `BAREGUARD_RWX_LETTERS`), on the same channel
+`spawnDepth`/`BAREGUARD_SPAWN_DEPTH` already travels on; the clamp runs in
+the **parent's** gate at spawn time — a child never verifies its own
+letters. `spawn` itself carries **no letter** (rejected: `spawn = x`, §23.15
+— every agent with helpers would read as dangerous and the fleet scan would
+stop working); fan-out stays bounded by `limits.maxDepth`/`maxChildren`/
+`spawn.ratePerMinute`. Verified: agent `manager` holding `"r-x"` →
+`clampRwxLetters("rwx")` → `"r-x"` (attenuated to the parent's own grant);
+`clampRwxLetters("rw-")` → `"r--"` (attenuated further, to the intersection).
+
+**bareguard does not tag `spawn` for you.** §23.9 rejects an *automatic*
+`spawn = x` tag, but that does not exempt `spawn` from deny-by-absence
+(§23.4) — like any other tool, an unlisted `spawn` action type denies
+`rwx.unlisted`. If your agents spawn children, add `spawn` to `rwx.tools`
+explicitly with the letter you intend (commonly `w`, since a spawn can be
+undone by the child simply not being used further, or `x` if your operator
+treats fan-out as irreversible) — the shipped starter file tags it, see
+below.
+
+### Audit fields
+
+The audit line carries the letter: an rwx decision (allow or deny) attaches
+`rwxLetters` (the agent's full 3-letter grant) and, once a specific
+tool/command has been matched against the maps, `rwxLetter` (the single
+letter that matched). Both ride the plain, non-redacted audit fields (same
+treatment as `rule`/`severity`) — verified on a live audit line:
+`{"...","rule":"rwx.allow","rwxLetters":"rw-","rwxLetter":"r"}`. Absent
+entirely on a non-rwx gate's audit line — byte-identical to today.
+
+### `budget.resources` accrual by letter (§23.10)
+
+"rw, but at most N writes across the whole run family" is the existing
+`budget.resources` cap-map, keyed by letter: `budget: { resources: { w: 20 } }`.
+In rwx mode the **gate accrues the count itself** — it does not rely on the
+caller supplying `result.counts`. Verified: with `budget.resources: { w: 2 }`
+and `tools: { write: "w" }`, two `check()`+`record()` round trips on a
+`write` action allow; the third `check()` halts with
+`rule: "budget.resource.w"` — the caller never passed `counts` at all. The
+cap is kept **separate from the letter string** (`"rw-"` + `{ w: 20 }`, never
+`"rw+20"`), and N is the family's total across every helper sharing the
+budget file, not N per child.
 
 ## Public API surface
 
@@ -312,6 +505,7 @@ await gate.annotate(fact);                         // Axis B: buffer a return-ti
 gate.drainAnnotations();                           // SYNC — return + clear buffered facts (agent feedback)
 await gate.terminate(reason);                     // sticky terminate
 await gate.raiseCap(dimension, newCap);           // explicit cap raise (separate from humanChannel topup)
+gate.clampRwxLetters(requestedLetters);           // SYNC — rwx mode only (§23.9): attenuate a child's letters, never wider than this gate's own grant
 await gate.haltContext();                         // deterministic stats over audit log
 ```
 
@@ -407,7 +601,9 @@ These are deliberately NOT in bareguard. Don't look for them — build them or u
 15. **`net.denyPrivateIps` is hostname-based, not post-DNS.** It blocks IPv4 private/loopback/link-local (incl. cloud-metadata `169.254.169.254` and `0.0.0.0`), IPv6 loopback/ULA/link-local (brackets stripped), and IPv4-mapped IPv6. It does NOT resolve DNS, so a public hostname that resolves to a private address (DNS rebinding) is not caught — resolve-then-check upstream if that's in your threat model. Pair with `net.allowDomains` for a positive egress allowlist.
 16. **`bash.allow` fails closed on shell metacharacters** (v0.4.5). When `bash.allow` is set, any command containing `;`, `|`, `&`, `$`, `` ` ``, `(`, `)`, `<`, `>`, or a newline is **denied** (rule `bash.allow.shellMeta`) — a prefix allowlist can't bound what runs after a chain/pipe/substitution. This also denies legitimate pipes like `git log | head`. If you need chaining, don't rely on `bash.allow` as the boundary — use `content.denyPatterns` (which scans the whole command) or `bash.denyPatterns`.
 17. **Audit auto-redacts on every line — DEFAULT-ON (BG-1)**, not just when `secrets` is configured. Key-aware redaction (`apiKey`/`api_key`/`authorization` + `Bearer …`/`sk-…`) runs with zero config; `secrets.envVars`/`patterns`/`keys` layer on top; `secrets.redactKeys: false` disables the default-on backstop. The gate redacts `action`, `result`, `reason`, `where`, and `meta` at write time. Eval runs on the *unredacted* action (matching is never weakened) and the redactor is non-mutating (the caller's object is untouched); only the persisted log is masked. Don't pre-redact before `check()`/`record()` — it's redundant and would weaken policy matching.
-18. **`bash.classify` patterns are ReDoS-safe (linear-time)**. The shipped severity corpus avoids catastrophic backtracking — a crafted command string (e.g. `rm -rfrfrf…`) classifies in linear time (1 MB ≈ 16 ms), so a hostile/confused agent can't hang the gate via the classifier. If you add your own `extraDestructive` / `extraSuperDestructive` patterns, keep them linear too: avoid multiple consecutive unbounded quantifiers over the same class (`[a-z]*x[a-z]*y[a-z]*`); prefer non-consuming lookaheads. **Defense-in-depth:** classify runs at the ask step (4), after the deny floor (steps 1–3) — it can only escalate to a human ask, never downgrade a deny. It is best-effort UX tiering, **not** a sandbox.
+18. **rwx's `spawn` gets no automatic letter.** §23.9 rejects tagging every `spawn` call `x` by default (it would make every agent with helpers read as dangerous), but that does NOT exempt `spawn` from deny-by-absence — an untagged `spawn` in rwx mode denies `rwx.unlisted` like any other tool. Add it to `rwx.tools` explicitly.
+19. **`fetch.get`/`fetch.post` in rwx mode is a caller convention, not a bareguard feature.** rwx matches `action.type` literally; a bare `{type:"fetch"}` is NOT covered by `"fetch.get"`/`"fetch.post"` entries — your action-emitting code must set the split type itself (§23.13 decision 3).
+20. **`bash.classify` patterns are ReDoS-safe (linear-time)**. The shipped severity corpus avoids catastrophic backtracking — a crafted command string (e.g. `rm -rfrfrf…`) classifies in linear time (1 MB ≈ 16 ms), so a hostile/confused agent can't hang the gate via the classifier. If you add your own `extraDestructive` / `extraSuperDestructive` patterns, keep them linear too: avoid multiple consecutive unbounded quantifiers over the same class (`[a-z]*x[a-z]*y[a-z]*`); prefer non-consuming lookaheads. **Defense-in-depth:** classify runs at the ask step (4), after the deny floor (steps 1–3) — it can only escalate to a human ask, never downgrade a deny. It is best-effort UX tiering, **not** a sandbox.
 
 ## Recipes
 
