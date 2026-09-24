@@ -106,6 +106,15 @@ test("starter bareguard.rwx.json: every r-tagged bash key is in the reviewed all
     "grep",
     "diff",
     "whoami",
+    // KNOWN, DOCUMENTED EXCEPTION (hamr, 2026-09-24) — not an oversight. The
+    // bare command DOES write: git-status(1) OUTPUT states "Writing out the
+    // updated index is an optimization that isn't strictly necessary" — the
+    // same bare-command-write class that makes "git fetch" (above) "w", not
+    // "r". Kept "r" anyway: it is the single most common read an agent
+    // performs, and the write is an internal, same-repo, reversible index
+    // cache invisible to the work product. An operator who wants strictness
+    // retags it "w" — see bareguard.rwx.json's own "_notes" and PRD §23.16
+    // item 7.
     "git status",
     "npm ls",
   ]);

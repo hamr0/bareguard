@@ -405,6 +405,19 @@ Readers that can run other programs (`less`, `vim`, `find -exec`, `awk`,
 `xargs`, `env`) are deliberately left out of bareguard's shipped starter
 file — add them only if you've thought about it.
 
+### `git status` — tagged `r`, a documented exception, not an oversight
+
+The bare `git status` command rewrites `.git/index`: git-status(1)'s OUTPUT
+section states "Writing out the updated index is an optimization that isn't
+strictly necessary" — the same class of bare-command write that makes `git
+fetch` above `w`, not `r`. The shipped starter keeps `git status` tagged `r`
+anyway, on hamr's explicit call: it is the single most common read an agent
+performs, and the write is an internal index cache in the *same* repo —
+reversible, invisible to the work product, and re-derivable from the tree at
+any time. An operator who wants strictness retags it `w` themselves; this is
+a deliberate, recorded exception (see `bareguard.rwx.json`'s own `_notes`),
+not a gap the way `git diff --output=` was.
+
 ### `fetch.get` / `fetch.post` — split by action type, not a second axis (§23.13 decision 3)
 
 rwx has no "verb" axis inside a tool — one action `type` = one letter
