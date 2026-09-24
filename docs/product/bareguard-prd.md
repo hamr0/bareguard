@@ -1058,8 +1058,8 @@ the same user-authored/agent-authored split that is the floor's security boundar
 An **unlisted tool**, **unlisted command**, or **unlisted agent** is denied — never asked,
 never guessed. An unlisted agent gets `---`: it starts, but every action denies. The deny is a
 structured in-band refusal that names the fix: `policy_denied rwx.unlisted: "npm run build" is
-not in bareguard.rwx.json — add it as r, w or x`. The operator edits the file later, calmly,
-not mid-run. (bareguard-prd.md:1056-1062)
+not in the rwx tools map — an operator must add it to bareguard.rwx.json as r, w or x`. The
+operator edits the file later, calmly, not mid-run. (bareguard-prd.md:1056-1062)
 
 ### 23.5 Enforcement — two places, both required
 

@@ -341,7 +341,7 @@ export function rwxCheck(action, rwxCfg) {
   if (unlisted) {
     return {
       outcome: "deny", severity: "action", rule: "rwx.unlisted",
-      reason: `agent "${clipKey(agentName)}" is not in the rwx agents map — it holds "---"`,
+      reason: `agent "${clipKey(agentName)}" is not in the rwx agents map — it holds "---"; an operator must grant it letters in bareguard.rwx.json`,
       rwxLetters: letters,
     };
   }
@@ -375,7 +375,7 @@ export function rwxCheck(action, rwxCfg) {
     if (!m.ok) {
       return {
         outcome: "deny", severity: "action", rule: "rwx.unlisted",
-        reason: `"${clipKey(cmd)}" is not in the rwx bash map — add it as r, w or x`,
+        reason: `"${clipKey(cmd)}" is not in the rwx bash map — an operator must add it to bareguard.rwx.json as r, w or x`,
         rwxLetters: letters,
       };
     }
@@ -413,7 +413,7 @@ export function rwxCheck(action, rwxCfg) {
   if (rawEntry === undefined) {
     return {
       outcome: "deny", severity: "action", rule: "rwx.unlisted",
-      reason: `"${clipKey(action?.type)}" is not in the rwx tools map — add it as r, w or x`,
+      reason: `"${clipKey(action?.type)}" is not in the rwx tools map — an operator must add it to bareguard.rwx.json as r, w or x`,
       rwxLetters: letters,
     };
   }

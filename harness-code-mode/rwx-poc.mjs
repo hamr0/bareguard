@@ -181,7 +181,7 @@ export class RwxGate {
   /** Rule-level decision WITHOUT touching the underlying Gate (pure query). */
   _rwxDecision(action) {
     if (!this.agentListed) {
-      return rwxDeny("rwx.unlisted", `agent "${this.agentName}" is not in bareguard.rwx.json — it holds "---"`);
+      return rwxDeny("rwx.unlisted", `agent "${this.agentName}" is not in bareguard.rwx.json — it holds "---"; an operator must grant it letters in bareguard.rwx.json`);
     }
     if (action.type === "bash") {
       const cmd = action.args?.command ?? action.cmd ?? "";
@@ -194,7 +194,7 @@ export class RwxGate {
         );
       }
       if (!m.ok) {
-        return rwxDeny("rwx.unlisted", `"${cmd}" is not in bareguard.rwx.json — add it as r, w or x`);
+        return rwxDeny("rwx.unlisted", `"${cmd}" is not in bareguard.rwx.json — an operator must add it as r, w or x`);
       }
       if (!hasLetter(this.letters, m.letter)) {
         return rwxDeny(
@@ -212,7 +212,7 @@ export class RwxGate {
     if (this.disabled.has("unlisted")) return null;
     const letter = this.rwxConfig.tools[action.type];
     if (letter == null) {
-      return rwxDeny("rwx.unlisted", `"${action.type}" is not in bareguard.rwx.json — add it as r, w or x`);
+      return rwxDeny("rwx.unlisted", `"${action.type}" is not in bareguard.rwx.json — an operator must add it as r, w or x`);
     }
     if (!hasLetter(this.letters, letter)) {
       return rwxDeny("rwx.denied", `"${action.type}" is tagged "${letter}" but agent "${this.agentName}" only holds "${this.letters}"`);
