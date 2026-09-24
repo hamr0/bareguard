@@ -11,13 +11,27 @@
 //   rwx: {
 //     agent:  "fixer",                                   // this gate's agent name
 //     agents: { researcher: "r--", fixer: "rw-", deployer: "rwx" },
-//     tools:  { read: "r", write: "w", deploy: "x" },
+//     tools:  { read: "r", write: "w", deploy: { letter: "x", marker: "loose" } },
 //     bash:   { ls: "r", "git status": "r", "git commit": "w", "git push": "x" },
 //     letters: "rw-",  // optional: explicit override (a spawned child's
 //                      // clamped grant), carried on the same channel as
 //                      // spawnDepth (config field, falls back to
 //                      // BAREGUARD_RWX_LETTERS) — skips the `agents` lookup.
+//     askOn:  "none",  // optional (default "none"): "loose" asks (via
+//                      // humanChannel) before allowing an action whose
+//                      // matched entry carries marker:"loose" — the letter
+//                      // is still required; a missing letter still denies.
 //   }
+//
+// A `tools`/`bash` map ENTRY (D103, settled with the rwxmap project,
+// 2026-09-24) is EITHER a bare letter string — `"w"` — the unchanged,
+// forever-legal, HUMAN-WRITTEN form that never asks, OR a marker-carrying
+// object — `{ letter: "w", marker: "loose" }` — the shape rwxmap's offline
+// exporter can emit. `marker` is exactly `"tight"|"loose"|"settled"`; any
+// other key on the object is ignored (rwxmap's `evidence` field never enters
+// this file, same boundary as §23.12's `destructive`). The marker can only
+// TIGHTEN: it never grants a letter, never skips a `rwx.denied`, never
+// upgrades an ask into an allow or a deny into anything softer.
 
 /**
  * True for a plain object — `{}`-literal shaped, or the null-prototype shape
@@ -47,6 +61,43 @@ function clipKey(k) {
 
 const AGENT_LETTERS_RE = /^[r-][w-][x-]$/;
 const TOOL_LETTER_RE = /^[rwx]$/;
+
+/**
+ * The closed marker vocabulary (D103) — exactly three values, NOT "strict".
+ * `tight`/`settled` never ask; `loose` asks under `rwx.askOn:"loose"`.
+ * @type {ReadonlySet<string>}
+ */
+const MARKERS = new Set(["tight", "loose", "settled"]);
+
+/**
+ * Normalize a `tools`/`bash` map ENTRY into its letter + marker (D103). A
+ * bare string is the human-written form — no marker, never asks. A plain
+ * object carries `letter` (required, one of r/w/x) and an optional
+ * `marker`; every other object key is ignored, so rwxmap's `evidence` field
+ * never enters this file. A missing or unrecognized `marker` string
+ * normalizes to `"loose"` — typo-safety: it asks (under `askOn:"loose"`)
+ * rather than silently sailing through as if it were `tight`/`settled`.
+ * Returns `null` for a malformed entry — missing/non-string `letter`,
+ * `letter` not one of r/w/x, or a value that is neither a string nor a
+ * plain object — which the caller turns into a fail-closed `rwx.invalid`
+ * deny (never a throw at read time; the construct-time throw in
+ * {@link assertRwxConfig} is the earlier, non-TOCTOU catch of the same
+ * shape error).
+ * @param {*} v raw map value
+ * @returns {{letter:string, marker:(string|null)}|null}
+ */
+function normalizeEntry(v) {
+  if (typeof v === "string") {
+    return TOOL_LETTER_RE.test(v) ? { letter: v, marker: null } : null;
+  }
+  if (isPlainObject(v)) {
+    const letter = v.letter;
+    if (typeof letter !== "string" || !TOOL_LETTER_RE.test(letter)) return null;
+    const marker = MARKERS.has(v.marker) ? v.marker : "loose";
+    return { letter, marker };
+  }
+  return null;
+}
 
 /**
  * Shell-control metacharacters that chain, substitute, or redirect a bash
@@ -119,16 +170,29 @@ export function hasJoinMeta(cmd) {
  * `"lsblk"` — the prefix must be followed by end-of-string or a space). A
  * joined/chained command ({@link hasJoinMeta}) is denied unless the WHOLE
  * string is listed verbatim.
+ * A matched entry is normalized via {@link normalizeEntry}: `letter` is
+ * `null` unless the raw value is a valid bare-letter string OR a valid
+ * `{letter, marker}` object — a MALFORMED matched entry (e.g. an object with
+ * no/bad `letter`) reports back its RAW value as `letter` (so the caller's
+ * own type check turns it into an `rwx.invalid` deny with a useful "got
+ * ..." message) with `marker: null`. `marker` is the entry's normalized
+ * marker (`"tight"|"loose"|"settled"`), or `null` for a bare-string entry
+ * (never asks) or an unmatched command.
  * @param {string} cmd
- * @param {Object<string,string>} bashMap
- * @returns {{ok:boolean, letter:(string|null), matchedKey:(string|null), joined:boolean}}
+ * @param {Object<string,*>} bashMap
+ * @returns {{ok:boolean, letter:(string|null), marker:(string|null), matchedKey:(string|null), joined:boolean}}
  */
 export function matchBash(cmd, bashMap) {
   const map = isPlainObject(bashMap) ? bashMap : {};
+  const entryFor = (raw, key) => {
+    const norm = normalizeEntry(raw);
+    return norm
+      ? { ok: true, letter: norm.letter, marker: norm.marker, matchedKey: key, joined: false }
+      : { ok: true, letter: raw, marker: null, matchedKey: key, joined: false };
+  };
   if (hasJoinMeta(cmd)) {
-    const exactLetter = map[cmd];
-    if (exactLetter !== undefined) return { ok: true, letter: exactLetter, matchedKey: cmd, joined: false };
-    return { ok: false, letter: null, matchedKey: null, joined: true };
+    if (Object.prototype.hasOwnProperty.call(map, cmd)) return entryFor(map[cmd], cmd);
+    return { ok: false, letter: null, marker: null, matchedKey: null, joined: true };
   }
   let best = null;
   for (const key of Object.keys(map)) {
@@ -136,8 +200,8 @@ export function matchBash(cmd, bashMap) {
       if (best === null || key.length > best.length) best = key;
     }
   }
-  if (best !== null) return { ok: true, letter: map[best], matchedKey: best, joined: false };
-  return { ok: false, letter: null, matchedKey: null, joined: false };
+  if (best !== null) return entryFor(map[best], best);
+  return { ok: false, letter: null, marker: null, matchedKey: null, joined: false };
 }
 
 /**
@@ -239,8 +303,8 @@ export function matchRwxLetter(action, rwxCfg) {
     return (m.ok && typeof m.letter === "string" && TOOL_LETTER_RE.test(m.letter)) ? m.letter : null;
   }
   const toolsMap = isPlainObject(rwxCfg.tools) ? rwxCfg.tools : {};
-  const letter = toolsMap[action.type];
-  return (typeof letter === "string" && TOOL_LETTER_RE.test(letter)) ? letter : null;
+  const norm = normalizeEntry(toolsMap[action.type]);
+  return norm ? norm.letter : null;
 }
 
 /**
@@ -250,11 +314,17 @@ export function matchRwxLetter(action, rwxCfg) {
  * loudly: an unlisted tool, unlisted command, or unlisted agent denies
  * (never asks, never guesses); a listed-but-insufficient letter denies too.
  * Attaches `rwxLetters` (the agent's full grant) and, once a specific
- * tool/command has been matched, `rwxLetter` (the letter that matched) onto
- * the decision — `gate.js` reads these onto the audit line.
+ * tool/command has been matched, `rwxLetter` (the letter that matched) and,
+ * for an object-form entry, `rwxMarker` (its normalized `tight`/`loose`/
+ * `settled` marker) onto the decision — `gate.js` reads these onto the
+ * audit line. When `rwx.askOn:"loose"` is set (D103) and the matched
+ * entry's marker is `"loose"`, an otherwise-allowed action resolves to
+ * `askHuman` instead — the marker only ever TIGHTENS: it never grants a
+ * letter a `rwx.denied` would still deny, and it never turns a deny into an
+ * allow or an ask.
  * @param {object} action action being evaluated
  * @param {*} rwxCfg `cfg.rwx` — the caller's rwx config object
- * @returns {{outcome:string,severity:string,rule:string,reason:(string|null),rwxLetters?:string,rwxLetter?:string}} always a terminal allow/deny decision (never null)
+ * @returns {{outcome:string,severity:string,rule:string,reason:(string|null),rwxLetters?:string,rwxLetter?:string,rwxMarker?:string}} a terminal allow/deny/askHuman decision (never null); `check()` resolves `askHuman` via `humanChannel` as usual
  */
 export function rwxCheck(action, rwxCfg) {
   const shapeErr = rwxRuntimeShapeError(rwxCfg);
@@ -275,6 +345,14 @@ export function rwxCheck(action, rwxCfg) {
       rwxLetters: letters,
     };
   }
+
+  // askOn (D103): "none" (default) is byte-identical to pre-D103 behavior;
+  // "loose" asks (never denies, never auto-allows past a missing letter)
+  // when the MATCHED entry's normalized marker is "loose". Validated at
+  // construct time ({@link assertRwxConfig}); an unusable value read here
+  // (TOCTOU) falls back to "none" — the strictly-narrower, byte-identical
+  // behavior — rather than failing the whole check closed over an ask-only knob.
+  const askOn = rwxCfg.askOn === "loose" ? "loose" : "none";
 
   if (action?.type === "bash") {
     const rawCmd = action.cmd ?? action.args?.cmd ?? action.args?.command;
@@ -313,23 +391,35 @@ export function rwxCheck(action, rwxCfg) {
         outcome: "deny", severity: "action", rule: "rwx.denied",
         reason: `"${clipKey(cmd)}" is tagged "${m.letter}" but agent "${clipKey(agentName)}" only holds "${letters}"`,
         rwxLetters: letters, rwxLetter: m.letter,
+        ...(m.marker ? { rwxMarker: m.marker } : {}),
+      };
+    }
+    if (askOn === "loose" && m.marker === "loose") {
+      return {
+        outcome: "askHuman", severity: "action", rule: "rwx.ask",
+        reason: `"${clipKey(cmd)}" is tagged "${m.letter}" with marker "loose" — rwx.askOn:"loose" asks before allowing (letter is held)`,
+        rwxLetters: letters, rwxLetter: m.letter, rwxMarker: m.marker,
       };
     }
     return {
       outcome: "allow", severity: "action", rule: "rwx.allow", reason: null,
       rwxLetters: letters, rwxLetter: m.letter,
+      ...(m.marker ? { rwxMarker: m.marker } : {}),
     };
   }
 
   const toolsMap = isPlainObject(rwxCfg.tools) ? rwxCfg.tools : {};
-  const letter = toolsMap[action?.type];
-  if (letter === undefined) {
+  const rawEntry = toolsMap[action?.type];
+  if (rawEntry === undefined) {
     return {
       outcome: "deny", severity: "action", rule: "rwx.unlisted",
       reason: `"${clipKey(action?.type)}" is not in the rwx tools map — add it as r, w or x`,
       rwxLetters: letters,
     };
   }
+  const normTool = normalizeEntry(rawEntry);
+  const letter = normTool ? normTool.letter : rawEntry;
+  const marker = normTool ? normTool.marker : null;
   if (typeof letter !== "string" || !TOOL_LETTER_RE.test(letter)) {
     return {
       outcome: "deny", severity: "action", rule: "rwx.invalid",
@@ -342,11 +432,20 @@ export function rwxCheck(action, rwxCfg) {
       outcome: "deny", severity: "action", rule: "rwx.denied",
       reason: `"${clipKey(action?.type)}" is tagged "${letter}" but agent "${clipKey(agentName)}" only holds "${letters}"`,
       rwxLetters: letters, rwxLetter: letter,
+      ...(marker ? { rwxMarker: marker } : {}),
+    };
+  }
+  if (askOn === "loose" && marker === "loose") {
+    return {
+      outcome: "askHuman", severity: "action", rule: "rwx.ask",
+      reason: `"${clipKey(action?.type)}" is tagged "${letter}" with marker "loose" — rwx.askOn:"loose" asks before allowing (letter is held)`,
+      rwxLetters: letters, rwxLetter: letter, rwxMarker: marker,
     };
   }
   return {
     outcome: "allow", severity: "action", rule: "rwx.allow", reason: null,
     rwxLetters: letters, rwxLetter: letter,
+    ...(marker ? { rwxMarker: marker } : {}),
   };
 }
 
@@ -355,9 +454,16 @@ export function rwxCheck(action, rwxCfg) {
  * `assertArrayShapedConfig`:
  *   - `rwx` present but not a plain object, or one of its three maps not a
  *     plain object;
- *   - a `tools`/`bash` map value that is not exactly `"r"`/`"w"`/`"x"`;
+ *   - a `tools`/`bash` map value that is neither exactly `"r"`/`"w"`/`"x"`
+ *     NOR a plain object `{ letter: "r"|"w"|"x", marker?: "tight"|"loose"|
+ *     "settled" }` (D103) — a missing/non-string `letter`, a `letter` not
+ *     one of r/w/x, or a value that is neither a string nor a plain object
+ *     all count as malformed here; an unrecognized/missing `marker` on an
+ *     otherwise-valid object is NOT a construct-time error (it normalizes
+ *     to `"loose"` at read time, §{@link normalizeEntry});
  *   - an `agents` map value (or `rwx.letters`) that is not a 3-char
  *     `[r-][w-][x-]` string;
+ *   - `rwx.askOn` present but not exactly `"none"` or `"loose"` (D103);
  *   - `rwx` configured TOGETHER WITH `tools.allowlist` / `bash.allow` /
  *     `bash.denyPatterns` — the two modes are mutually exclusive (§23.2), so
  *     nobody is left guessing which is in charge;
@@ -400,12 +506,24 @@ export function assertRwxConfig(config) {
         `invalid bareguard config: rwx.${section} must be a plain object, got ${Array.isArray(m) ? "array" : typeof m}`,
       );
     }
-    const re = section === "agents" ? AGENT_LETTERS_RE : TOOL_LETTER_RE;
-    const expected = section === "agents" ? 'a 3-char letters string like "rw-"' : '"r", "w", or "x"';
+    if (section === "agents") {
+      for (const [k, v] of Object.entries(m)) {
+        if (typeof v !== "string" || !AGENT_LETTERS_RE.test(v)) {
+          throw new Error(
+            `invalid bareguard config: rwx.agents.${clipKey(k)} must be a 3-char letters string like "rw-", got ${JSON.stringify(v)}`,
+          );
+        }
+      }
+      continue;
+    }
+    // tools / bash (D103): a bare letter string, or a marker-carrying object
+    // `{ letter: "r"|"w"|"x", marker?: "tight"|"loose"|"settled" }` — any
+    // other object key is ignored. `normalizeEntry` returning null is the
+    // one construct-time shape error for this section.
     for (const [k, v] of Object.entries(m)) {
-      if (typeof v !== "string" || !re.test(v)) {
+      if (!normalizeEntry(v)) {
         throw new Error(
-          `invalid bareguard config: rwx.${section}.${clipKey(k)} must be ${expected}, got ${JSON.stringify(v)}`,
+          `invalid bareguard config: rwx.${section}.${clipKey(k)} must be "r"/"w"/"x" or { letter: "r"|"w"|"x", marker?: "tight"|"loose"|"settled" }, got ${JSON.stringify(v)}`,
         );
       }
     }
@@ -420,5 +538,12 @@ export function assertRwxConfig(config) {
   }
   if (rwxCfg.agent !== undefined && rwxCfg.agent !== null && typeof rwxCfg.agent !== "string") {
     throw new Error(`invalid bareguard config: rwx.agent must be a string, got ${typeof rwxCfg.agent}`);
+  }
+  if (rwxCfg.askOn !== undefined && rwxCfg.askOn !== null) {
+    if (rwxCfg.askOn !== "none" && rwxCfg.askOn !== "loose") {
+      throw new Error(
+        `invalid bareguard config: rwx.askOn must be "none" or "loose", got ${JSON.stringify(rwxCfg.askOn)}`,
+      );
+    }
   }
 }

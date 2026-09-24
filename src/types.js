@@ -91,6 +91,13 @@ export {};
  *   ask. The humanChannel maps this → ceremony; it is NOT a security guarantee.
  * @property {2|3} [tier]  Numeric form of `classification` (2 = destructive,
  *   3 = super_destructive).
+ * @property {string} [rwxLetters]  This gate's agent's full 3-char rwx grant
+ *   (§23); present only when `rwx.askOn:"loose"` (D103) raised this ask.
+ * @property {string} [rwxLetter]  The single letter (`"r"|"w"|"x"`) the
+ *   matched rwx entry carried.
+ * @property {"tight"|"loose"|"settled"} [rwxMarker]  The matched entry's
+ *   normalized marker — always `"loose"` when present, since that is the
+ *   only marker `rwx.askOn:"loose"` ever asks on.
  */
 
 /**
@@ -415,24 +422,53 @@ export {};
  * `rwx` config (or a value mutated post-construction into an unusable shape)
  * denies with `rwx.invalid`, following the `<key>.invalid` fail-closed family.
  *
+ * A `tools`/`bash` map ENTRY (D103, settled with the rwxmap project,
+ * 2026-09-24) is EITHER a bare letter string (`"w"`, the human-written form,
+ * forever legal, never asks) OR a marker-carrying object
+ * (`{ letter: "w", marker: "loose" }`, the shape rwxmap's offline exporter
+ * can emit). `marker` is exactly `"tight"|"loose"|"settled"` — any other
+ * object key is ignored (rwxmap's `evidence` never enters this file). A
+ * malformed entry (missing/non-string `letter`, `letter` not one of r/w/x,
+ * or a value that is neither a string nor a plain object) denies
+ * `rwx.invalid` at read time; construct time throws on the same shape error
+ * via `assertRwxConfig`.
+ *
  * @typedef {object} RwxConfig
  * @property {string} [agent]  This gate's agent name, looked up in `agents`.
  * @property {Object.<string,string>} [agents]  Agent name → 3-char letters
  *   string (`[r-][w-][x-]`, e.g. `"rw-"`). An agent not present here holds
  *   `"---"` — it starts, but every action denies (§23.4).
- * @property {Object.<string,string>} [tools]  Tool/action `type` → a single
- *   letter `"r"|"w"|"x"`. One action type = one letter (§23.7); a tool mixing
- *   safe and dangerous calls takes its worst letter — split it into separate
- *   action types instead of asking for a per-part letter.
- * @property {Object.<string,string>} [bash]  Command leading-word(s) → a
- *   single letter `"r"|"w"|"x"` (e.g. `"git status"`, `"git commit"`).
- *   Longest listed prefix wins, word-boundary aware. A joined/chained command
- *   (`;` `&&` `||` `|` `$(...)`/backticks, newline, `\` continuation,
- *   redirects `>`/`>>`/`<`) is denied unless listed verbatim in full — quoted
- *   spans are scanned quote-aware (§23.13 decision 1): fully literal inside
- *   single quotes; `$`/backtick still count inside double quotes.
+ * @property {Object.<string,(string|RwxEntry)>} [tools]  Tool/action `type`
+ *   → a bare letter `"r"|"w"|"x"` or a marker-carrying {@link RwxEntry}. One
+ *   action type = one letter (§23.7); a tool mixing safe and dangerous calls
+ *   takes its worst letter — split it into separate action types instead of
+ *   asking for a per-part letter.
+ * @property {Object.<string,(string|RwxEntry)>} [bash]  Command leading-
+ *   word(s) → a bare letter `"r"|"w"|"x"` or a marker-carrying
+ *   {@link RwxEntry} (e.g. `"git status"`, `"git commit"`). Longest listed
+ *   prefix wins, word-boundary aware. A joined/chained command (`;` `&&`
+ *   `||` `|` `$(...)`/backticks, newline, `\` continuation, redirects
+ *   `>`/`>>`/`<`) is denied unless listed verbatim in full — quoted spans
+ *   are scanned quote-aware (§23.13 decision 1): fully literal inside single
+ *   quotes; `$`/backtick still count inside double quotes.
  * @property {string} [letters]  Explicit override of this gate's own letters
  *   (skips the `agents` lookup) — how a spawned child receives its
  *   parent-clamped grant (see `Gate#clampRwxLetters`), carried on the same
  *   channel `spawnDepth` travels on. Falls back to `BAREGUARD_RWX_LETTERS`.
+ * @property {"none"|"loose"} [askOn]  D103, default `"none"` (byte-identical
+ *   to pre-D103 behavior). `"loose"` asks (via `humanChannel`, at the same
+ *   step-5 slot rwx already occupies) before allowing an action whose
+ *   matched entry's normalized marker is `"loose"` — the letter is still
+ *   required first; a letter the agent lacks still denies `rwx.denied`
+ *   unchanged. A bare-string entry has no marker and never asks. `"tight"`
+ *   and `"settled"` never ask. Any other value throws at construct time.
+ */
+
+/**
+ * A `tools`/`bash` map entry's object form (D103) — see {@link RwxConfig}.
+ * @typedef {object} RwxEntry
+ * @property {"r"|"w"|"x"} letter
+ * @property {"tight"|"loose"|"settled"} [marker]  Missing or an unrecognized
+ *   string normalizes to `"loose"` (typo-safety: asks rather than silently
+ *   granting a pass under `askOn:"loose"`).
  */

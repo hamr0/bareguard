@@ -74,16 +74,16 @@ test("rwx: a non-plain-object tools/bash/agents map throws", () => {
   assert.throws(() => new Gate({ rwx: { ...VALID_RWX, agents: 42 } }), /rwx\.agents must be a plain object/);
 });
 
-test("rwx: an invalid tools/bash letter value throws (must be exactly r, w, or x)", () => {
+test("rwx: an invalid tools/bash letter value throws (must be exactly r, w, or x, or a { letter, marker? } object)", () => {
   for (const bad of ["rw", "R", "", "rwx", null, 1, ["r"]]) {
     assert.throws(
       () => new Gate({ rwx: { ...VALID_RWX, tools: { deploy: bad } } }),
-      /rwx\.tools\.deploy must be "r", "w", or "x"/,
+      /rwx\.tools\.deploy must be "r"\/"w"\/"x" or \{ letter:/,
       `tools letter ${JSON.stringify(bad)} should throw`,
     );
     assert.throws(
       () => new Gate({ rwx: { ...VALID_RWX, bash: { ls: bad } } }),
-      /rwx\.bash\.ls must be "r", "w", or "x"/,
+      /rwx\.bash\.ls must be "r"\/"w"\/"x" or \{ letter:/,
       `bash letter ${JSON.stringify(bad)} should throw`,
     );
   }

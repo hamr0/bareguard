@@ -622,25 +622,32 @@ export class Gate {
       // bash.classify (harness §7.1) may attach a severity tier; read it via a
       // widened view since not every decision shape carries these optionals.
       const cls = /** @type {{classification?: ("destructive"|"super_destructive"), tier?: (2|3)}} */ (decision);
-      // rwx (§23.5) may attach the agent's letters/matched letter; same widened-view
-      // pattern as `cls` above, since not every decision shape carries them.
-      const rwxInfo = /** @type {{rwxLetters?: string, rwxLetter?: string}} */ (decision);
+      // rwx (§23.5) may attach the agent's letters/matched letter/matched
+      // marker (D103); same widened-view pattern as `cls` above, since not
+      // every decision shape carries them.
+      const rwxInfo = /** @type {{rwxLetters?: string, rwxLetter?: string, rwxMarker?: ("tight"|"loose"|"settled")}} */ (decision);
+      const rwxAuditFields = rwxInfo.rwxLetters
+        ? {
+            rwxLetters: rwxInfo.rwxLetters,
+            ...(rwxInfo.rwxLetter ? { rwxLetter: rwxInfo.rwxLetter } : {}),
+            ...(rwxInfo.rwxMarker ? { rwxMarker: rwxInfo.rwxMarker } : {}),
+          }
+        : {};
 
       // Terminal allow/deny → audit and return.
       if (decision.outcome === "allow" || decision.outcome === "deny") {
         // rwx (§23.5): "the audit line carries the letter." rwxLetters/
-        // rwxLetter are a closed, tiny alphabet ("r"/"w"/"x"/"-") derived from
-        // OPERATOR config, never caller/reply data — same non-redacted,
-        // non-LINE_FIELDS treatment as `rule`/`severity`/classify's
-        // `classification`/`tier`. Absent for every decision that isn't an
-        // rwx one, so a non-rwx gate's audit line is byte-identical.
+        // rwxLetter/rwxMarker are a closed, tiny alphabet ("r"/"w"/"x"/"-",
+        // "tight"/"loose"/"settled") derived from OPERATOR config, never
+        // caller/reply data — same non-redacted, non-LINE_FIELDS treatment
+        // as `rule`/`severity`/classify's `classification`/`tier`. Absent
+        // for every decision that isn't an rwx one, so a non-rwx gate's
+        // audit line is byte-identical.
         await emit({
           phase: "gate", action,
           decision: decision.outcome, severity: decision.severity,
           rule: decision.rule, reason: decision.reason,
-          ...(rwxInfo.rwxLetters
-            ? { rwxLetters: rwxInfo.rwxLetters, ...(rwxInfo.rwxLetter ? { rwxLetter: rwxInfo.rwxLetter } : {}) }
-            : {}),
+          ...rwxAuditFields,
         });
         // Control flow above guarantees outcome is "allow" | "deny"; the cast
         // pins the internal eval result to the public Decision shape.
@@ -648,6 +655,8 @@ export class Gate {
       }
 
       // askHuman path: emit gate audit, dispatch to humanChannel, apply.
+      // rwx.askOn:"loose" (D103) resolves an rwx match to askHuman too, so
+      // this line carries the same rwx fields as the terminal branch above.
       await emit({
         phase: "gate", action,
         decision: "askHuman", severity: decision.severity,
@@ -655,6 +664,7 @@ export class Gate {
         ...(cls.classification
           ? { classification: cls.classification, tier: cls.tier }
           : {}),
+        ...rwxAuditFields,
       });
 
       // Halt: also emit dedicated halt line for operator grep.
@@ -715,6 +725,15 @@ export class Gate {
       if (cls.classification) {
         event.classification = cls.classification;
         event.tier = cls.tier;
+      }
+
+      // rwx.askOn:"loose" (D103): surface the matched letter/marker so
+      // humanChannel can show what triggered the ask. Additive — absent for
+      // every event that didn't come from rwx.ask, byte-identical otherwise.
+      if (rwxInfo.rwxLetters) {
+        event.rwxLetters = rwxInfo.rwxLetters;
+        if (rwxInfo.rwxLetter) event.rwxLetter = rwxInfo.rwxLetter;
+        if (rwxInfo.rwxMarker) event.rwxMarker = rwxInfo.rwxMarker;
       }
 
       // Axis B (§6.6): a buffered judge fact rides THIS ask if it should surface
