@@ -3,6 +3,41 @@
 All notable changes to bareguard are documented here. Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [SemVer](https://semver.org/).
 
 
+## [0.17.0] - 2026-09-24
+
+### Added
+
+- **rwx: operator-tagged capability letters for agent fleets (PRD §23).** A second, **mutually exclusive** mode of control beside the closed `tools.allowlist`/`bash.allow`/`bash.denyPatterns`. Instead of one shared allowlist, the operator tags every tool and every bash command with a single letter — `r` (read, changes nothing), `w` (write, a later write can set it back), `x` (execute, cannot be undone; unsure → `x`) — and gives every agent a three-letter ceiling (`"rw-"`, `"r-x"`, …). The payoff is review at scale: one small file reads `researcher r--`, `fixer rw-`, `deployer rwx`, instead of reading per-agent allowlists.
+
+  `rwx` takes the **parsed object**, never a file path — bareguard does not load `bareguard.rwx.json` itself; the caller reads the file and passes its three maps in (`rwx: { agent, agents, tools, bash }`). It runs in the exact eval-order slot `tools.allowlist` occupies today (step 5); everything ahead of it — `content.denyPatterns`, `flags` deny/ask, `content.askPatterns`, and every other universal rule — still fires first, unchanged.
+
+  **Deny by absence, loudly.** An unlisted tool, unlisted command, or unlisted agent is denied, never asked, never guessed:
+  - `rwx.allow` — the action's letter is covered by the agent's grant.
+  - `rwx.unlisted` — the tool/command/agent is not present in the rwx maps at all (an agent absent from `agents` resolves to `"---"` — it starts, but every action denies).
+  - `rwx.denied` — the tool/command is listed, but the agent's letters don't cover its tagged letter.
+  - `rwx.joined` — a bash command contains a joined/chained construct (`;` `&` `|` `` ` `` `$` `(` `)` newline/`\` continuation, and redirects `>`/`>>`/`<`) and isn't listed verbatim. A quote-aware scan avoids false denies inside quotes: single-quoted spans are fully literal, double-quoted spans are literal except `$`/backtick (still live expansion), and an unterminated quote fails closed as joined.
+  - `rwx.invalid` — the `rwx` config (or a value mutated after construction into an unusable shape) cannot be evaluated — fails closed, same family as every other `<key>.invalid` rule.
+
+  **Two construct-time throws.** Configuring `rwx` together with `tools.allowlist`/`bash.allow`/`bash.denyPatterns` throws (`rwx is mutually exclusive with …`) — the two modes do the same job, so nobody is left guessing which is in charge. Setting `bash.classify: true` in rwx mode also throws — `bash.classify` is a danger list that fails open (unmatched = "safe"), backwards for a mode built on deny-by-absence; it stays shipped, unchanged, for allowlist-mode users.
+
+  **Enforcement is two places.** (1) *hide* — call `gate.allows(action)` per candidate tool before handing the model its catalog, so an uncovered tool is never offered; (2) *deny backstop* — `gate.check()` still denies it even if a hidden tool is called by name, so the model never sees or handles the grant and prompt injection can't widen it.
+
+  **Delegation is attenuate-only.** `gate.clampRwxLetters(requestedLetters = "rwx")` computes a spawned child's letters as `min(what the parent requested for it, what the parent itself holds)` per letter — a child can never outgrow its parent. `spawn` itself carries no letter of its own (an automatic `spawn = x` tag was rejected — every agent with helpers would read as dangerous) but is **not exempt from deny-by-absence**: an unlisted `spawn` action denies `rwx.unlisted` like any other tool, so the shipped starter file tags it explicitly.
+
+  **Audit and budget.** The audit line carries `rwxLetters` (the agent's full grant) and `rwxLetter` (the letter that matched), absent entirely on a non-rwx gate's line. `budget.resources` caps a letter directly (`budget: { resources: { w: 20 } }`) — in rwx mode the gate accrues the count itself rather than relying on the caller's `result.counts`.
+
+  **`fetch.get`/`fetch.post` split, not a second axis.** rwx has no verb axis inside one tool (one action `type` = one letter) — tag a fetch tool's GET and POST calls as separate `action.type` values (`"fetch.get"` r, `"fetch.post"` w/x), the same convention as `github.create_pr`. This is a caller-side convention; bareguard matches `action.type` literally and does not perform the split itself.
+
+  **Additive: with no `rwx` config, behavior is byte-identical to today.** No existing rule, phase, or config key changed.
+
+  **Known limits (stated, not silently accepted).** (1) a tool can change behind its name — an MCP server update can turn a read into a write; the tag trusts the name. (2) an `r` tool can still have effects (a "read" that triggers something, or exfiltrates over the network) — `net` domain limits and `secrets` redaction stay on regardless of rwx mode. (3) "reversible" is operator judgment, read from the action's TYPE via config, never from the agent or the model — a wrong `w` hides an `x`. (4) rwx binds only agents running through this gate; a remote agent's internals are one tool call. (5) **bash leading-word matching is not a parser** — option-hidden writes (`sed -i`, `tar -x`, `curl -o`, `find -delete`, `git diff --output=`) are the sharpest edge: no flag parser is built, so the shipped starter file never tags such a command `r`, and a joined/chained command not listed verbatim denies as the main guard. `$VAR` used outside any quotes is a live metacharacter and denies as joined, even though bash itself would happily expand it.
+
+  A starter `bareguard.rwx.json` ships at the package root (added to `files`), drafted for review before wiring: common built-in action types plus a conservative set of read/write/execute-tagged bash commands, with an in-file `_notes` block explaining every deliberate exclusion (readers that can run other programs — `less`/`vim`/`find -exec`/`awk`/`xargs`/`env`; option-hidden-write commands; interpreters; ambiguous git subcommands) rather than guessing a letter for them. Copy it, edit the `agents` map for your fleet, and pass the parsed object in.
+
+  **1.0 SemVer surface added:** the `rwx` config keys (`agent`/`agents`/`tools`/`bash`/`letters`), the `bareguard.rwx.json` file format (three maps: `agents`/`tools`/`bash`), the `rwx.*` rule strings above, the `rwxLetters`/`rwxLetter` audit fields, and `gate.clampRwxLetters()`.
+
+  Not a fourteenth primitive: `primitives.json`/`npm run check:primitives` still count 13 — nothing in `src/primitives/rwx.js` is exported publicly or carries an `@when` JSDoc tag. It is `Gate` config wiring, the same category as `flags` or `bash.classify`, not a new author-time-discoverable verb.
+
 ## [0.16.0] - 2026-09-19
 
 ### Fixed
