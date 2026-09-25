@@ -1,7 +1,7 @@
 # bareguard — Integration Guide
 
 > For AI assistants and developers wiring bareguard into a project.
-> v0.7.1 | Node.js >= 20 | 1 production dep (`proper-lockfile`) | ships TypeScript types | Apache-2.0
+> v0.17.0 | Node.js >= 20 | 1 production dep (`proper-lockfile`) | ships TypeScript types | Apache-2.0
 >
 > Full design spec: [`docs/product/bareguard-prd.md`](docs/product/bareguard-prd.md) — unified PRD (v0.7).
 
