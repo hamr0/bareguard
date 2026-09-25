@@ -1314,13 +1314,16 @@ not a conformance standard — the same status as an MCP tool-description hint: 
 consumer weighs, not a claim the consumer trusts by default.** State the residual risk loudly
 in the operator-facing docs rather than engineering it away with a fourth "trust me" marker.
 
-**The boundary, restated and still load-bearing:** bareguard never runs rwxmap and never
-depends on it, at build time or at runtime — nothing in `src/` imports it, calls it, or checks
-for its presence. The consumer runs rwxmap **offline**, reviews its output (including every
-`settled` row, per the residual above), and commits the result as an ordinary, human-reviewed
+**The boundary, restated and still load-bearing:** bareguard never runs rwxmap and never depends
+on it, at build time or at runtime — nothing in `src/` imports it, calls it, or checks for its
+presence. The consumer runs rwxmap **offline**, reviews its output (including every `settled`
+row, per the residual above), and commits the result as an ordinary, human-reviewed
 `bareguard.rwx.json`. bareguard reads only what the operator committed — a marker on a row is
-data the operator chose to keep, never a signal bareguard goes looking for elsewhere.
-(bareguard-prd.md:1270-1323)
+data the operator chose to keep, never a signal bareguard goes looking for elsewhere. (Planned
+0.18.0: for spec-less sites a harness may `add()` rwxmap letters mid-run that no operator
+committed or reviewed, tighten-only; the no-dependency half of this boundary is unchanged —
+§23.21.)
+(bareguard-prd.md:1270-1326)
 
 ### 23.21 Runtime `add()` for spec-less sites (PLANNED 0.18.0 — hamr, 2026-09-25; settled with rwxmap)
 
