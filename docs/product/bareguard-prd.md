@@ -1027,7 +1027,8 @@ no `rwx` config, behavior is byte-identical to today. (bareguard-prd.md:1018-102
 
 Three maps. bareguard ships a **starter file** derived from what it already curates (built-in
 action types + common read/write commands), clearly marked as the shipped list; the operator
-copies and edits it. Never written to at runtime.
+copies and edits it. Never written to at runtime. (Planned 0.18.0: the harness may `add()` to
+the gate's in-memory copy, tighten-only — §23.21.)
 
 The snippet below is illustrative and abbreviated — it is **not** kept row-for-row in sync with
 the shipped file. The shipped `bareguard.rwx.json` (repo root) is the source of truth; read its
@@ -1059,7 +1060,8 @@ An **unlisted tool**, **unlisted command**, or **unlisted agent** is denied — 
 never guessed. An unlisted agent gets `---`: it starts, but every action denies. The deny is a
 structured in-band refusal that names the fix: `policy_denied rwx.unlisted: "npm run build" is
 not in the rwx tools map — an operator must add it to bareguard.rwx.json as r, w or x`. The
-operator edits the file later, calmly, not mid-run. (bareguard-prd.md:1056-1062)
+operator edits the file later, calmly, not mid-run. (Planned 0.18.0: a harness may `add()` rows
+mid-run for spec-less sites, tighten-only — §23.21.) (bareguard-prd.md:1056-1062)
 
 ### 23.5 Enforcement — two places, both required
 
@@ -1319,3 +1321,71 @@ for its presence. The consumer runs rwxmap **offline**, reviews its output (incl
 `bareguard.rwx.json`. bareguard reads only what the operator committed — a marker on a row is
 data the operator chose to keep, never a signal bareguard goes looking for elsewhere.
 (bareguard-prd.md:1268-1321)
+
+### 23.21 Runtime `add()` for spec-less sites (PLANNED 0.18.0 — hamr, 2026-09-25; settled with rwxmap)
+
+**Not built. 0.17.0 ships without it.** Written down here so the agreed shape is not lost.
+
+**Why.** An agent that visits websites (e.g. a flight-search agent) meets sites the operator
+never listed. The harness — never the agent — fetches each site's API spec and runs rwxmap
+offline-style at run time; rwxmap's letters are accepted as-is (the agreed deal: ~1% too-loose,
+no human review step). When a site has **no** spec, letters arrive one request at a time,
+mid-run. Today the only way to change the tools map is to mutate the object the gate holds a
+live reference to (`src/gate.js`), which §23.3 forbids. `add()` replaces that with one
+narrow, tighten-only operation.
+
+**Flow (rwxmap + harness side, recorded for context — bareguard owns none of it):**
+
+1. On a new site the harness MUST ask rwxmap for a spec first (forced; no skip to per-request).
+2. Spec found → rwxmap classifies every operation → harness calls `add(all)`.
+3. No spec (cached as "no spec"), or a request matching no spec operation → before each call
+   the harness runs rwxmap's `classifyRow({method, path})` and calls `add(one)`.
+4. rwxmap owns a cache: 30-day TTL, keyed by spec URL + content hash + rwxmap version + Jev
+   model id; "no spec here" results are cached too.
+5. The harness depends on rwxmap (npm). **bareguard never does** (§23.12, §23.20 boundary
+   unchanged). The spec fetch belongs to the harness and is never reachable by the agent.
+
+**The primitive — `gate.add(entries)`, bareguard's part:**
+
+- Takes 1..n `tools` entries: `{ key: "r" | {letter, marker} }`. Startup load and one mid-run
+  request use the same code path.
+- **Tighten-only.** A new key is added. An existing key — **including a hand-written one** —
+  can only go stricter (`r` < `w` < `x`); an add never loosens a key.
+- **Tools map only.** The `bash` map, `agents`, and grants are out of reach. The grant stays the
+  ceiling: nothing added can exceed what the human granted.
+- **Validated exactly as at construct time** (bare letter or `{letter, marker}`, §23.20). A bad
+  entry throws. **All-or-nothing:** the whole batch lands or none of it does.
+- **Audited:** every add writes an audit line, new phase `rwx.added` (key, letter, marker), so
+  every allowed key traces back to either the committed file or a logged add.
+- **The gate copies the rwx config at construct** and `add()` mutates that private copy — this
+  also closes today's live link to the caller's object.
+- **Size cap** on the tools map (value TBD at build). Past it the gate fails **closed** (deny)
+  and the harness must rebuild the gate.
+- Callable from harness code only. Holds structurally: the agent only sends actions and never
+  holds gate methods.
+- When built, §23.3 ("Never written to at runtime") and §23.4 ("edits the file later, not
+  mid-run") change to: **the committed file is never written at runtime; the harness may
+  `add()` to the gate's in-memory map, tighten-only.**
+
+**Keys for requests without a spec (rwxmap owns the format):**
+
+- Spec'd operations stay `<vendor>.<operationId>` (§23.12).
+- Spec-less requests use `<host>.<METHOD> <normalized path>`, e.g.
+  `api.example.com.POST /v1/orders/{id}`.
+- rwxmap exports **one normalizer function** and is the **only writer** of that key; the harness
+  never builds it by hand. Normalizing drops the query string and turns id segments into `{id}`
+  (best guess, documented: all-digit segments, UUIDs, long hex strings).
+- bareguard matches `action.type` literally, as always, so the harness must set the action's
+  `type` to that key (bareguard's own raw-fetch convention, `fetch.get`/`fetch.post`, carries
+  the URL in a field, not the type).
+
+**Known property of spec-less sites (accepted, state it in the docs when built):** in
+per-request mode the agent chooses the method and URL that `classifyRow` sees, and every GET
+floors to `r`. So an `r--` agent can reach any GET. The only case that slips is a site whose
+GETs change state — the same GET-floor leak already accepted under "we take rwxmap's letter."
+rwxmap measured the cost of losing the spec as exactness only: on its unseen 4279-row exam,
+too-loose stays 0.8% for full spec, method+path, and method alone; exact goes 82.3% → 81.9% →
+81.1%, all of the difference in the too-tight direction (rwxmap's numbers, not re-derived here).
+
+**On ship:** `gate.add`, the `rwx.added` phase, and the size-cap deny rule join the 1.0 SemVer
+surface (§23.17).
