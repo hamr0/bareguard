@@ -1246,7 +1246,7 @@ release is a new minor, **0.17.0**. Once shipped, the `rwx` config keys, the
 and the audit letter all **join the 1.0 SemVer surface** (Future features / SemVer-surface
 list) alongside the rest of §19's list. Downstream: **bareagent** must pass the agent's
 **name** and the clamped letters to its children on spawn (§23.9, §23.11) — this is a bareagent
-change, not a new bareagent primitive. (bareguard-prd.md:1241-1249)
+change, not a new bareagent primitive. Planned 0.18.0 additions to this surface — `gate.add`, the `rwx.added` phase, the size-cap deny rule — are tracked separately in §23.21. (bareguard-prd.md:1241-1249)
 
 ### 23.18 Open questions (remaining open)
 
@@ -1257,7 +1257,7 @@ trusted channel for a child's letters, bash edge forms, and the `fetch` split ar
    the parsed object and leaving file I/O to the caller (§23.13 decision 4 settles *what*
    bareguard accepts today; whether a convenience loader is ever added is still open).
 2. How the starter file is **versioned** as bareguard's own curated defaults change underneath
-   an operator's edited copy. (bareguard-prd.md:1251-1260)
+   an operator's edited copy. See also §23.21 for the planned (not yet built) `add()` shape. (bareguard-prd.md:1251-1260)
 
 ### 23.19 Origin / relation
 
