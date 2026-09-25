@@ -1,5 +1,6 @@
 {
-  "_comment": "SAMPLE / STARTER rwx file for the rwx-poc.mjs throwaway POC. Not shipped, not read by src/. Shape per docs/wiki/releases-roadmap.md lines 353-500 (rwx section) / bareguard-prd.md:1309-1327.",
+  "_comment": "SAMPLE / STARTER rwx file for the rwx-poc.mjs throwaway POC. Not shipped, not read by src/. Shape per docs/wiki/releases-roadmap.md lines 353-500 (rwx section) / bareguard-prd.md §23.",
+  "_notes": "\"git log\": \"r\" was removed to match the shipped bareguard.rwx.json fix (git diff --output= / git show --output= / git log --output= all write; commit b87ca76). \"git diff\": \"r\" is KEPT here on purpose, unlike the shipped file — it is the one deliberately-risky row this POC needs to still demonstrate [KNOWN LIMIT #5] (git diff --output=... allowed read-only). See rwx-poc.md's Known Limit #5 writeup.",
   "agents": {
     "researcher": "r--",
     "fixer": "rw-",
@@ -20,7 +21,6 @@
     "cat": "r",
     "grep": "r",
     "git status": "r",
-    "git log": "r",
     "git diff": "r",
     "git add": "w",
     "git commit": "w",

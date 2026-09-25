@@ -181,7 +181,7 @@ export class RwxGate {
   /** Rule-level decision WITHOUT touching the underlying Gate (pure query). */
   _rwxDecision(action) {
     if (!this.agentListed) {
-      return rwxDeny("rwx.unlisted", `agent "${this.agentName}" is not in bareguard.rwx.json — it holds "---"`);
+      return rwxDeny("rwx.unlisted", `agent "${this.agentName}" is not in bareguard.rwx.json — it holds "---"; an operator must grant it letters in bareguard.rwx.json`);
     }
     if (action.type === "bash") {
       const cmd = action.args?.command ?? action.cmd ?? "";
@@ -194,7 +194,7 @@ export class RwxGate {
         );
       }
       if (!m.ok) {
-        return rwxDeny("rwx.unlisted", `"${cmd}" is not in bareguard.rwx.json — add it as r, w or x`);
+        return rwxDeny("rwx.unlisted", `"${cmd}" is not in bareguard.rwx.json — an operator must add it as r, w or x`);
       }
       if (!hasLetter(this.letters, m.letter)) {
         return rwxDeny(
@@ -212,7 +212,7 @@ export class RwxGate {
     if (this.disabled.has("unlisted")) return null;
     const letter = this.rwxConfig.tools[action.type];
     if (letter == null) {
-      return rwxDeny("rwx.unlisted", `"${action.type}" is not in bareguard.rwx.json — add it as r, w or x`);
+      return rwxDeny("rwx.unlisted", `"${action.type}" is not in bareguard.rwx.json — an operator must add it as r, w or x`);
     }
     if (!hasLetter(this.letters, letter)) {
       return rwxDeny("rwx.denied", `"${action.type}" is tagged "${letter}" but agent "${this.agentName}" only holds "${this.letters}"`);
@@ -347,6 +347,12 @@ async function runE1(disabled = disabledGuards()) {
   // not decided, in rwx-poc.md). This case is EXPECTED TO ALLOW: it documents
   // a real, stated gap, not a safety PASS. It is reported separately and does
   // NOT feed into `allDenied` above.
+  //
+  // "git diff": "r" is kept in this POC's bareguard.rwx.json (unlike the
+  // shipped starter, which removed git diff/show/log entirely) SPECIFICALLY
+  // so this case still demonstrates the gap — see that file's own "_notes".
+  // "git log": "r" was removed to match the shipped fix; it carries no demo
+  // here, so E-rwx-4's "git log --oneline -5" is reclassified "gap" below.
   const knownLimitCmd = "git diff --output=/home/hamr/.bashrc";
   const kl = await gate.check({ type: "bash", args: { command: knownLimitCmd } });
   const klAllowed = kl.outcome === "allow";
@@ -441,7 +447,7 @@ async function runE4(disabled = disabledGuards()) {
     ["allow", { type: "bash", args: { command: "git diff" } }, "git diff"],
     ["allow", { type: "bash", args: { command: "git diff HEAD~1 -- src/" } }, "git diff HEAD~1 -- src/"],
     ["allow", { type: "bash", args: { command: "git diff --stat" } }, "git diff --stat"],
-    ["allow", { type: "bash", args: { command: "git log --oneline -5" } }, "git log --oneline -5"],
+    ["gap", { type: "bash", args: { command: "git log --oneline -5" } }, "git log --oneline -5"],
     ["correct-deny", { type: "bash", args: { command: "git log | head" } }, "git log | head"],
     ["allow", { type: "bash", args: { command: "ls -la src" } }, "ls -la src"],
     ["false-deny", { type: "bash", args: { command: "cat $HOME/.npmrc" } }, "cat $HOME/.npmrc"],

@@ -14,6 +14,7 @@ import { netCheck } from "./primitives/net.js";
 import {
   toolsDenylistCheck, toolsDenyArgsCheck, toolsAllowlistCheck,
 } from "./primitives/tools.js";
+import { assertRwxConfig, rwxCheck, matchRwxLetter, resolveAgentLetters, clampLetters } from "./primitives/rwx.js";
 import { contentDenyCheck, contentAskCheck } from "./primitives/content.js";
 import { flagsDenyCheck, flagsAskCheck } from "./primitives/flags.js";
 import { deferRateCheck } from "./primitives/defer-rate.js";
@@ -411,6 +412,7 @@ export class Gate {
    */
   constructor(config = {}) {
     assertArrayShapedConfig(config);
+    assertRwxConfig(config); // §23.2: rwx is a second mode, mutually exclusive with tools.allowlist/bash.allow
     this.cfg = config;
     this.runId = config.runId ?? randomUUID();
     this.parentRunId = config.parentRunId ?? process.env.BAREGUARD_PARENT_RUN_ID ?? null;
@@ -550,8 +552,9 @@ export class Gate {
     const d4f = flagsAskCheck(action, this.cfg.flags);
     if (d4f) return d4f;
 
-    // 5. tools.allowlist enforcement (scope: set+match allow, set+miss deny)
-    const d5 = toolsAllowlistCheck(action, t);
+    // 5. rwx mode (§23.5) OR tools.allowlist enforcement — mutually exclusive
+    // (construct-time throw enforces exactly one), same eval-order slot.
+    const d5 = this.cfg.rwx != null ? rwxCheck(action, this.cfg.rwx) : toolsAllowlistCheck(action, t);
     if (d5) return d5;
 
     // 6. default → allow
@@ -619,13 +622,32 @@ export class Gate {
       // bash.classify (harness §7.1) may attach a severity tier; read it via a
       // widened view since not every decision shape carries these optionals.
       const cls = /** @type {{classification?: ("destructive"|"super_destructive"), tier?: (2|3)}} */ (decision);
+      // rwx (§23.5) may attach the agent's letters/matched letter/matched
+      // marker (D103); same widened-view pattern as `cls` above, since not
+      // every decision shape carries them.
+      const rwxInfo = /** @type {{rwxLetters?: string, rwxLetter?: string, rwxMarker?: ("tight"|"loose"|"settled")}} */ (decision);
+      const rwxAuditFields = rwxInfo.rwxLetters
+        ? {
+            rwxLetters: rwxInfo.rwxLetters,
+            ...(rwxInfo.rwxLetter ? { rwxLetter: rwxInfo.rwxLetter } : {}),
+            ...(rwxInfo.rwxMarker ? { rwxMarker: rwxInfo.rwxMarker } : {}),
+          }
+        : {};
 
       // Terminal allow/deny → audit and return.
       if (decision.outcome === "allow" || decision.outcome === "deny") {
+        // rwx (§23.5): "the audit line carries the letter." rwxLetters/
+        // rwxLetter/rwxMarker are a closed, tiny alphabet ("r"/"w"/"x"/"-",
+        // "tight"/"loose"/"settled") derived from OPERATOR config, never
+        // caller/reply data — same non-redacted, non-LINE_FIELDS treatment
+        // as `rule`/`severity`/classify's `classification`/`tier`. Absent
+        // for every decision that isn't an rwx one, so a non-rwx gate's
+        // audit line is byte-identical.
         await emit({
           phase: "gate", action,
           decision: decision.outcome, severity: decision.severity,
           rule: decision.rule, reason: decision.reason,
+          ...rwxAuditFields,
         });
         // Control flow above guarantees outcome is "allow" | "deny"; the cast
         // pins the internal eval result to the public Decision shape.
@@ -633,6 +655,8 @@ export class Gate {
       }
 
       // askHuman path: emit gate audit, dispatch to humanChannel, apply.
+      // rwx.askOn:"loose" (D103) resolves an rwx match to askHuman too, so
+      // this line carries the same rwx fields as the terminal branch above.
       await emit({
         phase: "gate", action,
         decision: "askHuman", severity: decision.severity,
@@ -640,6 +664,7 @@ export class Gate {
         ...(cls.classification
           ? { classification: cls.classification, tier: cls.tier }
           : {}),
+        ...rwxAuditFields,
       });
 
       // Halt: also emit dedicated halt line for operator grep.
@@ -700,6 +725,15 @@ export class Gate {
       if (cls.classification) {
         event.classification = cls.classification;
         event.tier = cls.tier;
+      }
+
+      // rwx.askOn:"loose" (D103): surface the matched letter/marker so
+      // humanChannel can show what triggered the ask. Additive — absent for
+      // every event that didn't come from rwx.ask, byte-identical otherwise.
+      if (rwxInfo.rwxLetters) {
+        event.rwxLetters = rwxInfo.rwxLetters;
+        if (rwxInfo.rwxLetter) event.rwxLetter = rwxInfo.rwxLetter;
+        if (rwxInfo.rwxMarker) event.rwxMarker = rwxInfo.rwxMarker;
       }
 
       // Axis B (§6.6): a buffered judge fact rides THIS ask if it should surface
@@ -851,7 +885,24 @@ export class Gate {
     const aid = opts.aid ?? randomUUID().slice(0, 8);
     this.limits.tick(action);
     if (action?.type === "spawn") this.limits.noteSpawn();
-    const { warnings, unpriced } = await this.budget.record(result);
+    // rwx count caps (§23.10): "the gate accrues the letter count itself in
+    // rwx mode instead of relying on the caller's result.counts." Merge a
+    // `{ [letter]: 1 }` delta on top of whatever counts the caller already
+    // supplied — additive, non-destructive (a fresh object; `result` itself
+    // is never mutated). Only a resource actually capped via
+    // `budget.resources` accrues (Budget.record ignores unconfigured names),
+    // so this is a no-op unless the operator opted in with `{ w: 20 }` etc.
+    let recordedResult = result;
+    if (this.cfg.rwx != null) {
+      const letter = matchRwxLetter(action, this.cfg.rwx);
+      if (letter) {
+        recordedResult = {
+          ...result,
+          counts: { ...(result?.counts ?? {}), [letter]: (result?.counts?.[letter] ?? 0) + 1 },
+        };
+      }
+    }
+    const { warnings, unpriced } = await this.budget.record(recordedResult);
     await this.audit.emit({
       phase: "record", action, aid,
       decision: null, severity: null, rule: null, reason: null, result,
@@ -972,6 +1023,25 @@ export class Gate {
       phase: "topup", action: null,
       dimension, oldCap, newCap,
     });
+  }
+
+  /**
+   * rwx delegation clamp (§23.9) — attenuate ONLY: a spawned child's letters
+   * are `min(what the parent requested for it, what this gate itself holds)`
+   * per letter, so a child can never outgrow its parent (an `r-x` manager can
+   * only produce `r--`/`r-x` helpers, never a `w`-holding one). Runs in the
+   * PARENT's gate at spawn time — a child never verifies its own letters.
+   * Pass the returned string as the child's `rwx.letters` (the same channel
+   * `spawnDepth` travels on: a config field, with a `BAREGUARD_RWX_LETTERS`
+   * env-var fallback mirroring `BAREGUARD_SPAWN_DEPTH`). A gate not in rwx
+   * mode (`cfg.rwx` unset) has nothing to delegate and returns `"---"`.
+   * @param {string} [requestedLetters] letters requested for the child; default `"rwx"` (ask for everything — the clamp does the rest)
+   * @returns {string} the clamped 3-char letters string, never wider than this gate's own grant
+   */
+  clampRwxLetters(requestedLetters = "rwx") {
+    if (this.cfg.rwx == null) return "---";
+    const { letters } = resolveAgentLetters(this.cfg.rwx);
+    return clampLetters(letters, requestedLetters);
   }
 
   /**

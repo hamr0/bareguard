@@ -22,6 +22,7 @@
  * @typedef {import("./types.js").ContentConfig} ContentConfig
  * @typedef {import("./types.js").FlagsConfig} FlagsConfig
  * @typedef {import("./types.js").AxisBConfig} AxisBConfig
+ * @typedef {import("./types.js").RwxConfig} RwxConfig
  * @typedef {import("./types.js").Annotation} Annotation
  * @typedef {import("./types.js").SecretsConfig} SecretsConfig
  * @typedef {import("./types.js").RateConfig} RateConfig

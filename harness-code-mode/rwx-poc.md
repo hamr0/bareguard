@@ -1,5 +1,19 @@
 # rwx POC — findings (throwaway, not shipped)
 
+> **Status (2026-09-24, third pass).** Swept the same class of bug the shipped
+> `bareguard.rwx.json` fixed in commit b87ca76 (removing `git diff`/`git
+> show`/`git log` `"r"` — all three document a write-capable `--output=`
+> option) into this POC's own sample `bareguard.rwx.json`. `"git log": "r"`
+> is removed here too. `"git diff": "r"` is deliberately KEPT (unlike the
+> shipped file) — it is the one row this POC needs to still demonstrate
+> **[KNOWN LIMIT #5]** (`git diff --output=...` allowed read-only); see that
+> file's own `_notes`. Effect: E-rwx-4's `"git log --oneline -5"` step is
+> reclassified from `allow` to `gap` (git log is no longer listed at all).
+> The usability numbers below are updated to the re-run's real output:
+> **14/27 allow, 13/27 deny** (was 15/27 allow, 12/27 deny), with the
+> unlisted-gap bucket growing from 7 to 8. All 85 PASS / 0 FAIL, exit 0,
+> re-verified by an actual run of `node harness-code-mode/rwx-poc.mjs`.
+
 > **Status (2026-09-21, second pass).** Both findings from the first
 > orchestrator re-check are now addressed in code:
 > 1. **Redirect hole — fixed at the wrapper.** `JOIN_META` now includes `>`
@@ -18,13 +32,15 @@
 >    head/wc/grep, piping). Deliberately-irreversible actions (`git push`,
 >    `npm publish`, `deploy`, `rm -rf node_modules`) were moved OUT of the
 >    count into a separate E-rwx-4b, never mixed into the usability number.
->    Result: **15/27 allow, 12/27 deny**, denies split (a) 4 false-deny from
->    `JOIN_META` matching inside quotes or on `$` for env-var expansion
->    (`cat $HOME/.npmrc`, `grep -rn 'foo|bar' src`, two `git commit -m "..."`
->    cases with `(` `)` or `;` inside the message), (b) 7 unlisted-command
->    starter-file gaps (`node`, `npx`, `sed`, `head`, `wc`, `git checkout`,
->    `git stash` — none in the starter `bareguard.rwx.json`), (c) 1 correct
->    deny (`git log | head`, a genuine pipe). See the "Usability verdict"
+>    Result: **14/27 allow, 13/27 deny** (see the 2026-09-24 status note
+>    above — `git log` was later removed from the sample file too), denies
+>    split (a) 4 false-deny from `JOIN_META` matching inside quotes or on `$`
+>    for env-var expansion (`cat $HOME/.npmrc`, `grep -rn 'foo|bar' src`, two
+>    `git commit -m "..."` cases with `(` `)` or `;` inside the message), (b) 8
+>    unlisted-command starter-file gaps (`node`, `npx`, `sed`, `head`, `wc`,
+>    `git checkout`, `git stash`, `git log --oneline -5` — none in the starter
+>    `bareguard.rwx.json`), (c) 1 correct deny (`git log | head`, a genuine
+>    pipe, denies on the joiner regardless of listing). See the "Usability verdict"
 >    section below for what this number means for graduation.
 >
 > Also fixed: the runner's exit code. A normal full run used to exit 0 even
@@ -96,15 +112,17 @@ Run `node harness-code-mode/rwx-poc.mjs` for the full suite, or
   arguments (`git commit -m "..."`, `git diff HEAD~1 -- src/`, `npm test --
   --grep auth`, `grep -rn 'foo|bar' src`, `sed -n 1,40p src/a.js`, `git log |
   head`, etc.), deliberately excluding irreversible actions from the count
-  (see E-rwx-4b). **Result: 15/27 allow, 12/27 deny.** The 12 denies split:
+  (see E-rwx-4b). **Result: 14/27 allow, 13/27 deny.** The 13 denies split:
   - **(a) 4 false denies** from `JOIN_META` matching a character that is safe
     in context — inside quotes (`git commit -m "fix (typo) in parser"`,
     `git commit -m "a; b"`, `grep -rn 'foo|bar' src`) or a `$` used for
     env-var expansion, not command substitution (`cat $HOME/.npmrc`).
-  - **(b) 7 unlisted-command starter-file gaps** — `node`, `npx`, `sed`,
-    `head`, `wc`, `git checkout`, `git stash` are simply absent from the
-    sample `bareguard.rwx.json`'s bash map, so they deny `rwx.unlisted`; an
-    operator would add each on first real hit.
+  - **(b) 8 unlisted-command starter-file gaps** — `node`, `npx`, `sed`,
+    `head`, `wc`, `git checkout`, `git stash`, `git log --oneline -5` are
+    simply absent from the sample `bareguard.rwx.json`'s bash map (`git log`
+    was removed on 2026-09-24 to match the shipped starter-file fix, commit
+    b87ca76), so they deny `rwx.unlisted`; an operator would add each on
+    first real hit.
   - **(c) 1 correct deny** — `git log | head` is a genuine pipe (chains to a
     second program) and denies per the doc's own settled joined-command rule.
 
@@ -193,10 +211,10 @@ message (not duplicated here) — this file is the interpretive summary.
 The first, unrevised pass called E-rwx-4's 5/15 denies "tolerable" — that
 number was wrong (4 of the 5 were planted irreversible-action attempts, and
 every command ran without arguments, so it never exercised quoting at all).
-The rebuilt 27-item realistic session gives an honest number: **12/27 (44%)
-deny**, but only 1 of those 12 is a correct deny of a genuinely unsafe-shaped
-construct (a pipe). The other 11 are not "the agent tried something it
-shouldn't" — they are either a first-run starter-file gap (7, trivially fixed
+The rebuilt 27-item realistic session gives an honest number: **13/27 (48%)
+deny**, but only 1 of those 13 is a correct deny of a genuinely unsafe-shaped
+construct (a pipe). The other 12 are not "the agent tried something it
+shouldn't" — they are either a first-run starter-file gap (8, trivially fixed
 by an operator adding the command once) or a false positive from the joiner
 regex matching inside quotes/env-vars (4, would need the quote-aware scan
 described above as an opinion, not built here).
@@ -208,7 +226,7 @@ attempts in the run were false-denied** (`-m "fix (typo) in parser"`,
 finish whenever the message carries `( ) ; | $`. The other blocks are
 peripheral (log paging, npm/node tooling beyond test/build).
 (Correction by the orchestrator re-check: an earlier draft of this paragraph
-said the core loop "never gets blocked".) Whether an 11/27 rate of
+said the core loop "never gets blocked".) Whether a 12/27 rate of
 false-deny-or-gap on a *starter* file is "tolerable" is a judgment call this
 POC doesn't make for the operator — it's evidence, not a verdict. Per the
 doc's own graduation rule ("graduate only if E-rwx-4's deny count is tolerable
@@ -241,7 +259,7 @@ constructs rwx-shaped Gates, never mixes in an operator-supplied
    than deciding it, since it is a real, live gap and any of the fixes has a
    design cost (config surface, false-deny rate, or scope of what "tagging by
    leading word" even means).
-2. Is an 11/27 false-deny-or-gap rate against a **starter** file (see
+2. Is a 12/27 false-deny-or-gap rate against a **starter** file (see
    Usability verdict) tolerable enough to graduate, given that commits with
    punctuated messages are false-denied? Left to the operator/adopter side of the doc's own
    graduation rule — not decided here.

@@ -1,6 +1,6 @@
 {
   "name": "bareguard",
-  "version": "0.16.0",
+  "version": "0.17.0",
   "description": "Action-side runtime policy library for autonomous agents — bounds what the agent does, not what it says. Sibling of bareagent in the bare suite.",
   "type": "module",
   "main": "./src/index.js",
@@ -24,7 +24,8 @@
     "CHANGELOG.md",
     "LICENSE",
     "NOTICE",
-    "bareguard.context.md"
+    "bareguard.context.md",
+    "bareguard.rwx.json"
   ],
   "primitives": "./primitives.json",
   "engines": {
