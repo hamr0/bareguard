@@ -14,7 +14,7 @@ import { netCheck } from "./primitives/net.js";
 import {
   toolsDenylistCheck, toolsDenyArgsCheck, toolsAllowlistCheck,
 } from "./primitives/tools.js";
-import { assertRwxConfig, rwxCheck, matchRwxLetter, resolveAgentLetters, clampLetters } from "./primitives/rwx.js";
+import { assertRwxConfig, rwxCheck, matchRwxLetter, resolveAgentLetters, clampLetters, normalizeEntry } from "./primitives/rwx.js";
 import { contentDenyCheck, contentAskCheck } from "./primitives/content.js";
 import { flagsDenyCheck, flagsAskCheck } from "./primitives/flags.js";
 import { deferRateCheck } from "./primitives/defer-rate.js";
@@ -230,6 +230,46 @@ function boundMeta(meta) {
 }
 
 /**
+ * §23.21: the size cap `gate.add()` enforces on `rwx.tools`. Landing exactly
+ * at this many keys is fine; only a batch that would push the map PAST it
+ * refuses (throws, nothing lands) — there is no separate gate-wide
+ * poisoned-past-cap state, since `add()` is the only way the map grows.
+ * @type {number}
+ */
+const RWX_TOOLS_CAP = 10000;
+
+/**
+ * Letter rank for `gate.add()`'s tighten-only check (§23.21): a letter can
+ * only rise, never fall (`r` < `w` < `x`).
+ * @type {Readonly<{r:number,w:number,x:number}>}
+ */
+const RWX_LETTER_RANK = Object.freeze({ r: 0, w: 1, x: 2 });
+
+/**
+ * Deep, decoupled copy of an already construct-time-validated `rwx` config
+ * (§23.21) — closes the live-reference hole where mutating the caller's
+ * original `rwx.tools`/`bash`/`agents` object AFTER construction changed a
+ * running gate's decisions (every eval step reads `this.cfg.rwx` by
+ * reference). A JSON round-trip is sufficient because `assertRwxConfig` has
+ * already required every legal `rwx` value to be JSON-shaped (strings, or
+ * plain `{letter,marker}` objects); `__proto__` is stripped at every depth
+ * in the reviver, the same treatment {@link boundMeta} gives reply-derived
+ * `meta`. `rwx` is operator-authored config (not agent-reachable input), so
+ * a construct-time throw on an unserializable value (e.g. a circular
+ * reference) is the right failure mode — the same posture as every other
+ * construct-time config validator in this file.
+ * @param {object} rwx already-validated rwx config
+ * @returns {object} a decoupled deep copy
+ */
+function deepCopyRwx(rwx) {
+  try {
+    return JSON.parse(JSON.stringify(rwx), (k, v) => (k === "__proto__" ? undefined : v));
+  } catch (err) {
+    throw new Error(`invalid bareguard config: rwx could not be deep-copied at construct time (${err.message})`);
+  }
+}
+
+/**
  * The single chokepoint every agent action passes through. Construct once per
  * run, `await gate.init()`, then call {@link Gate#check} / {@link Gate#record}
  * (or {@link Gate#run}) for each action. Runs PRE-EVAL halt checks then the
@@ -413,7 +453,14 @@ export class Gate {
   constructor(config = {}) {
     assertArrayShapedConfig(config);
     assertRwxConfig(config); // §23.2: rwx is a second mode, mutually exclusive with tools.allowlist/bash.allow
-    this.cfg = config;
+    // §23.21: the gate copies `rwx` at construct time, deep and decoupled —
+    // every other section is still held by reference (unchanged), but rwx
+    // alone gets this treatment because `gate.add()` needs a private map it
+    // owns to mutate, and because a caller mutating their own `rwx.tools`
+    // object post-construct must no longer be able to flip a running gate's
+    // decisions (the hole §23.21 exists to close). `config` itself is never
+    // mutated by `add()` — only this private copy is.
+    this.cfg = config.rwx != null ? { ...config, rwx: deepCopyRwx(config.rwx) } : config;
     this.runId = config.runId ?? randomUUID();
     this.parentRunId = config.parentRunId ?? process.env.BAREGUARD_PARENT_RUN_ID ?? null;
     this.spawnDepth = config.spawnDepth ?? +(process.env.BAREGUARD_SPAWN_DEPTH ?? 0);
@@ -449,6 +496,13 @@ export class Gate {
     // Axis B (§6.6/§8.2): buffered return-time-judge facts awaiting a human ask
     // to ride / an agent-feedback drain. Empty unless the caller calls annotate().
     this._annotations = [];
+    // §23.21 decision 5: bumped once per successfully-landed `add()` batch.
+    // `check()` snapshots this before awaiting a human decision and, if it
+    // changed by the time a human "allow" is about to be returned, re-checks
+    // rwx fresh (the check()/add() race fix) — gated on this counter so the
+    // common case (no concurrent add()) costs nothing and an ordinary
+    // `askOn:"loose"` ask-then-allow stays byte-identical.
+    this._addGeneration = 0;
   }
 
   /**
@@ -614,10 +668,45 @@ export class Gate {
     const aid = randomUUID().slice(0, 8);
     const emit = (fields) => this.audit.emit({ aid, ...fields });
 
+    // §23.21 decision 5 — check()/add() race fix. rwx step 5 reads a letter
+    // and may then await a human decision (an `askOn:"loose"` ask, or any
+    // other ask/halt raised after the rwx read) for an unbounded time. If a
+    // `gate.add()` lands during that wait and tightens the very key this
+    // read matched, the human's eventual "allow" must not ride the stale
+    // read through. Called right before EITHER path that returns an allow
+    // AFTER awaiting `humanChannel` (the direct ask-allow branch, and the
+    // topup-on-ask-treated-as-allow branch) — never on the top-of-loop
+    // terminal allow, which has no human wait in between and so no race
+    // window. Gated on `this._addGeneration`: if nothing landed during the
+    // wait, this is a single integer compare, and an ordinary
+    // `askOn:"loose"` ask-then-allow stays byte-identical. If something DID
+    // land, re-runs the real `rwxCheck` fresh: a `"deny"` (the agent's held
+    // letters no longer cover the tightened entry) is the hole this exists
+    // to close. A fresh `"askHuman"` (e.g. the entry is still, or newly,
+    // marker "loose") is ALSO treated as unsafe here — the human answered a
+    // decision that may no longer reflect the current grant, and re-entering
+    // the ask path from inside this return branch is not a clean thing to
+    // do — so the conservative choice, same as a fresh deny, is to deny
+    // rather than silently let the stale approval stand.
+    const rwxTightenedCheck = async (genAtRead) => {
+      if (this.cfg.rwx == null || genAtRead === this._addGeneration) return null;
+      const fresh = rwxCheck(action, this.cfg.rwx);
+      if (fresh.outcome === "allow") return null;
+      const reason = `rwx entry for "${clipKey(action?.type)}" changed under a concurrent gate.add() while this check() awaited a human decision — re-evaluated as ${fresh.outcome} (${fresh.rule}${fresh.reason ? ": " + fresh.reason : ""})`;
+      await emit({
+        phase: "gate", action,
+        decision: "deny", severity: "action", rule: "rwx.tightened", reason,
+      });
+      /** @type {import("./types.js").Decision} */
+      const decided = { outcome: "deny", severity: "action", rule: "rwx.tightened", reason, aid };
+      return decided;
+    };
+
     let iterations = 0;
     while (true) {
       // PRE-EVAL: halt, else the 6-step eval. `_stepEval` always returns a
       // terminal decision, so `??` makes `decision` provably non-null.
+      const rwxGenAtRead = this._addGeneration;
       const decision = this._haltCheck() ?? await this._stepEval(action);
       // bash.classify (harness §7.1) may attach a severity tier; read it via a
       // widened view since not every decision shape carries these optionals.
@@ -800,6 +889,8 @@ export class Gate {
       });
 
       if (human.decision === "allow") {
+        const tightened = await rwxTightenedCheck(rwxGenAtRead);
+        if (tightened) return tightened;
         /** @type {import("./types.js").Decision} */
         const decided = { outcome: "allow", severity: "action", rule: "humanChannel.allow", reason: human.reason ?? null, aid };
         await emit({
@@ -828,6 +919,8 @@ export class Gate {
       if (human.decision === "topup") {
         if (decision.severity !== "halt") {
           // topup only meaningful for halt; for ask events, treat as allow.
+          const tightened = await rwxTightenedCheck(rwxGenAtRead);
+          if (tightened) return tightened;
           /** @type {import("./types.js").Decision} */
           const decided = { outcome: "allow", severity: "action", rule: "humanChannel.allow", reason: "topup-on-ask treated as allow", aid };
           await emit({
@@ -1042,6 +1135,175 @@ export class Gate {
     if (this.cfg.rwx == null) return "---";
     const { letters } = resolveAgentLetters(this.cfg.rwx);
     return clampLetters(letters, requestedLetters);
+  }
+
+  /**
+   * §23.21 — runtime, tighten-only growth of the rwx tools map, for
+   * spec-less sites a harness meets mid-run that no operator committed or
+   * reviewed. Callable from harness code only — the agent only ever sends
+   * actions and never holds a `Gate` reference, so this stays structurally
+   * out of its reach. The committed `bareguard.rwx.json` (or a
+   * construct-time `rwx.tools` map) is never written to at runtime; `add()`
+   * mutates only this gate's own private, construct-time-copied map (see
+   * the constructor's `deepCopyRwx`).
+   *
+   * Validated exactly as at construct time (the real {@link assertRwxConfig}),
+   * but over the BATCH's own entries only — delta validation, not a
+   * whole-map re-check. `assertRwxConfig` has no cross-key rule (every
+   * tools/bash/agents check is a standalone per-entry loop), so this gives
+   * the identical per-key accept/reject answer whole-map validation would,
+   * at a cost independent of the existing map's size.
+   *
+   * Tighten-only on both axes against any key already present (a
+   * hand-written one included): the letter can only rise (`r` < `w` < `x`),
+   * and an entry currently marked `"loose"` can only move to another
+   * `"loose"` entry — never to `"tight"`/`"settled"`, and never to a bare
+   * letter string either, because a bare letter normalizes to
+   * `marker: null` ({@link normalizeEntry}), a state distinct from
+   * `"loose"`. `"tight"` <-> `"settled"` moves are unrestricted (neither
+   * ever asks). Only the tools map is reachable — `bash`, `agents`, and the
+   * agent's own grant are never touched by this method.
+   *
+   * All-or-nothing: nothing lands unless the WHOLE batch passes shape,
+   * tighten-only, and the {@link RWX_TOOLS_CAP} 10,000-key cap (landing
+   * exactly at the cap is fine; only crossing it refuses). Hardened like
+   * every other agent-reachable entry point: `entries` is read via the same
+   * own-props-only, hostile-getter-safe copy `safeAction()` uses gate-wide,
+   * so every value is read exactly once (no TOCTOU between validating a
+   * value and storing it), and a `__proto__`/`constructor`/`prototype` key
+   * is rejected outright rather than silently no-op'd or partially applied.
+   *
+   * Audited on success — one `rwx.added` line per landed key (key, letter,
+   * marker) — and audited loudly on ANY rejection — one `rwx.add_rejected`
+   * line (reason, the batch's attempted keys) BEFORE throwing. This is the
+   * only behavior; there is no silent-reject mode. A gate with no `rwx`
+   * config at all rejects every `add()` (conservative: nothing to tighten
+   * against, so nothing is accepted).
+   * @param {Object<string, (string|{letter:string, marker?:string})>} entries
+   *   1..n tools-map entries, the same shape `rwx.tools` accepts at
+   *   construct time (a bare `"r"`/`"w"`/`"x"`, or `{letter, marker?}`).
+   * @returns {Promise<void>}
+   * @fails Throws (after emitting `rwx.add_rejected`) when: this gate has no
+   *   `rwx` config; `entries` is not a non-empty plain object, or is
+   *   unreadable; a key is `__proto__`/`constructor`/`prototype`; an entry's
+   *   shape is malformed (same rule as construct time); an entry would
+   *   loosen an existing key's letter or move it off marker `"loose"`; or
+   *   the batch would push `rwx.tools` past {@link RWX_TOOLS_CAP} keys.
+   *   Nothing lands on any throw.
+   */
+  async add(entries) {
+    if (!this._initialized) await this.init();
+
+    const reject = async (message, keys) => {
+      await this.audit.emit({ phase: "rwx.add_rejected", reason: message, keys });
+      throw new Error(message);
+    };
+    const attemptedKeys = () => {
+      try { return (entries && typeof entries === "object") ? Object.keys(entries) : []; }
+      catch { return []; }
+    };
+
+    if (this.cfg.rwx == null) {
+      return reject("gate.add: this gate has no rwx config — nothing to tighten against, so nothing is accepted", []);
+    }
+
+    let entriesUsable;
+    try { entriesUsable = isPlainObject(entries) && Object.keys(entries).length > 0; }
+    catch { entriesUsable = false; }
+    if (!entriesUsable) {
+      return reject(
+        "gate.add: entries must be a non-empty plain object { key: letter | {letter,marker} }",
+        attemptedKeys(),
+      );
+    }
+
+    // Own-props-only snapshot (safeAction's own treatment, gate-wide): reads
+    // every value exactly once (no TOCTOU between validating and storing a
+    // hostile getter's value) and lands on a null-prototype object, so a
+    // JSON-parsed `{"__proto__": "r"}` batch cannot smuggle a prototype
+    // write later when a landed key is copied into `rwx.tools`.
+    let snapshot;
+    try { snapshot = copyOwnSafely(entries); }
+    catch { return reject("gate.add: entries could not be read", []); }
+    for (const dangerous of ["__proto__", "constructor", "prototype"]) {
+      if (Object.prototype.hasOwnProperty.call(snapshot, dangerous)) {
+        return reject(`gate.add: "${dangerous}" is not a usable tools-map key`, Object.keys(snapshot));
+      }
+    }
+    const batchEntries = Object.entries(snapshot);
+
+    try {
+      // 1) Shape — delta validation only: the real construct-time validator,
+      // handed ONLY the batch's own entries (never merged with the
+      // possibly-huge current map).
+      assertRwxConfig({ rwx: { ...this.cfg.rwx, tools: snapshot } });
+
+      const rwx = this.cfg.rwx;
+      const currentTools = isPlainObject(rwx.tools) ? rwx.tools : {};
+
+      // 2) Normalize every batch entry ONCE, before any mutation. Non-null
+      // is guaranteed here: `assertRwxConfig` above already rejects any
+      // entry `normalizeEntry` can't parse, so every `newNorm` below is
+      // real; a defensive guard still throws rather than assume, matching
+      // this file's "fail loud, not silent" posture, and does so BEFORE
+      // step 4's mutation, so a guard that somehow did fire could never
+      // break all-or-nothing.
+      const newNorms = new Map();
+      for (const [key, rawNew] of batchEntries) {
+        const newNorm = normalizeEntry(rawNew);
+        if (!newNorm) throw new Error(`gate.add: rwx.tools.${clipKey(key)} could not be normalized`);
+        newNorms.set(key, newNorm);
+      }
+
+      // 3) Tighten-only, letter AND marker, against any key already present
+      // (a genuinely new key has nothing to tighten against).
+      for (const [key] of batchEntries) {
+        if (!Object.prototype.hasOwnProperty.call(currentTools, key)) continue;
+        const oldNorm = normalizeEntry(currentTools[key]);
+        if (!oldNorm) throw new Error(`gate.add: rwx.tools.${clipKey(key)} (existing entry) could not be normalized`);
+        const newNorm = newNorms.get(key);
+        if (RWX_LETTER_RANK[newNorm.letter] < RWX_LETTER_RANK[oldNorm.letter]) {
+          throw new Error(
+            `gate.add: rwx.tools.${clipKey(key)} would LOOSEN "${oldNorm.letter}" -> "${newNorm.letter}" — add() is tighten-only (r<w<x)`,
+          );
+        }
+        if (oldNorm.marker === "loose" && newNorm.marker !== "loose") {
+          throw new Error(
+            `gate.add: rwx.tools.${clipKey(key)} would move OFF marker "loose" (to ${newNorm.marker === null ? "a bare letter, which has no marker" : `"${newNorm.marker}"`}) — add() may not un-loosen a loose-marked entry`,
+          );
+        }
+      }
+
+      // 4) Size cap — computed from current-count + genuinely-new-key-count,
+      // without ever building the merged map.
+      let newKeyCount = 0;
+      for (const [key] of batchEntries) {
+        if (!Object.prototype.hasOwnProperty.call(currentTools, key)) newKeyCount++;
+      }
+      const projectedSize = Object.keys(currentTools).length + newKeyCount;
+      if (projectedSize > RWX_TOOLS_CAP) {
+        throw new Error(
+          `gate.add: rwx.tools would grow to ${projectedSize} keys, past the cap of ${RWX_TOOLS_CAP} — nothing added`,
+        );
+      }
+
+      // 5) Every check above passed for the WHOLE batch — land it. No throw
+      // point exists after this line, so all-or-nothing is structural: a
+      // batch that fails any check above never touches `currentTools`.
+      for (const [key, raw] of batchEntries) currentTools[key] = raw;
+      rwx.tools = currentTools;
+      this._addGeneration++; // §23.21 decision 5: check()/add() race fix
+      for (const [key] of batchEntries) {
+        const norm = newNorms.get(key);
+        await this.audit.emit({ phase: "rwx.added", key, letter: norm.letter, marker: norm.marker });
+      }
+    } catch (err) {
+      await this.audit.emit({
+        phase: "rwx.add_rejected", reason: err.message,
+        keys: batchEntries.map(([k]) => k),
+      });
+      throw err;
+    }
   }
 
   /**
