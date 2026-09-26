@@ -21,6 +21,10 @@ All notable changes to bareguard are documented here. Format: [Keep a Changelog]
 
   **The gate copies `rwx` at construct time now (deep, decoupled).** Closes a pre-existing hole where mutating the caller's own `rwx`/`rwx.tools`/etc. object *after* constructing a `Gate` could flip a running gate's decisions (every eval step reads the config by reference). Every other config section is still held by reference, unaffected.
 
+  **An audit write failure propagates, audit-lines-first.** `add()` writes every `rwx.added` line for the batch BEFORE mutating the live tools map. If a write throws partway through, nothing has been mutated (the mutation loop never runs) and `_addGeneration` stays unbumped. The residual this leaves is deliberately safe: an earlier key in the batch may have a real `rwx.added` line describing a key that never landed ("logged but not landed") — never a landed key with no audit line, which is the one thing "every allowed key traces back to a logged add" forbids.
+
+  **`add()`'s tools-map key is now redacted and byte-bounded like every other caller-controlled audit field.** `rwx.added`'s `key` and `rwx.add_rejected`'s `keys` joined `LINE_FIELDS` (`src/primitives/audit.js`) — a secret-looking key (e.g. embedding a bearer token or `sk-…` pattern) is now redacted the same way `reason`/`aid` already were; the line's overall byte cap was already structurally guaranteed by the pre-existing last-resort scalar fallback.
+
   **On ship, joins the 1.0 SemVer surface (PRD §23.17):** `gate.add`, the `rwx.added` phase, the `rwx.add_rejected` phase, the `rwx.tightened` deny rule, and the 10,000-entry tools-map cap.
 
 

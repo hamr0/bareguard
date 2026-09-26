@@ -1385,6 +1385,35 @@ narrow, tighten-only operation.
   violation, or over the cap — writes an audit line too, new phase `rwx.add_rejected`
   (reason, the batch's attempted keys), before throwing. This is the default; there is no
   silent-reject mode.
+- **An audit WRITE failure propagates (repo rule), audit-lines-first.** `add()` writes every
+  `rwx.added` line for the batch BEFORE mutating the live tools map, not after — if a write
+  throws partway through (disk full, an unwritable path), nothing has been mutated yet, so
+  the whole batch fails closed and `_addGeneration` is left unbumped, consistent with
+  nothing having landed. The one residual this leaves is deliberately in the SAFE direction:
+  an earlier key in the same batch may already have a real `rwx.added` line on disk
+  describing a key that ultimately never landed ("logged but not landed") — never the
+  reverse. This is preferred over mutate-then-roll-back-on-failure, which produces the same
+  residual (a stray `rwx.added` line for a reverted key) plus a rollback path that itself
+  must never partially fail. Logged-but-not-landed is safe because `check()`/`rwxCheck` only
+  ever consult the live tools map, never the audit log, so a stray line grants nothing;
+  landed-but-not-logged — a real, usable capability with no audit trail — is the one thing
+  "every allowed key traces back to a logged add" forbids, and audit-first structurally
+  cannot produce it. The `rwx.add_rejected` write itself is not specially guarded either — if
+  IT throws (the audit sink is fully down), that exception propagates in its place, which
+  still satisfies "propagates," though the caller then sees the audit failure's message
+  rather than the original rejection reason.
+- **`add()`'s tools-map KEY joins the audit redactor and the per-field byte re-bound.**
+  `rwx.added`'s `key` and `rwx.add_rejected`'s `keys` are caller-controlled and unbounded at
+  the source (a spec-less site's rwxmap-minted key can itself carry a query-string token),
+  same class as `reason`/`aid` — added to `LINE_FIELDS` in `src/primitives/audit.js` so both
+  passes that already exist for every other caller-controlled field (secrets redaction, and
+  the oversize-line per-field clip) cover them too, rather than adding a third, one-off
+  mechanism. The overall MAX_LINE_BYTES line cap was already structurally guaranteed before
+  this — the pre-existing last-resort `scalarOnlyLine` fallback clips every scalar field
+  (`key` included) to 120 bytes regardless — so this change's real, load-bearing effect is
+  the REDACTION `key`/`keys` previously had none of, not the byte bound itself. Thrown
+  `Error` messages from a rejected `add()` were already clipped via the existing `clipKey`
+  helper (`src/primitives/rwx.js`), unrelated to this addition.
 - **The gate copies the rwx config at construct** and `add()` mutates that private copy — this
   also closes today's live link to the caller's object.
 - **check()/add() race, closed — PER-KEY, corrected after an orchestrator review caught a
