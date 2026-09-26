@@ -521,6 +521,75 @@ test("add/check race: an add() landing AFTER rwx step 5's read but BEFORE humanC
   assert.equal(d.rule, "rwx.tightened");
 });
 
+test("add/check race: the TERMINAL allow path (no human wait at all) also races a concurrent add() landing during check()'s own audit emit — must deny", async () => {
+  // Debrief round 2 finding: `rwxTightenedCheck` was only ever called on the
+  // two branches that follow a `humanChannel` wait — the top-of-loop
+  // terminal allow/deny branch (no ask, no human wait) awaited its own
+  // `emit()` before returning but never re-checked. A `probe` entry tagged
+  // {r, "tight"} never asks (tight markers don't ask under any askOn
+  // setting) — step 5 resolves ALLOW directly for an agent holding "r".
+  // If a concurrent add() tightens "probe" to {x, "tight"} DURING check()'s
+  // own "gate: allow" audit-line write (an await, real I/O in file mode),
+  // the stale ALLOW is otherwise honored even though the agent (`reader`,
+  // holds only "r") never held "x". Ported directly from the orchestrator's
+  // repro (terminal-allow-race.mjs).
+  const gate = new Gate({
+    audit: { path: null },
+    rwx: {
+      agent: "reader", agents: { reader: "r--" },
+      tools: { probe: { letter: "r", marker: "tight" } }, bash: {},
+    },
+  });
+  await gate.init();
+  const originalEmit = gate.audit.emit.bind(gate.audit);
+  let fired = false;
+  gate.audit.emit = async (line) => {
+    if (!fired && line.action?.type === "probe") {
+      fired = true;
+      await gate.add({ probe: { letter: "x", marker: "tight" } }); // tighten during the terminal "gate: allow" line's own write
+    }
+    return originalEmit(line);
+  };
+  const d = await gate.check({ type: "probe", args: {} });
+  assert.equal(gate.cfg.rwx.tools.probe.letter, "x", "sanity: the tighten did land");
+  assert.equal(d.outcome, "deny", "the agent only ever held r; the entry is now x-tagged — must not be allowed");
+  assert.equal(d.rule, "rwx.tightened");
+  const lines = await gate.audit.readAll();
+  const gateLines = lines.filter((l) => l.phase === "gate" && l.action?.type === "probe");
+  // Documented audit consequence (not restructured away — the race window
+  // is inside the FIRST emit()'s own await): the original "allow" line is
+  // already durably written by the time the tightened check fires, so a
+  // second "gate" line (the rwx.tightened deny) follows it for the same aid.
+  assert.equal(gateLines.length, 2, "expect both the original allow line and the rwx.tightened deny line");
+  assert.equal(gateLines[0].decision, "allow");
+  assert.equal(gateLines[1].decision, "deny");
+  assert.equal(gateLines[1].rule, "rwx.tightened");
+  assert.equal(gateLines[0].aid, gateLines[1].aid, "both lines share the same aid — one eval, two facts");
+});
+
+test("add/check race: an UNRELATED-key add() during the terminal allow's own audit emit does not spuriously deny", async () => {
+  const gate = new Gate({
+    audit: { path: null },
+    rwx: {
+      agent: "reader", agents: { reader: "r--" },
+      tools: { probe: { letter: "r", marker: "tight" }, unrelated: "r" }, bash: {},
+    },
+  });
+  await gate.init();
+  const originalEmit = gate.audit.emit.bind(gate.audit);
+  let fired = false;
+  gate.audit.emit = async (line) => {
+    if (!fired && line.action?.type === "probe") {
+      fired = true;
+      await gate.add({ unrelated: "w" }); // bumps the add-generation, but doesn't touch "probe"
+    }
+    return originalEmit(line);
+  };
+  const d = await gate.check({ type: "probe", args: {} });
+  assert.equal(d.outcome, "allow", "an unrelated concurrent add() must not spuriously deny the terminal allow");
+  assert.equal(d.rule, "rwx.allow");
+});
+
 // ─── 1. audit write failure mid-add() ─────────────────────────────────────
 //
 // Repo rule: an audit WRITE failure PROPAGATES (never silently swallowed).

@@ -854,6 +854,27 @@ export class Gate {
           rule: decision.rule, reason: decision.reason,
           ...rwxAuditFields,
         });
+        // §23.21 decision 5: this terminal (no human wait at all) ALLOW path
+        // can ALSO race a concurrent `add()` — the `emit()` just above may
+        // itself await real I/O, and a tighten landing during THAT await is
+        // otherwise invisible: this branch would honor the allow it already
+        // logged, computed from a read that's since gone stale. Same final
+        // check as the human-allow branches below (§23.21 decision 5),
+        // called as the LAST thing before honoring the allow — never on a
+        // terminal DENY, which needs no defending. `rwxTightenedCheck`'s own
+        // fast path (`raceSnapshot.gen === this._addGeneration`) keeps the
+        // common case (nothing landed) a single integer compare. Audit
+        // consequence: on the rare tightened case this line's "allow" is
+        // ALREADY durably written by the time the check fires, so a second
+        // "gate"/deny `rwx.tightened` line for the same `aid` follows it —
+        // not restructured away (the race window is inside `emit()`'s own
+        // await, so nothing can run before it that would also see a
+        // concurrent add() landing during the write itself) — this is the
+        // same two-line shape the human-allow branches already produce.
+        if (decision.outcome === "allow") {
+          const tightened = await rwxTightenedCheck(raceSnapshot);
+          if (tightened) return tightened;
+        }
         // Control flow above guarantees outcome is "allow" | "deny"; the cast
         // pins the internal eval result to the public Decision shape.
         return /** @type {import("./types.js").Decision} */ ({ ...decision, aid });
