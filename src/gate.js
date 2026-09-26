@@ -503,6 +503,14 @@ export class Gate {
     // common case (no concurrent add()) costs nothing and an ordinary
     // `askOn:"loose"` ask-then-allow stays byte-identical.
     this._addGeneration = 0;
+    // §23.21: `add()` reads live state, awaits (audit-first writes), then
+    // mutates — a genuine async window. Two concurrent `add()` calls that
+    // both entered before either mutated would both validate against the
+    // same stale state (found by review: this let a tighten-only guard be
+    // bypassed via loosening, and would equally have let two individually-
+    // fitting batches jointly cross the size cap). This queue token
+    // serializes `add()` calls one at a time, in call order; see `add()`.
+    this._addQueue = Promise.resolve();
   }
 
   /**
@@ -1219,10 +1227,48 @@ export class Gate {
    *   loosen an existing key's letter or move it off marker `"loose"`; or
    *   the batch would push `rwx.tools` past {@link RWX_TOOLS_CAP} keys.
    *   Nothing lands on any throw.
+   *
+   * **Serialized.** `add()` reads the live tools map, then AWAITS (the
+   * audit-first writes), then mutates — a genuine async window between
+   * "validate against current state" and "use that validation." Two
+   * concurrent `add()` calls that both entered before either had mutated
+   * would both validate against the SAME stale state: found by review, this
+   * let an `x`-tagged key concurrently "tighten" to `w` (loosening it, past
+   * the tighten-only guard, because the `w` call's tighten-check read the
+   * map before the `x` call had landed) and would equally have let two
+   * batches that each individually fit the 10,000-key cap jointly cross it.
+   * A promise-chain mutex on the gate (`this._addQueue`) now runs `add()`
+   * calls strictly one at a time, in call order — see the wrapper below.
    */
   async add(entries) {
     if (!this._initialized) await this.init();
+    // Promise-chain mutex: each call links onto the previous call's queue
+    // token and waits for it before running its own logic. The queue token
+    // ALWAYS resolves (never rejects) — `releaseNext()` runs unconditionally
+    // in `finally`, regardless of whether this call's `_addOnce` succeeded or
+    // threw — so a rejected `add()` can never wedge the queue for whatever
+    // comes after it (falsified: see test/rwx-add.test.js).
+    const previous = this._addQueue;
+    let releaseNext = (_value) => {}; // always overwritten synchronously below; the no-op default is only to satisfy TS's definite-assignment check
+    this._addQueue = new Promise((resolve) => { releaseNext = resolve; });
+    await previous;
+    try {
+      return await this._addOnce(entries);
+    } finally {
+      releaseNext();
+    }
+  }
 
+  /**
+   * The actual `gate.add()` logic, run strictly one call at a time by the
+   * `add()` wrapper's queue above — this method itself does no
+   * serialization and must never be called directly (module-internal only;
+   * kept as a regular method, not a private `#` field, purely to stay
+   * consistent with this file's existing style).
+   * @param {Object<string, (string|{letter:string, marker?:string})>} entries
+   * @returns {Promise<void>}
+   */
+  async _addOnce(entries) {
     const reject = async (message, keys) => {
       await this.audit.emit({ phase: "rwx.add_rejected", reason: message, keys });
       throw new Error(message);

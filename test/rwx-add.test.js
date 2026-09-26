@@ -757,3 +757,92 @@ test("add: the thrown Error message for a rejected key is clipped (bounded), not
   // caller-supplied key — it must not carry the full 50KB key verbatim.
   assert.ok(err.message.length < 1000, `error message was ${err.message.length} chars, expected it clipped`);
 });
+
+// ─── concurrent add() calls are serialized ────────────────────────────────
+//
+// Found by orchestrator review: the audit-lines-first fix (previous commit)
+// introduced a genuine async window inside add() — validate against the
+// live tools map, THEN await the audit writes, THEN mutate. Two concurrent
+// add() calls that both entered before either had mutated both validated
+// against the SAME stale state, so a tighten-only violation could slip
+// through (an "x" key concurrently "tightened" to "w" — actually a LOOSEN,
+// since the "w" call's tighten-check read the map before the "x" call had
+// landed), and two batches that each individually fit the 10,000-key cap
+// could jointly cross it. Fixed with a promise-chain mutex (`_addQueue`)
+// that runs add() calls strictly one at a time, in call order.
+
+test("add: concurrent add()s to the SAME key are serialized — the second-to-run one validates against the FIRST's already-landed result, no loosen slips through", async () => {
+  const gate = gateFor({ tools: { k: "r" } });
+  await gate.init();
+  // Two concurrent tighten attempts on the same key, from "r": x (bigger
+  // tighten) and w (smaller tighten). Whichever actually runs SECOND (queue
+  // order, not call order, since the queue only guarantees non-overlap, not
+  // which literal call goes first) must validate against the FIRST's
+  // landed result — so if x lands first, w -> x would be a loosen and must
+  // be rejected; if w lands first, x is still a valid tighten over w and
+  // must succeed. Either resolution is fine; what must NEVER happen is a
+  // net loosen (x landing, then being silently overwritten by w).
+  const pB = gate.add({ k: "x" });
+  const pA = gate.add({ k: "w" });
+  const results = await Promise.allSettled([pA, pB]);
+  const finalLetter = gate.cfg.rwx.tools.k;
+  assert.ok(["r", "w", "x"].includes(finalLetter) === false || finalLetter === "x" || finalLetter === "w",
+    "sanity: final letter is one of the attempted values");
+  // The load-bearing assertion: whichever one landed LAST in queue order is
+  // never a loosen relative to whichever landed first. Concretely, for this
+  // exact pair, "x" landing first then "w" attempting w<x must be REJECTED
+  // — this is what actually happened pre-fix (repro below is deterministic
+  // given add()'s FIFO queue: pB (x) was queued before pA (w) in this test).
+  assert.equal(finalLetter, "x", "x was queued first and must land; w's later attempt (a loosen relative to x) must be rejected");
+  const wResult = results[0]; // pA = the "w" attempt, queued second
+  assert.equal(wResult.status, "rejected");
+  assert.match(wResult.reason.message, /would LOOSEN/);
+  const d = await gate.check({ type: "k", args: {} });
+  assert.equal(d.rwxLetter, "x");
+  const lines = await gate.audit.readAll();
+  assert.equal(lines.filter((l) => l.phase === "rwx.added" && l.key === "k" && l.letter === "x").length, 1);
+  assert.equal(lines.filter((l) => l.phase === "rwx.add_rejected").length, 1);
+});
+
+test("add: two concurrent batches that EACH individually fit the cap but would JOINTLY exceed it — the second is rejected, size stays <= cap", async () => {
+  const CAP = 10000;
+  const gate = gateFor({ tools: bigToolsMap(CAP - 1) }); // 9,999 keys — exactly 1 slot of headroom
+  await gate.init();
+  // Each batch alone is exactly at the boundary: 9,999 + 1 = 10,000, which
+  // fits (only CROSSING refuses). Read against the SAME starting state
+  // (9,999), both would pass their own cap check — the bug this test
+  // targets is that check running against STALE state for whichever one
+  // does not go first, not either batch being individually over-cap (a
+  // batch that's over-cap alone would reject on its own math regardless of
+  // concurrency, and would not actually exercise the shared-state race).
+  const batchA = { extra_a1: "r" };
+  const batchB = { extra_b1: "r" };
+  const [rA, rB] = await Promise.allSettled([gate.add(batchA), gate.add(batchB)]);
+  const finalSize = Object.keys(gate.cfg.rwx.tools).length;
+  assert.ok(finalSize <= CAP, `final size ${finalSize} exceeded the cap of ${CAP}`);
+  const landedA = "extra_a1" in gate.cfg.rwx.tools;
+  const landedB = "extra_b1" in gate.cfg.rwx.tools;
+  assert.notEqual(landedA && landedB, true, "both batches landing would push size to 10,001, over the cap");
+  assert.ok(landedA || landedB, "at least one of the two batches should still fit and land (9,999 + 1 = 10,000 is legal)");
+  const rejected = [rA, rB].filter((r) => r.status === "rejected");
+  assert.equal(rejected.length, 1, "exactly one of the two concurrent batches was rejected");
+  assert.match(rejected[0].reason.message, /past the cap/);
+});
+
+test("add: a rejected add() followed by a concurrent GOOD add() still lands (the queue is not wedged by a rejection)", async () => {
+  const gate = gateFor();
+  await gate.init();
+  const pBad = gate.add({ bad_key: "q" }); // malformed, will reject
+  const pGood = gate.add({ good_key: "r" }); // unrelated, must still land
+  const [rBad, rGood] = await Promise.allSettled([pBad, pGood]);
+  assert.equal(rBad.status, "rejected");
+  assert.equal(rGood.status, "fulfilled");
+  const d = await gate.check({ type: "good_key", args: {} });
+  assert.equal(d.outcome, "allow");
+  // Queue health check: a THIRD add(), issued only after the first two have
+  // settled, must also land — proves the queue token chain wasn't left in
+  // a broken state by the rejection.
+  await gate.add({ third_key: "w" });
+  const d3 = await gate.check({ type: "third_key", args: {} });
+  assert.equal(d3.outcome, "allow");
+});
