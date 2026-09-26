@@ -1,7 +1,10 @@
 // rwx construct-time validation + mutual exclusivity (PRD §23.2/§23.3/§23.8),
-// plus the runtime `<key>.invalid` fail-closed family (config held by
-// reference, mutable post-construction — same TOCTOU class every other
-// primitive in this codebase already guards against).
+// plus the runtime `<key>.invalid` fail-closed family. Since 0.18.0 (§23.21
+// decision 1) the gate copies `rwx` at construct time — deep and decoupled —
+// so mutating the CALLER's original config object post-construction no
+// longer reaches a running gate at all (closes the live-reference TOCTOU
+// this suite used to demonstrate here; every other config section is still
+// held by reference, unaffected).
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -119,27 +122,38 @@ test("rwx: assertRwxConfig is a no-op for undefined/null rwx", () => {
   assert.doesNotThrow(() => assertRwxConfig({ rwx: null }));
 });
 
-// ─── runtime `<key>.invalid` fail-closed backstop (cfg held by reference) ────
+// ─── copy-at-construct closes the live-reference hole (§23.21 decision 1) ────
 
-test("rwx: mutating rwx to a non-object post-construction fails CLOSED at runtime (rwx.invalid), not a thrown TypeError", async () => {
-  // `Gate` holds `this.cfg = config` BY REFERENCE (verified elsewhere in this
-  // suite), so mutating the SAME config object the gate was constructed with
-  // is the real TOCTOU: `cfg.rwx = ...` on a copy would not reach it.
+test("rwx: mutating the caller's rwx object post-construction no longer reaches the gate (copy-at-construct)", async () => {
+  // Pre-0.18.0 this reached the gate (`this.cfg.rwx` held by reference) and
+  // denied `rwx.invalid`. Since 0.18.0 the gate copies `rwx` at construct
+  // time, so this mutation of the CALLER's own object is now inert.
   const cfg = { audit: { path: null }, rwx: { ...VALID_RWX }, humanChannel: async () => ({ decision: "deny" }) };
   const gate = new Gate(cfg);
   await gate.init();
   cfg.rwx = "oops"; // swap the value out after construction validated it
   const d = await gate.check({ type: "read", args: {} });
-  assert.equal(d.outcome, "deny");
-  assert.equal(d.rule, "rwx.invalid");
+  assert.equal(d.outcome, "allow"); // "fixer" holds "rw-"; "read" is tagged "r" — unaffected by the external mutation
+  assert.equal(d.rule, "rwx.allow");
 });
 
-test("rwx: mutating rwx.tools to a non-object post-construction fails CLOSED at runtime", async () => {
+test("rwx: mutating the caller's rwx.tools object post-construction no longer reaches the gate", async () => {
   const cfg = { audit: { path: null }, rwx: { ...VALID_RWX, tools: { ...VALID_RWX.tools } }, humanChannel: async () => ({ decision: "deny" }) };
   const gate = new Gate(cfg);
   await gate.init();
   cfg.rwx.tools = "oops";
   const d = await gate.check({ type: "read", args: {} });
+  assert.equal(d.outcome, "allow");
+  assert.equal(d.rule, "rwx.allow");
+});
+
+test("rwx: the runtime rwx.invalid backstop still fires against the gate's OWN copy", async () => {
+  // The `<key>.invalid` fail-closed backstop (rwx.js's `rwxRuntimeShapeError`)
+  // is unchanged — it still exists as defense-in-depth against the gate's own
+  // private config becoming unusable. Exercised directly via `rwxCheck` (the
+  // pure primitive), since there is no longer any way for a CALLER to reach
+  // it through a `Gate` instance post-construction.
+  const d = rwxCheck({ type: "read" }, "oops");
   assert.equal(d.outcome, "deny");
   assert.equal(d.rule, "rwx.invalid");
 });
