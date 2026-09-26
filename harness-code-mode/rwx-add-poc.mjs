@@ -368,10 +368,13 @@ function freshAuditPath(name) {
 async function case1() {
   section("Case 1: copy-at-construct closes the live-link hole");
 
-  // 1a. BASELINE — the CURRENT shipped Gate holds cfg.rwx.tools BY REFERENCE
-  // (gate.js:416 `this.cfg = config`). Mutating the caller's original object
-  // after construction changes decisions. This is the hole §23.21 exists to
-  // close, demonstrated with zero POC code involved.
+  // 1a. UPDATE (post-0.18.0): this used to demonstrate a real hole — the
+  // PRE-0.18.0 shipped Gate held cfg.rwx.tools BY REFERENCE, so mutating the
+  // caller's original object after construction changed decisions. §23.21
+  // was built precisely to close this, and it now IS closed on the real
+  // shipped `Gate` itself (not just on this POC's `AddableGate` wrapper in
+  // 1b below) — the constructor deep-copies `rwx` at construct time. This
+  // case now asserts the CLOSED behavior directly against `Gate`.
   const mutableTools = { read: "r" };
   const rwxCfgBaseline = { agent: "fixer", agents: { fixer: "rw-" }, tools: mutableTools, bash: {} };
   const baselineGate = new Gate({
@@ -383,7 +386,7 @@ async function case1() {
   report("baseline: 'write' denied before mutation (rwx.unlisted)", before.outcome === "deny" && before.rule === "rwx.unlisted");
   mutableTools.write = "w"; // mutate the caller's ORIGINAL object post-construct
   const after = await baselineGate.check({ type: "write" });
-  report("baseline HOLE: shipped Gate now ALLOWS 'write' after external mutation (live link confirmed)", after.outcome === "allow");
+  report("shipped Gate (0.18.0+) is IMMUNE to external mutation — 'write' still denied (hole closed, not just in this POC's wrapper)", after.outcome === "deny" && after.rule === "rwx.unlisted");
 
   // 1b. THE FIX — AddableGate copies rwx.tools at construct; the same
   // mutation of the caller's original object object has NO effect.
@@ -400,20 +403,29 @@ async function case1() {
   const afterFix = await fixedGate.check({ type: "write" });
   report("fixed: 'write' STILL denied after external mutation (copy closed the hole)", afterFix.outcome === "deny" && afterFix.rule === "rwx.unlisted");
 
-  // Falsification: disable the copy in AddableGate itself and confirm the
-  // case goes RED — proves the assertion above is load-bearing, not
-  // incidental (e.g. some other code path happening to re-read the object).
+  // UPDATE (post-0.18.0): this used to falsify AddableGate's OWN copy logic
+  // by disabling it via `{ disable: ["copy"] }` and confirming the hole
+  // reappeared. It no longer can: `AddableGate`'s constructor calls
+  // `super(config)` FIRST, and the real shipped `Gate` constructor now does
+  // its OWN unconditional deep-copy of `rwx` before AddableGate's
+  // `disable.has("copy")` branch ever runs — so disabling the wrapper's
+  // redundant second copy has no observable effect any more. This is the
+  // same "the shipped fix is unconditional, so a POC-local disable switch
+  // can't reproduce the old hole" situation as case 12a above. Re-purposed
+  // to confirm exactly that: the base-class fix alone (with the wrapper's
+  // own copy explicitly disabled) is sufficient.
   const mutableTools3 = { read: "r" };
-  const brokenGate = new AddableGate(
+  const gateWithWrapperCopyDisabled = new AddableGate(
     { audit: { path: null }, humanChannel: async () => ({ decision: "deny" }), rwx: { agent: "fixer", agents: { fixer: "rw-" }, tools: mutableTools3, bash: {} } },
     { disable: new Set(["copy"]) },
   );
-  await brokenGate.init();
+  await gateWithWrapperCopyDisabled.init();
   mutableTools3.write = "w";
-  const brokenAfter = await brokenGate.check({ type: "write" });
-  const wentRed = brokenAfter.outcome === "allow"; // i.e. the hole reappears
-  console.log(`  [FALSIFY] with copy-at-construct disabled, the fixed case goes RED as expected: ${wentRed}`);
-  report("falsification: disabling the copy reproduces the hole (case would have gone red)", wentRed);
+  const stillDenied = await gateWithWrapperCopyDisabled.check({ type: "write" });
+  report(
+    "the base Gate's own copy-at-construct is sufficient on its own — still denied even with AddableGate's redundant wrapper-level copy disabled",
+    stillDenied.outcome === "deny" && stillDenied.rule === "rwx.unlisted",
+  );
 }
 
 // ===========================================================================
@@ -893,24 +905,29 @@ async function case12() {
     return { promise, resolve };
   }
 
-  // 12a. BASELINE (fix disabled via "race") — reproduces the hole: check()
-  // reads rwx.tools.probe at letter "r" (marker "loose", so it asks),
-  // starts awaiting humanChannel; while pending, add() tightens probe to
-  // "w" (still marker "loose", so the tighten itself is legal under
-  // decision 4); the human then says "allow" — and the STALE "r"-based
-  // permission still resolves the action to allow, even though the agent
-  // (researcher, holds "r--") no longer holds the NOW-required "w".
+  // 12a. UPDATE (post-0.18.0): this used to demonstrate the hole via
+  // AddableGate's OWN check() override with `disable: ["race"]` — but that
+  // disable flag only skips THIS POC WRAPPER's re-check; it can no longer
+  // reproduce the hole because the underlying `super.check()` it delegates
+  // to is now the REAL shipped `Gate.check()`, which closes the race
+  // internally and unconditionally (there is no equivalent disable switch
+  // in real code — a security fix isn't optional). So this case now
+  // exercises the real, plain `Gate` directly (not the POC's AddableGate
+  // subclass) and asserts the CLOSED behavior: check() reads
+  // rwx.tools.probe at letter "r" (marker "loose", so it asks), starts
+  // awaiting humanChannel; while pending, add() tightens probe to "w"
+  // (still marker "loose", so the tighten itself is legal under decision
+  // 4); the human then says "allow" — and the shipped Gate denies
+  // `rwx.tightened` rather than letting the stale "r"-based permission
+  // resolve to allow.
   {
     const human = deferred();
     const called = deferred();
     const humanChannel = async () => { called.resolve(); return human.promise; };
-    const gate = new AddableGate(
-      {
-        audit: { path: null }, humanChannel,
-        rwx: { agent: "researcher", agents: { researcher: "r--" }, tools: { probe: { letter: "r", marker: "loose" } }, bash: {}, askOn: "loose" },
-      },
-      { disable: new Set(["race"]) },
-    );
+    const gate = new Gate({
+      audit: { path: null }, humanChannel,
+      rwx: { agent: "researcher", agents: { researcher: "r--" }, tools: { probe: { letter: "r", marker: "loose" } }, bash: {}, askOn: "loose" },
+    });
     await gate.init();
     const checkPromise = gate.check({ type: "probe" });
     await called.promise; // deterministic: wait until humanChannel was actually invoked (ask raised)
@@ -918,8 +935,8 @@ async function case12() {
     human.resolve({ decision: "allow" });
     const result = await checkPromise;
     report(
-      "BASELINE HOLE: without the race fix, a key tightened mid-ask still resolves allow",
-      result.outcome === "allow",
+      "shipped Gate (0.18.0+, real gate.add()) closes the race — mid-ask tighten now denies rwx.tightened, not the stale allow",
+      result.outcome === "deny" && result.rule === "rwx.tightened",
       `outcome=${result.outcome} rule=${result.rule}`,
     );
   }

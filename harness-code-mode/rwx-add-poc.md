@@ -8,6 +8,66 @@ written for the earlier rwx POC. `src/`, `types/`, `test/`, `docs/`, `package.js
 Run: `node harness-code-mode/rwx-add-poc.mjs` — **82 PASS, 0 FAIL, exit 0.**
 `npm test` — **454/454 pass**, unaffected.
 
+## Post-build update (0.18.0 shipped in `src/`; this POC edited, off-limits lifted)
+
+`gate.add()`, the copy-at-construct fix, and the check()/add() race fix are now real,
+shipped code in `src/gate.js`/`src/primitives/rwx.js` — this POC was originally throwaway
+and off-limits to edit once that landed, but the orchestrator lifted that restriction for
+this specific cleanup: several of THIS POC's own "baseline hole" demonstrations stopped
+being reproducible once the real fixes shipped, because they were built to disable a
+switch on the POC's own `AddableGate` wrapper — a switch the shipped code has no
+equivalent of (a security fix isn't optional), and which the wrapper's `super()` call now
+runs INTO regardless of the wrapper's own local disable flags.
+
+Three cases were edited, all from "demonstrate the hole" to "confirm the shipped fix
+closes it," using the REAL `Gate` directly where that's now possible instead of the POC's
+`AddableGate` stand-in:
+
+1. **Case 1a** (copy-at-construct baseline): previously constructed a plain, unmodified
+   `Gate` and showed external mutation of the caller's `rwx.tools` object flipped a
+   decision (`deny -> allow`). Now asserts the shipped `Gate` (0.18.0+) is immune to the
+   same mutation — `write` stays denied `rwx.unlisted` before AND after.
+2. **Case 1's own falsification sub-block**: previously disabled `AddableGate`'s local
+   copy (`disable: ["copy"]`) and confirmed the hole reappeared, proving that wrapper-level
+   copy was load-bearing. It no longer can: `AddableGate`'s constructor calls `super()`
+   first, and the real `Gate` constructor now does its OWN unconditional deep-copy before
+   the wrapper's disabled branch ever runs. Re-purposed to confirm the opposite and equally
+   load-bearing fact: the BASE class's fix alone is sufficient — still denied even with the
+   wrapper's redundant copy explicitly turned off.
+3. **Case 12a** (check()/add() race baseline): previously used `AddableGate` with
+   `disable: ["race"]` to reproduce the stale-allow hole. Same problem: the wrapper's
+   `disable` flag only ever skipped the WRAPPER's own re-check; `super.check()` is the real
+   `Gate.check()`, which now closes the race unconditionally. Rewritten to use the real,
+   plain `Gate` directly and assert the closed outcome (`deny`, `rwx.tightened`) instead of
+   the old hole.
+
+Cases 12b (the fix, via `AddableGate`) and 12c (the per-key sanity case — an unrelated
+concurrent `add()` must not spuriously deny) needed **no edits** and now pass again for
+real: the orchestrator's review found and the real build fixed a genuine bug this POC's
+own escalated decision had introduced (see below) — the fix that made 12c pass again is
+in `src/gate.js`, not in this file.
+
+**Bug the orchestrator's review caught (not present in this POC's own design, introduced
+during the real build and then fixed there):** the first real-build pass of the
+check()/add() race fix gated re-validation on the gate's GLOBAL `_addGeneration` counter —
+ANY landed `add()`, anywhere in the tools map, forced a fresh `rwxCheck` on the CURRENTLY
+asked key. For a loose-marked entry under `askOn:"loose"`, a fresh check on an entry that
+itself never changed always comes back `askHuman` again (asking is what a loose marker
+does, unconditionally) — which was then denied as `rwx.tightened` even though nothing
+about that key changed. This is exactly case 12c's scenario, and 12c genuinely caught it:
+this POC's own decision 5 write-up (below) already got the safety property right — deny
+only when THIS key's own entry changed — but the real build's first pass implemented a
+coarser, global-generation version of it. Fixed by snapshotting the matched tools-map
+entry's own value (not just the generation counter) at the top of the loop, and only
+re-running `rwxCheck` when BOTH the generation changed AND this specific entry's value
+changed. A bash-map match is structurally exempt from this re-check entirely (`add()`
+never touches `rwx.bash`). Falsified in `test/rwx-add.test.js`: reverting to the
+global-generation rule turns exactly the new false-deny regression test red (1 failure,
+the legitimate-tighten test stays green); forcing the per-key comparison to always report
+"unchanged" turns exactly the legitimate-tighten test red (1 failure, the false-deny test
+stays green) — confirming the per-key check is load-bearing in both directions, not just
+one.
+
 ## Decisions applied this session (hamr, 2026-09-26)
 
 Five decisions closed the design forks the original POC pass had escalated. All five are
