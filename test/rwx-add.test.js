@@ -390,13 +390,19 @@ test("add/check race: a concurrent add() that tightens the MATCHED key past the 
   assert.ok(lines.some((l) => l.phase === "gate" && l.rule === "rwx.tightened" && l.decision === "deny"));
 });
 
-test("add/check race: a concurrent add() to an UNRELATED key during the wait also denies (conservative: any change during the wait re-validates, no silent stale-allow)", async () => {
-  // This is intentionally STRICTER than the POC's escalated decision (which
-  // let an unrelated concurrent add() ride the stale allow through, since
-  // letter sufficiency for the matched key hadn't regressed). The real
-  // build brief asked to close that gap: don't re-enter the ask path, and
-  // don't let ANY fresh outcome other than "allow" (deny OR askHuman) pass
-  // silently once something landed during the wait.
+test("add/check race: a concurrent add() to an UNRELATED key during the wait does NOT spuriously deny (per-key, not global-generation)", async () => {
+  // This is the corrected behavior after orchestrator review found a real
+  // bug: an earlier version of this fix gated purely on the global
+  // `_addGeneration` counter, so ANY landed add() — including one to a
+  // totally unrelated key, which is normal, constant traffic in the
+  // spec-less-site flow (a batch lands per unmatched request) — forced a
+  // fresh `rwxCheck` on THIS key. For a loose-marked entry under
+  // `askOn:"loose"`, a fresh check on an UNCHANGED entry always comes back
+  // "askHuman" again (asking is what a loose marker does, unconditionally),
+  // which the old code then denied as `rwx.tightened` even though nothing
+  // about "probe" changed. hamr's rule is "if it got STRICTER in the
+  // meantime, deny" — an unrelated add() is not stricter for this key, so
+  // the human's "allow" must stand.
   const asked = deferred();
   const human = deferred();
   const gate = gateFor(
@@ -409,8 +415,7 @@ test("add/check race: a concurrent add() to an UNRELATED key during the wait als
   await gate.add({ unrelated: "w" }); // unrelated key, but bumps the add-generation
   human.resolve({ decision: "allow" });
   const d = await checkPromise;
-  assert.equal(d.outcome, "deny");
-  assert.equal(d.rule, "rwx.tightened");
+  assert.equal(d.outcome, "allow", "an unrelated concurrent add() must not spuriously deny this key's already-answered ask");
 });
 
 test("add/check race: humanChannel is never called twice (no re-entering the ask path)", async () => {

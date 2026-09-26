@@ -668,28 +668,56 @@ export class Gate {
     const aid = randomUUID().slice(0, 8);
     const emit = (fields) => this.audit.emit({ aid, ...fields });
 
-    // §23.21 decision 5 — check()/add() race fix. rwx step 5 reads a letter
-    // and may then await a human decision (an `askOn:"loose"` ask, or any
-    // other ask/halt raised after the rwx read) for an unbounded time. If a
-    // `gate.add()` lands during that wait and tightens the very key this
-    // read matched, the human's eventual "allow" must not ride the stale
-    // read through. Called right before EITHER path that returns an allow
-    // AFTER awaiting `humanChannel` (the direct ask-allow branch, and the
-    // topup-on-ask-treated-as-allow branch) — never on the top-of-loop
-    // terminal allow, which has no human wait in between and so no race
-    // window. Gated on `this._addGeneration`: if nothing landed during the
-    // wait, this is a single integer compare, and an ordinary
-    // `askOn:"loose"` ask-then-allow stays byte-identical. If something DID
-    // land, re-runs the real `rwxCheck` fresh: a `"deny"` (the agent's held
-    // letters no longer cover the tightened entry) is the hole this exists
-    // to close. A fresh `"askHuman"` (e.g. the entry is still, or newly,
-    // marker "loose") is ALSO treated as unsafe here — the human answered a
-    // decision that may no longer reflect the current grant, and re-entering
-    // the ask path from inside this return branch is not a clean thing to
-    // do — so the conservative choice, same as a fresh deny, is to deny
-    // rather than silently let the stale approval stand.
-    const rwxTightenedCheck = async (genAtRead) => {
-      if (this.cfg.rwx == null || genAtRead === this._addGeneration) return null;
+    // §23.21 decision 5 — check()/add() race fix, PER-KEY (corrected after
+    // orchestrator review: an earlier version gated purely on the global
+    // `_addGeneration` counter, which meant an UNRELATED concurrent add() —
+    // normal, constant traffic in the spec-less-site flow, where a batch
+    // lands per unmatched request — spuriously denied every in-flight
+    // `askOn:"loose"` ask, since re-running `rwxCheck` on an unchanged
+    // loose-marked entry always comes back `askHuman` again regardless of
+    // whether anything about THAT key actually changed. hamr's rule is "if
+    // it got STRICTER in the meantime, deny" — an unrelated add is not
+    // stricter for this key, so it must not deny.
+    //
+    // rwx step 5 reads the matched tools-map entry and may then await a
+    // human decision (an `askOn:"loose"` ask, or any other ask/halt raised
+    // after the rwx read) for an unbounded time. Called right before EITHER
+    // path that returns an allow AFTER awaiting `humanChannel` (the direct
+    // ask-allow branch, and the topup-on-ask-treated-as-allow branch) —
+    // never on the top-of-loop terminal allow, which has no human wait in
+    // between and so no race window.
+    //
+    // Two independent gates, both must trip before re-evaluating anything:
+    // (1) `_addGeneration` changed at all (fast integer compare — the
+    // common case, nothing landed during the wait, costs nothing and an
+    // ordinary ask-then-allow stays byte-identical); (2) THIS action's own
+    // matched tools-map entry (bash-map matches are structurally exempt —
+    // `add()` only ever touches `rwx.tools`, never `rwx.bash`, so a bash
+    // action's entry can never have changed) is no longer identical to what
+    // it was at the top of this loop iteration. Only then is `rwxCheck`
+    // re-run fresh: a `"deny"` (the agent's held letters no longer cover the
+    // now-tighter entry) is the hole this exists to close. A fresh
+    // `"askHuman"` (e.g. the entry moved to a still/newly-loose marker) is
+    // ALSO treated as unsafe — the human answered a decision under terms
+    // that have since changed, and re-entering the ask path from inside this
+    // return branch is not a clean thing to do — so the conservative choice,
+    // same as a fresh deny, is to deny rather than silently let the stale
+    // approval stand.
+    const rwxToolsEntrySnapshot = (rwxCfg) => {
+      if (action?.type === "bash") return undefined; // add() never touches rwx.bash — always exempt
+      if (!isPlainObject(rwxCfg)) return null;
+      const toolsMap = isPlainObject(rwxCfg.tools) ? rwxCfg.tools : {};
+      if (!Object.prototype.hasOwnProperty.call(toolsMap, action?.type)) return null; // "absent"
+      // A JSON-stable string is enough to compare "did THIS key's raw value
+      // change at all" — the exact shape doesn't matter, only equality.
+      try { return JSON.stringify(toolsMap[action.type]); }
+      catch { return "[unserializable]"; }
+    };
+    const rwxTightenedCheck = async (genAtRead, entryAtRead) => {
+      if (this.cfg.rwx == null || entryAtRead === undefined) return null; // no rwx, or a bash-map match (exempt)
+      if (genAtRead === this._addGeneration) return null; // fast path: nothing landed during the wait at all
+      const entryNow = rwxToolsEntrySnapshot(this.cfg.rwx);
+      if (entryNow === entryAtRead) return null; // something landed, but not for THIS key — not stricter, not our business
       const fresh = rwxCheck(action, this.cfg.rwx);
       if (fresh.outcome === "allow") return null;
       const reason = `rwx entry for "${clipKey(action?.type)}" changed under a concurrent gate.add() while this check() awaited a human decision — re-evaluated as ${fresh.outcome} (${fresh.rule}${fresh.reason ? ": " + fresh.reason : ""})`;
@@ -707,6 +735,7 @@ export class Gate {
       // PRE-EVAL: halt, else the 6-step eval. `_stepEval` always returns a
       // terminal decision, so `??` makes `decision` provably non-null.
       const rwxGenAtRead = this._addGeneration;
+      const rwxEntryAtRead = this.cfg.rwx != null ? rwxToolsEntrySnapshot(this.cfg.rwx) : undefined;
       const decision = this._haltCheck() ?? await this._stepEval(action);
       // bash.classify (harness §7.1) may attach a severity tier; read it via a
       // widened view since not every decision shape carries these optionals.
@@ -889,7 +918,7 @@ export class Gate {
       });
 
       if (human.decision === "allow") {
-        const tightened = await rwxTightenedCheck(rwxGenAtRead);
+        const tightened = await rwxTightenedCheck(rwxGenAtRead, rwxEntryAtRead);
         if (tightened) return tightened;
         /** @type {import("./types.js").Decision} */
         const decided = { outcome: "allow", severity: "action", rule: "humanChannel.allow", reason: human.reason ?? null, aid };
@@ -919,7 +948,7 @@ export class Gate {
       if (human.decision === "topup") {
         if (decision.severity !== "halt") {
           // topup only meaningful for halt; for ask events, treat as allow.
-          const tightened = await rwxTightenedCheck(rwxGenAtRead);
+          const tightened = await rwxTightenedCheck(rwxGenAtRead, rwxEntryAtRead);
           if (tightened) return tightened;
           /** @type {import("./types.js").Decision} */
           const decided = { outcome: "allow", severity: "action", rule: "humanChannel.allow", reason: "topup-on-ask treated as allow", aid };
