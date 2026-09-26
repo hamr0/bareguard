@@ -465,10 +465,10 @@ test("add/check race: an add() landing during an await INSIDE _stepEval (before 
   const paused = deferred();
   const pausedEntered = deferred();
   const originalStepEval = gate._stepEval.bind(gate);
-  gate._stepEval = async (action) => {
+  gate._stepEval = async (action, raceSnapshot) => {
     pausedEntered.resolve();
     await paused.promise; // stand-in for spawnRateCheck's real I/O await, BEFORE rwx step 5 runs
-    return originalStepEval(action);
+    return originalStepEval(action, raceSnapshot); // forward the race-snapshot out-parameter, or step 5 can never overwrite it
   };
   const checkPromise = gate.check({ type: "probe", args: {} });
   await pausedEntered.promise; // check() is blocked inside _stepEval, before ANY rwx read has happened
@@ -477,6 +477,48 @@ test("add/check race: an add() landing during an await INSIDE _stepEval (before 
   const d = await checkPromise;
   assert.equal(d.outcome, "allow", "the ask was computed against the already-tightened entry and legitimately approved by the human — must not be denied as stale");
   assert.notEqual(d.rule, "rwx.tightened");
+});
+
+test("add/check race: an add() landing AFTER rwx step 5's read but BEFORE humanChannel dispatch (during check()'s own ask audit line) must deny — the ask was answered under OLD terms", async () => {
+  // Orchestrator-found safety hole in an earlier fix attempt: that version
+  // moved the race snapshot to immediately before dispatching to
+  // humanChannel, reasoning that was "the state as the ask was raised."
+  // That is backwards. The ask decision is computed at rwx step 5 — an
+  // `r--` agent asking about a "probe" tagged {r, loose} produces an
+  // askHuman for THAT decision. If add() tightens "probe" to {w, loose}
+  // AFTER step 5's read but BEFORE the human actually answers (here:
+  // during check()'s own "gate"/askHuman audit-line write, which happens
+  // between the step-5 read and the humanChannel dispatch), a
+  // dispatch-time snapshot would already see "w" as if that were the
+  // ORIGINAL value — comparing "w" now against "w" then finds no change
+  // and wrongly allows, even though the agent only ever held "r" and the
+  // human never actually approved a "w"-tagged action. Ported directly
+  // from the orchestrator's repro (gap.mjs).
+  const gate = new Gate({
+    audit: { path: null },
+    rwx: {
+      agent: "researcher", agents: { researcher: "r--" },
+      tools: { probe: { letter: "r", marker: "loose" } }, askOn: "loose",
+    },
+    humanChannel: async () => ({ decision: "allow" }),
+  });
+  await gate.init();
+  const originalEmit = gate.audit.emit.bind(gate.audit);
+  let fired = false;
+  gate.audit.emit = async (line) => {
+    // check() writes its "gate"/askHuman audit line (computed from step 5's
+    // read) BEFORE calling humanChannel — tighten the entry right then,
+    // between the read and the dispatch.
+    if (!fired && line.phase !== "rwx.added" && line.action?.type === "probe") {
+      fired = true;
+      await gate.add({ probe: { letter: "w", marker: "loose" } });
+    }
+    return originalEmit(line);
+  };
+  const d = await gate.check({ type: "probe", args: {} });
+  assert.equal(gate.cfg.rwx.tools.probe.letter, "w", "sanity: the tighten did land");
+  assert.equal(d.outcome, "deny", "the human approved the OLD (r) decision, not the new w-tagged one — must not be allowed");
+  assert.equal(d.rule, "rwx.tightened");
 });
 
 // ─── 1. audit write failure mid-add() ─────────────────────────────────────

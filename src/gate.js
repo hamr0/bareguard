@@ -283,6 +283,32 @@ function attemptedRwxKeys(entries) {
 }
 
 /**
+ * §23.21 decision 5 (check()/add() race fix) — a JSON-stable snapshot of the
+ * ONE tools-map entry a given action would match, or a sentinel for "not
+ * applicable": `undefined` for a `bash` action (`add()` only ever touches
+ * `rwx.tools`, never `rwx.bash`, so a bash action's match can never have
+ * changed — structurally exempt) or when `rwxCfg` isn't usable; `null` for
+ * an action type absent from the tools map ("unlisted"). Module-level (not
+ * a `check()`-local closure) so it can be called from BOTH `check()` (the
+ * default, top-of-iteration baseline) and `_stepEval` (the precise,
+ * same-tick overwrite taken exactly when step 5 reads the map) — see
+ * `check()`'s race-snapshot comment for why both call sites exist.
+ * @param {*} rwxCfg `cfg.rwx`
+ * @param {object} action the action being evaluated
+ * @returns {string|null|undefined}
+ */
+function rwxToolsEntrySnapshot(rwxCfg, action) {
+  if (action?.type === "bash") return undefined;
+  if (!isPlainObject(rwxCfg)) return null;
+  const toolsMap = isPlainObject(rwxCfg.tools) ? rwxCfg.tools : {};
+  if (!Object.prototype.hasOwnProperty.call(toolsMap, action?.type)) return null; // "absent"
+  // A JSON-stable string is enough to compare "did THIS key's raw value
+  // change at all" — the exact shape doesn't matter, only equality.
+  try { return JSON.stringify(toolsMap[action.type]); }
+  catch { return "[unserializable]"; }
+}
+
+/**
  * The single chokepoint every agent action passes through. Construct once per
  * run, `await gate.init()`, then call {@link Gate#check} / {@link Gate#record}
  * (or {@link Gate#run}) for each action. Runs PRE-EVAL halt checks then the
@@ -579,7 +605,21 @@ export class Gate {
   }
 
   // STEP 1-6 (PRD v0.5 §3). First terminal wins.
-  async _stepEval(action) {
+  /**
+   * @param {object} action
+   * @param {{gen:number, entry:(string|null|undefined)}} [raceSnapshot]
+   *   §23.21 decision 5 out-parameter, mutated in place. `check()` seeds it
+   *   with a default (the top-of-iteration generation + entry, used as-is
+   *   when step 5 below never runs — an earlier step already denied/asked).
+   *   If step 5 DOES run, it overwrites both fields with a read taken in the
+   *   exact same synchronous tick as `rwxCheck` itself — more precise than
+   *   the default, because steps 3/3b (`deferRateCheck`/`spawnRateCheck`)
+   *   can await real I/O before step 5 is ever reached, during which a
+   *   concurrent `add()` could otherwise land unnoticed. A plain per-call
+   *   object, not shared instance state — `check()` calls can run
+   *   concurrently for different actions.
+   */
+  async _stepEval(action, raceSnapshot) {
     const t = this.cfg.tools;
     const c = this.cfg.content;
 
@@ -629,8 +669,23 @@ export class Gate {
 
     // 5. rwx mode (§23.5) OR tools.allowlist enforcement — mutually exclusive
     // (construct-time throw enforces exactly one), same eval-order slot.
-    const d5 = this.cfg.rwx != null ? rwxCheck(action, this.cfg.rwx) : toolsAllowlistCheck(action, t);
-    if (d5) return d5;
+    if (this.cfg.rwx != null) {
+      // §23.21 decision 5: overwrite the race snapshot HERE, synchronously,
+      // in the exact same tick `rwxCheck` reads the map — no await between
+      // this line and the read. This is what the ask decision below is
+      // actually computed from; a snapshot taken any earlier (even one
+      // statement earlier, if something above it had awaited) or any later
+      // could disagree with what `rwxCheck` itself just saw.
+      if (raceSnapshot) {
+        raceSnapshot.gen = this._addGeneration;
+        raceSnapshot.entry = rwxToolsEntrySnapshot(this.cfg.rwx, action);
+      }
+      const d5 = rwxCheck(action, this.cfg.rwx);
+      if (d5) return d5;
+    } else {
+      const d5 = toolsAllowlistCheck(action, t);
+      if (d5) return d5;
+    }
 
     // 6. default → allow
     return { outcome: "allow", severity: "action", rule: "default", reason: null };
@@ -689,59 +744,63 @@ export class Gate {
     const aid = randomUUID().slice(0, 8);
     const emit = (fields) => this.audit.emit({ aid, ...fields });
 
-    // §23.21 decision 5 — check()/add() race fix, PER-KEY (corrected after
-    // orchestrator review: an earlier version gated purely on the global
-    // `_addGeneration` counter, which meant an UNRELATED concurrent add() —
-    // normal, constant traffic in the spec-less-site flow, where a batch
-    // lands per unmatched request — spuriously denied every in-flight
-    // `askOn:"loose"` ask, since re-running `rwxCheck` on an unchanged
-    // loose-marked entry always comes back `askHuman` again regardless of
-    // whether anything about THAT key actually changed. hamr's rule is "if
-    // it got STRICTER in the meantime, deny" — an unrelated add is not
-    // stricter for this key, so it must not deny.
+    // §23.21 decision 5 — check()/add() race fix, PER-KEY (twice-corrected:
+    // once from a global-generation false-deny, once from a snapshot-timing
+    // safety hole — see the two corrections below).
     //
-    // rwx step 5 reads the matched tools-map entry and may then await a
-    // human decision (an `askOn:"loose"` ask, or any other ask/halt raised
-    // after the rwx read) for an unbounded time. Called right before EITHER
-    // path that returns an allow AFTER awaiting `humanChannel` (the direct
-    // ask-allow branch, and the topup-on-ask-treated-as-allow branch) —
-    // never on the top-of-loop terminal allow, which has no human wait in
-    // between and so no race window.
+    // rwx step 5 reads the matched tools-map entry, and the resulting ask
+    // decision is COMPUTED from that exact read. `check()` may then await a
+    // human decision for an unbounded time; the human's eventual "allow"
+    // approves the decision AS COMPUTED, so it must not be honored if the
+    // entry has since changed underneath — at ANY point between that read
+    // and honoring the allow, not only during the human wait itself.
     //
-    // Two independent gates, both must trip before re-evaluating anything:
-    // (1) `_addGeneration` changed at all (fast integer compare — the
-    // common case, nothing landed during the wait, costs nothing and an
-    // ordinary ask-then-allow stays byte-identical); (2) THIS action's own
-    // matched tools-map entry (bash-map matches are structurally exempt —
-    // `add()` only ever touches `rwx.tools`, never `rwx.bash`, so a bash
-    // action's entry can never have changed) is no longer identical to what
-    // it was at the top of this loop iteration. Only then is `rwxCheck`
-    // re-run fresh: a `"deny"` (the agent's held letters no longer cover the
-    // now-tighter entry) is the hole this exists to close. A fresh
-    // `"askHuman"` (e.g. the entry moved to a still/newly-loose marker) is
-    // ALSO treated as unsafe — the human answered a decision under terms
-    // that have since changed, and re-entering the ask path from inside this
-    // return branch is not a clean thing to do — so the conservative choice,
-    // same as a fresh deny, is to deny rather than silently let the stale
-    // approval stand.
-    const rwxToolsEntrySnapshot = (rwxCfg) => {
-      if (action?.type === "bash") return undefined; // add() never touches rwx.bash — always exempt
-      if (!isPlainObject(rwxCfg)) return null;
-      const toolsMap = isPlainObject(rwxCfg.tools) ? rwxCfg.tools : {};
-      if (!Object.prototype.hasOwnProperty.call(toolsMap, action?.type)) return null; // "absent"
-      // A JSON-stable string is enough to compare "did THIS key's raw value
-      // change at all" — the exact shape doesn't matter, only equality.
-      try { return JSON.stringify(toolsMap[action.type]); }
-      catch { return "[unserializable]"; }
-    };
-    const rwxTightenedCheck = async (genAtRead, entryAtRead) => {
-      if (this.cfg.rwx == null || entryAtRead === undefined) return null; // no rwx, or a bash-map match (exempt)
-      if (genAtRead === this._addGeneration) return null; // fast path: nothing landed during the wait at all
-      const entryNow = rwxToolsEntrySnapshot(this.cfg.rwx);
-      if (entryNow === entryAtRead) return null; // something landed, but not for THIS key — not stricter, not our business
+    // Correction 1 (global vs per-key): an earlier version gated purely on
+    // the global `_addGeneration` counter, so an UNRELATED concurrent
+    // add() — normal, constant traffic in the spec-less-site flow, one
+    // add() per unmatched request — spuriously denied every in-flight
+    // `askOn:"loose"` ask (a fresh check on an unchanged loose-marked entry
+    // always comes back `askHuman` again, regardless of whether anything
+    // about THAT key changed). Fixed by comparing the matched entry's own
+    // value, not just the generation counter.
+    //
+    // Correction 2 (snapshot timing — a real safety hole, found after
+    // correction 1 shipped): the per-key snapshot was first taken right
+    // before dispatching to `humanChannel`, reasoning that this was "the
+    // state as the ask was raised." That is WRONG: the ask decision is
+    // computed at rwx's step 5, inside `_stepEval` — and `_stepEval` can
+    // itself await real I/O (`deferRateCheck`/`spawnRateCheck`) before
+    // reaching step 5, AND `check()` awaits more (its own "gate"/"halt"
+    // audit lines, `haltContext()`) AFTER `_stepEval` returns but BEFORE
+    // dispatching to `humanChannel`. A concurrent `add()` landing during
+    // ANY of those awaits — including the ones between step 5's read and
+    // the dispatch — already changed the entry by the time a
+    // dispatch-time snapshot ran, so the snapshot silently absorbed the
+    // tighten as if it were the ORIGINAL state, and the post-approval
+    // compare saw "no change" and wrongly allowed (reproduced: an `r--`
+    // agent got a `w`-tagged action allowed). The ONLY correct reference
+    // point is the exact synchronous tick `rwxCheck` reads the map inside
+    // `_stepEval`'s step 5 — see `_stepEval`'s own `raceSnapshot`
+    // parameter, mutated in place there, with no await between that write
+    // and the read it describes. When step 5 does not run this iteration
+    // (an earlier step already denied/asked, e.g. `flags`/`content`), there
+    // is no true rwx "read" moment to anchor to; the conservative fallback
+    // — seeded below, before `_stepEval` is even called — is the state at
+    // the very start of this iteration, so a change any time from there
+    // through approval is still caught (this is what keeps the
+    // marker-only-change-via-an-unrelated-ask case, §23.21's own "if it got
+    // stricter, deny" rule, denying correctly).
+    //
+    // A fresh per-call object, never shared instance state — `check()`
+    // calls can run concurrently for different actions.
+    const rwxTightenedCheck = async (raceSnapshot) => {
+      if (this.cfg.rwx == null || raceSnapshot.entry === undefined) return null; // no rwx, or a bash-map match (exempt)
+      if (raceSnapshot.gen === this._addGeneration) return null; // fast path: nothing landed during the whole eval+wait window
+      const entryNow = rwxToolsEntrySnapshot(this.cfg.rwx, action);
+      if (entryNow === raceSnapshot.entry) return null; // something landed, but not for THIS key — not stricter, not our business
       const fresh = rwxCheck(action, this.cfg.rwx);
       if (fresh.outcome === "allow") return null;
-      const reason = `rwx entry for "${clipKey(action?.type)}" changed under a concurrent gate.add() while this check() awaited a human decision — re-evaluated as ${fresh.outcome} (${fresh.rule}${fresh.reason ? ": " + fresh.reason : ""})`;
+      const reason = `rwx entry for "${clipKey(action?.type)}" changed under a concurrent gate.add() before this check()'s decision was honored — re-evaluated as ${fresh.outcome} (${fresh.rule}${fresh.reason ? ": " + fresh.reason : ""})`;
       await emit({
         phase: "gate", action,
         decision: "deny", severity: "action", rule: "rwx.tightened", reason,
@@ -753,9 +812,18 @@ export class Gate {
 
     let iterations = 0;
     while (true) {
+      // Default/fallback race snapshot for this iteration — the state at
+      // the very start, before `_stepEval` runs. `_stepEval`'s step 5 (if
+      // it runs this iteration) OVERWRITES both fields with a precise,
+      // same-tick read; if step 5 does NOT run, this fallback is what
+      // `rwxTightenedCheck` compares against — see the long comment above.
+      const raceSnapshot = {
+        gen: this._addGeneration,
+        entry: this.cfg.rwx != null ? rwxToolsEntrySnapshot(this.cfg.rwx, action) : undefined,
+      };
       // PRE-EVAL: halt, else the 6-step eval. `_stepEval` always returns a
       // terminal decision, so `??` makes `decision` provably non-null.
-      const decision = this._haltCheck() ?? await this._stepEval(action);
+      const decision = this._haltCheck() ?? await this._stepEval(action, raceSnapshot);
       // bash.classify (harness §7.1) may attach a severity tier; read it via a
       // widened view since not every decision shape carries these optionals.
       const cls = /** @type {{classification?: ("destructive"|"super_destructive"), tier?: (2|3)}} */ (decision);
@@ -894,26 +962,6 @@ export class Gate {
         if (surfacing.length) event.annotations = surfacing.map((a) => ({ ...a }));
       }
 
-      // §23.21 decision 5 (corrected): the race snapshot is taken HERE — the
-      // last synchronous point before the human wait actually begins — not
-      // before `_stepEval` was called. `_stepEval` itself can await real I/O
-      // ahead of rwx's own step 5 (`deferRateCheck`/`spawnRateCheck`), and so
-      // can the audit lines emitted just above (the "gate"/"halt" lines) and
-      // `haltContext()`. A snapshot taken before any of that reflects state
-      // from BEFORE the ask was even computed, not state "as the ask was
-      // asked" — comparing against it produces a false "changed" whenever an
-      // add() happened to land during one of THOSE awaits rather than during
-      // the human wait itself (reproduced: a spawnRateCheck read racing a
-      // concurrent add() made the ask itself get computed against the
-      // ALREADY-tightened entry, which the human then legitimately approved,
-      // but the stale earlier snapshot still disagreed and forced a false
-      // `rwx.tightened` deny). Snapshotting immediately before dispatch means
-      // "the entry as it stood when this exact ask was raised" is always the
-      // baseline, regardless of what `_stepEval` or the audit lines above
-      // needed to await to get here.
-      const rwxGenAtRead = this._addGeneration;
-      const rwxEntryAtRead = this.cfg.rwx != null ? rwxToolsEntrySnapshot(this.cfg.rwx) : undefined;
-
       let response;
       try {
         const channelPromise = this.humanChannel(event);
@@ -957,7 +1005,7 @@ export class Gate {
       });
 
       if (human.decision === "allow") {
-        const tightened = await rwxTightenedCheck(rwxGenAtRead, rwxEntryAtRead);
+        const tightened = await rwxTightenedCheck(raceSnapshot);
         if (tightened) return tightened;
         /** @type {import("./types.js").Decision} */
         const decided = { outcome: "allow", severity: "action", rule: "humanChannel.allow", reason: human.reason ?? null, aid };
@@ -987,7 +1035,7 @@ export class Gate {
       if (human.decision === "topup") {
         if (decision.severity !== "halt") {
           // topup only meaningful for halt; for ask events, treat as allow.
-          const tightened = await rwxTightenedCheck(rwxGenAtRead, rwxEntryAtRead);
+          const tightened = await rwxTightenedCheck(raceSnapshot);
           if (tightened) return tightened;
           /** @type {import("./types.js").Decision} */
           const decided = { outcome: "allow", severity: "action", rule: "humanChannel.allow", reason: "topup-on-ask treated as allow", aid };
