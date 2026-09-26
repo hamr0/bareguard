@@ -1015,13 +1015,22 @@ export class Gate {
         if (this.humanChannelTimeoutMs != null && this.humanChannelTimeoutMs > 0) {
           const timeoutMs = this.humanChannelTimeoutMs;
           const TIMEOUT = Symbol("humanChannelTimeout");
+          // Deliberately NOT unref'd: the timer firing is the only way this
+          // promise (and therefore check()) can ever resolve when humanChannel
+          // never settles, so it must keep the event loop alive while the
+          // human decision is pending. It is always cleared below once the
+          // race settles (answer, timeout, or throw), so a finished check()
+          // never holds the process open for the remainder of timeoutMs.
           let timer;
           const timeoutPromise = new Promise((resolve) => {
             timer = setTimeout(() => resolve(TIMEOUT), timeoutMs);
-            if (typeof timer.unref === "function") timer.unref();
           });
-          const raced = await Promise.race([channelPromise, timeoutPromise]);
-          clearTimeout(timer);
+          let raced;
+          try {
+            raced = await Promise.race([channelPromise, timeoutPromise]);
+          } finally {
+            clearTimeout(timer);
+          }
           if (raced === TIMEOUT) {
             const reason = `humanChannel timeout after ${this.humanChannelTimeoutMs}ms`;
             return this._commitDecision(
