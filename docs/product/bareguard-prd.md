@@ -1387,18 +1387,34 @@ narrow, tighten-only operation.
   silent-reject mode.
 - **The gate copies the rwx config at construct** and `add()` mutates that private copy — this
   also closes today's live link to the caller's object.
-- **check()/add() race, closed.** `check()` reads the matched entry's letter and may then
-  await a human decision (an `askOn:"loose"` ask, or any other ask/halt) for an unbounded
-  time. If an `add()` lands during that wait, the human's eventual "allow" must not ride the
-  stale read through: `check()` re-checks the CURRENT entry immediately before returning allow
-  (any await after the rwx read), gated on a per-gate add-generation counter so the common case
-  — no concurrent `add()` — costs one integer compare and is byte-identical. **Built stricter
-  than this bullet's original wording** (a real gap the build closed, not just the letter-rank
-  one): once something DID land during the wait, ANY fresh outcome other than `"allow"` —
-  a hard `"deny"` (the letter no longer covers the tightened entry) OR a still/newly-`"askHuman"`
-  outcome (e.g. the entry is still marker `"loose"`) — is denied, new rule `rwx.tightened`
-  (audited). The build does not re-enter the ask path from inside this return branch, so a
-  fresh `askHuman` is treated the same conservative way as a fresh deny, not passed through.
+- **check()/add() race, closed — PER-KEY, corrected after an orchestrator review caught a
+  real bug in the first build pass.** `check()` reads the matched entry's letter and may
+  then await a human decision (an `askOn:"loose"` ask, or any other ask/halt) for an
+  unbounded time. If an `add()` lands during that wait, the human's eventual "allow" must
+  not ride a since-tightened, stale read through — but the check that closes this must be
+  scoped to THIS action's own matched entry, not to "did any `add()` land anywhere." The
+  first build pass gated re-validation purely on a global per-gate add-generation counter:
+  ANY landed `add()` — including one to a totally unrelated key, which is normal, constant
+  traffic in the spec-less-site flow (§23.21's own "one add() per unmatched request") —
+  forced a fresh `rwxCheck` on the currently-asked key. For a loose-marked entry under
+  `askOn:"loose"`, a fresh check on an entry that itself never changed always comes back
+  `askHuman` again (asking is what a loose marker does, unconditionally), and the first
+  pass then denied that as `rwx.tightened` — a false positive with no security value, since
+  nothing about the asked key had gotten stricter. hamr's rule is "if it got STRICTER in
+  the meantime, deny"; an unrelated `add()` is not stricter for this key.
+  **Fixed, per-key:** `check()` snapshots the matched tools-map entry's own raw value (not
+  just the generation counter) at the top of the loop. Two gates, both must trip: (1) the
+  add-generation counter changed at all (fast integer compare — the common case, nothing
+  landed, costs nothing and stays byte-identical); (2) THIS action's own matched entry is
+  no longer identical to what it was at the top of the iteration (a bash-map match is
+  structurally exempt — `add()` only ever touches `rwx.tools`, never `rwx.bash`). Only when
+  BOTH trip is `rwxCheck` re-run fresh: a hard `"deny"` (the letter no longer covers the
+  now-tighter entry) or a fresh `"askHuman"` (e.g. the entry moved to a still/newly-loose
+  marker) both deny, new rule `rwx.tightened` (audited) — the build does not re-enter the
+  ask path from inside this return branch, so a fresh `askHuman` for a key that genuinely
+  DID change is treated the same conservative way as a fresh deny. An unrelated concurrent
+  `add()` — the false positive the first pass produced — now correctly leaves the human's
+  "allow" standing.
 - Callable from harness code only. Holds structurally: the agent only sends actions and never
   holds gate methods.
 - **Built:** §23.3 ("Never written to at runtime") and §23.4 ("edits the file later, not
