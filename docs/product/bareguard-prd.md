@@ -1027,8 +1027,9 @@ no `rwx` config, behavior is byte-identical to today. (bareguard-prd.md:1018-102
 
 Three maps. bareguard ships a **starter file** derived from what it already curates (built-in
 action types + common read/write commands), clearly marked as the shipped list; the operator
-copies and edits it. Never written to at runtime. (Planned 0.18.0: the harness may `add()` to
-the gate's in-memory copy, tighten-only — §23.21.)
+copies and edits it. **The committed file is never written to at runtime; since 0.18.0 a
+harness may `gate.add()` to the gate's own in-memory copy of the tools map, tighten-only — never
+the committed file itself (§23.21).**
 
 The snippet below is illustrative and abbreviated — it is **not** kept row-for-row in sync with
 the shipped file. The shipped `bareguard.rwx.json` (repo root) is the source of truth; read its
@@ -1060,8 +1061,10 @@ An **unlisted tool**, **unlisted command**, or **unlisted agent** is denied — 
 never guessed. An unlisted agent gets `---`: it starts, but every action denies. The deny is a
 structured in-band refusal that names the fix: `policy_denied rwx.unlisted: "npm run build" is
 not in the rwx tools map — an operator must add it to bareguard.rwx.json as r, w or x`. The
-operator edits the file later, calmly, not mid-run. (Planned 0.18.0: a harness may `add()` rows
-mid-run for spec-less sites, tighten-only — §23.21.) (bareguard-prd.md:1057-1064)
+operator edits the **committed file** later, calmly, not mid-run. **Since 0.18.0, a harness may
+separately `gate.add()` rows mid-run into the gate's own in-memory tools map for spec-less sites
+the operator never listed — tighten-only, never a write to the committed file (§23.21).**
+(bareguard-prd.md:1057-1064)
 
 ### 23.5 Enforcement — two places, both required
 
@@ -1327,9 +1330,10 @@ committed or reviewed, tighten-only; the no-dependency half of this boundary is 
 §23.21.)
 (bareguard-prd.md:1270-1326)
 
-### 23.21 Runtime `add()` for spec-less sites (PLANNED 0.18.0 — hamr, 2026-09-25; settled with rwxmap)
+### 23.21 Runtime `add()` for spec-less sites (BUILT 0.18.0 — hamr, 2026-09-25/26; settled with rwxmap)
 
-**Not built. 0.17.0 ships without it.** Written down here so the agreed shape is not lost.
+**Built in `src/` this session (Unreleased, see CHANGELOG.md).** Not yet published as a version
+bump — release is a separate decision.
 
 **Why.** An agent that visits websites (e.g. a flight-search agent) meets sites the operator
 never listed. The harness — never the agent — fetches each site's API spec and runs rwxmap
@@ -1385,20 +1389,24 @@ narrow, tighten-only operation.
   also closes today's live link to the caller's object.
 - **check()/add() race, closed.** `check()` reads the matched entry's letter and may then
   await a human decision (an `askOn:"loose"` ask, or any other ask/halt) for an unbounded
-  time. If an `add()` lands during that wait and tightens the SAME key such that the agent's
-  held letters no longer cover it, the human's eventual "allow" must not ride the stale read
-  through: `check()` re-reads the current entry immediately before returning allow (any
-  await after the rwx read), and if the action would now be denied, returns deny instead, new
-  rule `rwx.tightened` (audited). A concurrent `add()` that leaves the matched key's letter
-  sufficiency unchanged (including one that still asks under `askOn:"loose"`) does not
-  trigger this — only a fresh denial does.
+  time. If an `add()` lands during that wait, the human's eventual "allow" must not ride the
+  stale read through: `check()` re-checks the CURRENT entry immediately before returning allow
+  (any await after the rwx read), gated on a per-gate add-generation counter so the common case
+  — no concurrent `add()` — costs one integer compare and is byte-identical. **Built stricter
+  than this bullet's original wording** (a real gap the build closed, not just the letter-rank
+  one): once something DID land during the wait, ANY fresh outcome other than `"allow"` —
+  a hard `"deny"` (the letter no longer covers the tightened entry) OR a still/newly-`"askHuman"`
+  outcome (e.g. the entry is still marker `"loose"`) — is denied, new rule `rwx.tightened`
+  (audited). The build does not re-enter the ask path from inside this return branch, so a
+  fresh `askHuman` is treated the same conservative way as a fresh deny, not passed through.
 - Callable from harness code only. Holds structurally: the agent only sends actions and never
   holds gate methods.
-- When built, §23.3 ("Never written to at runtime") and §23.4 ("edits the file later, not
-  mid-run") change to: **the committed file is never written at runtime; the harness may
-  `add()` to the gate's in-memory map, tighten-only.**
+- **Built:** §23.3 ("Never written to at runtime") and §23.4 ("edits the file later, not
+  mid-run") now read: **the committed file is never written at runtime; the harness may
+  `gate.add()` to the gate's in-memory map, tighten-only.**
 
-**Settled (hamr, 2026-09-26), on top of the shape above — still PLANNED, not built:**
+**Settled (hamr, 2026-09-26), on top of the shape above — built as described, with one further
+sharpening on item 5 below (see the check()/add() race bullet above):**
 
 1. **Cap enforcement is add()-only.** No gate-wide poisoned-past-cap state; `add()` refusing
    before landing a batch is the entire fail-closed behavior.
@@ -1430,13 +1438,18 @@ narrow, tighten-only operation.
   `type` to that key (bareguard's own raw-fetch convention, `fetch.get`/`fetch.post`, carries
   the URL in a field, not the type).
 
-**Known property of spec-less sites (accepted, state it in the docs when built):** in
+**Known property of spec-less sites (accepted; stated here now that `gate.add()` is built):** in
 per-request mode the agent chooses the method and URL that `classifyRow` sees, and every GET
 floors to `r`. So an `r--` agent can reach any GET. The only case that slips is a site whose
 GETs change state — the same GET-floor leak already accepted under "we take rwxmap's letter."
 rwxmap measured the cost of losing the spec as exactness only: on its unseen 4279-row exam,
 too-loose stays 0.8% for full spec, method+path, and method alone; exact goes 82.3% → 81.9% →
 81.1%, all of the difference in the too-tight direction (rwxmap's numbers, not re-derived here).
+bareguard itself never runs `classifyRow` or sees a spec — this property lives entirely on the
+harness/rwxmap side of the boundary (§23.20); it is recorded here only so the same "GET floors
+to r" leak already accepted for the committed-file case is not mistaken for something new.
 
 **On ship:** `gate.add`, the `rwx.added` phase, the `rwx.add_rejected` phase, the `rwx.tightened`
-deny rule, and the 10,000-entry size cap all join the 1.0 SemVer surface (§23.17).
+deny rule, and the 10,000-entry size cap all join the 1.0 SemVer surface (§23.17). Built this
+session on `main`'s `feat/rwx-add` branch; not yet released as a version bump (release is a
+separate decision, per this project's own standing rule).

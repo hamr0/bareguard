@@ -3,6 +3,27 @@
 All notable changes to bareguard are documented here. Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [SemVer](https://semver.org/).
 
 
+## [Unreleased]
+
+### Added
+
+- **`gate.add(entries)` — runtime, tighten-only growth of the rwx tools map for spec-less sites (PRD §23.21).** For a harness that meets a site the operator never listed and never reviewed (no `bareguard.rwx.json` row), `add()` grows a running gate's tools map in memory, one narrow operation: `await gate.add({ key: "r"|"w"|"x" | { letter, marker } })`, same shapes `rwx.tools` accepts at construct time. **The committed `bareguard.rwx.json` file is never written to at runtime** — `add()` only ever mutates the gate's own private, construct-time-copied map.
+
+  **Tighten-only, both axes, against any key already present (a hand-written one included).** The letter can only rise (`r` < `w` < `x`) — a loosen throws and lands nothing. The marker can only stay at `"loose"` or leave it in the SAFE direction: a `"loose"`-marked entry can never move to `"tight"`/`"settled"`, and never to a bare letter string either (a bare letter normalizes to `marker: null`, a state distinct from `"loose"`) — only another `"loose"` entry is accepted. `"tight"` <-> `"settled"` moves are unrestricted (neither ever asks).
+
+  **Tools map only; delta-validated; all-or-nothing; capped.** Only `rwx.tools` is reachable — `bash`, `agents`, and the agent's own grant never move. Each entry is validated exactly as at construct time (the real `assertRwxConfig`), but over the batch's own entries only, so `add()`'s cost is independent of the existing map's size. The whole batch lands or none of it does. A batch that would push `rwx.tools` past **10,000** keys refuses outright (landing exactly at 10,000 is fine).
+
+  **Audited both ways.** Every landed key writes one `rwx.added` line (`key`, `letter`, `marker`). Every rejected batch — bad shape, a tighten-only violation, or over the cap — writes one `rwx.add_rejected` line (`reason`, the batch's attempted keys) before throwing; this is the only behavior, not an opt-in.
+
+  **Hardened like every other agent-reachable entry point.** `entries` is read via the same own-props-only, hostile-getter-safe copy the rest of the gate uses (every value read exactly once — no TOCTOU between validating and storing a hostile getter's value); a `__proto__`/`constructor`/`prototype` key is rejected outright. A gate with no `rwx` config at all rejects every `add()` (nothing to tighten against).
+
+  **`check()`/`add()` race, closed.** rwx's step-5 read may be followed by an unbounded wait for a human decision (an `askOn:"loose"` ask, or any other ask/halt). If an `add()` lands during that wait, `check()` re-validates the matched entry fresh, immediately before returning the human's "allow" — a stale approval never rides through. Gated on a per-gate add-generation counter, so the common case (no concurrent `add()`) is a single integer compare and an ordinary `askOn:"loose"` ask-then-allow stays byte-identical. Once something DID land during the wait, any fresh outcome other than `"allow"` — a hard `"deny"` or a still/newly-`"askHuman"` outcome — denies, new rule `rwx.tightened` (audited); the fix does not re-enter the ask path.
+
+  **The gate copies `rwx` at construct time now (deep, decoupled).** Closes a pre-existing hole where mutating the caller's own `rwx`/`rwx.tools`/etc. object *after* constructing a `Gate` could flip a running gate's decisions (every eval step reads the config by reference). Every other config section is still held by reference, unaffected.
+
+  **On ship, joins the 1.0 SemVer surface (PRD §23.17):** `gate.add`, the `rwx.added` phase, the `rwx.add_rejected` phase, the `rwx.tightened` deny rule, and the 10,000-entry tools-map cap.
+
+
 ## [0.17.0] - 2026-09-25
 
 ### Added

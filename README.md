@@ -142,7 +142,7 @@ const gate = new Gate({
 });
 ```
 
-An unlisted tool, command, or agent is **denied, never asked** (`rwx.unlisted`) — the fix is to add a row, not to widen a letter. A starter file ships at [`bareguard.rwx.json`](bareguard.rwx.json): copy it, edit the `agents` map for your fleet, and pass the parsed object in — bareguard never loads the file itself. Full spec (eval-order slot, bash quoting rules, delegation clamp, audit fields, count caps): **[`bareguard.context.md`](bareguard.context.md#rwx-mode-operator-tagged-capability-letters-23)**, PRD [§23](docs/product/bareguard-prd.md).
+An unlisted tool, command, or agent is **denied, never asked** (`rwx.unlisted`) — the fix is to add a row, not to widen a letter. A starter file ships at [`bareguard.rwx.json`](bareguard.rwx.json): copy it, edit the `agents` map for your fleet, and pass the parsed object in — bareguard never loads the file itself. The committed file is never written to at runtime; for spec-less sites a harness can call `await gate.add({ key: "r" | { letter, marker } })` mid-run to tighten the gate's own in-memory tools map — new keys, or an existing key's letter/marker moving stricter only, all-or-nothing, capped at 10,000 entries, audited either way (`rwx.added` / `rwx.add_rejected`). Full spec (eval-order slot, bash quoting rules, delegation clamp, audit fields, count caps, `gate.add()`): **[`bareguard.context.md`](bareguard.context.md#rwx-mode-operator-tagged-capability-letters-23)**, PRD [§23](docs/product/bareguard-prd.md).
 
 ## Axis B — reconcile the return (facts, never spin)
 
