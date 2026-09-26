@@ -532,6 +532,14 @@ export class Gate {
     this.humanChannelTimeoutMs = config.humanChannelTimeoutMs ?? null;
     this.terminated = false;
     this._initialized = false;
+    // Memoized in-flight init() promise: two concurrent first callers (e.g.
+    // two `check()`s racing on the `!this._initialized` guard) must share
+    // ONE init run, not each kick off their own audit.init()/budget.init()
+    // (the latter's cold-start rebuild reads the whole audit log and writes
+    // the shared budget file — two concurrent runs are a lost-update race,
+    // not a safe no-op). Cleared on failure so the next call retries fresh;
+    // every waiter on a failed init sees the SAME rejection.
+    this._initPromise = null;
     // Axis B (§6.6/§8.2): buffered return-time-judge facts awaiting a human ask
     // to ride / an agent-feedback drain. Empty unless the caller calls annotate().
     this._annotations = [];
@@ -583,20 +591,34 @@ export class Gate {
 
   /**
    * Initialize audit and budget subsystems (idempotent; auto-called by check/allows/record/etc.).
+   * Concurrent first callers share a single in-flight init (memoized on
+   * `_initPromise`) rather than each independently running audit.init()/
+   * budget.init() — the latter's cold-start rebuild reads the whole audit
+   * log and writes the shared budget file, so two concurrent runs race on
+   * that write instead of being a safe no-op. A failed init clears the
+   * memo so the next call retries; every waiter on that failed init sees
+   * the same rejection.
    * @returns {Promise<void>}
    */
   async init() {
     if (this._initialized) return;
-    await this.audit.init();
-    await this.budget.init({
-      rebuildFromAudit: async () => {
-        const rebuilt = await this._rebuildBudgetFromAudit();
-        this.limits.turns = rebuilt.turns;
-        this.limits.toolRounds = rebuilt.toolRounds;
-        return rebuilt;
-      },
+    if (this._initPromise) return this._initPromise;
+    this._initPromise = (async () => {
+      await this.audit.init();
+      await this.budget.init({
+        rebuildFromAudit: async () => {
+          const rebuilt = await this._rebuildBudgetFromAudit();
+          this.limits.turns = rebuilt.turns;
+          this.limits.toolRounds = rebuilt.toolRounds;
+          return rebuilt;
+        },
+      });
+      this._initialized = true;
+    })().catch((err) => {
+      this._initPromise = null;
+      throw err;
     });
-    this._initialized = true;
+    return this._initPromise;
   }
 
   async _rebuildBudgetFromAudit() {
