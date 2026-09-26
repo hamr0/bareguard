@@ -1459,8 +1459,42 @@ narrow, tighten-only operation.
   DID change is treated the same conservative way as a fresh deny. An unrelated concurrent
   `add()` — the false positive the first pass produced — now correctly leaves the human's
   "allow" standing.
+- **check()/add() race, snapshot-timing bug found by debrief review, fixed.** The per-key
+  snapshot above (generation + matched entry) was taken BEFORE `check()` called
+  `_stepEval(action)` at all — but `_stepEval` itself can await real I/O ahead of rwx's own
+  step 5 (`deferRateCheck`/`spawnRateCheck` read the audit log to enforce their rate caps),
+  and `check()` awaits its own "gate"/"halt" audit lines and `haltContext()` after
+  `_stepEval` returns, before ever dispatching to `humanChannel`. Repro'd: a concurrent
+  `add()` landing during ONE OF THOSE awaits (not during the human wait) meant step 5's
+  `rwxCheck` read the ALREADY-tightened entry — the ask itself was correctly computed
+  against the new entry, and a human legitimately approved it — but the stale
+  pre-`_stepEval` snapshot still disagreed with the post-approval re-check, producing a
+  false `rwx.tightened` deny with a misleading audit reason ("while this check() awaited a
+  human decision" — it had not; the tighten predated the ask). **Fixed** by moving the
+  snapshot to the LAST synchronous point before the human wait actually begins — immediately
+  before dispatching to `humanChannel`, after every await `_stepEval`/`check()` needed to
+  reach that point — rather than threading a snapshot through `_stepEval`'s internal step
+  order. This is a strictly later, more accurate reference point ("the entry as it stood
+  when THIS ask was raised") and needs no other code path changes: the legitimate
+  tighten-during-the-actual-wait case (case 12b/29) and the marker-only-change-via-an-
+  unrelated-ask case (case 37, where rwx step 5 is never reached at all that iteration) both
+  still deny correctly, because neither of those scenarios' add() lands before this new,
+  later snapshot point either. Grepped for any other await between the (new) snapshot point
+  and the fresh `rwxCheck` re-read inside the race-check itself: none — that re-read runs
+  synchronously, in the same tick the human's "allow" is observed.
 - Callable from harness code only. Holds structurally: the agent only sends actions and never
   holds gate methods.
+- **`add()` rejects once the gate is `terminate()`d, found by debrief.** Checked first thing
+  inside `_addOnce` (the same convention `_haltCheck()` uses for `this.terminated`), at
+  EXECUTION time — after the serialization queue, not before it — so an `add()` that was
+  already waiting in the queue when `terminate()` ran is rejected too, not just one called
+  afterward: "terminated" means nothing more lands, full stop, regardless of when it was
+  queued. An `add()` already PAST that check line when `terminate()` runs is unaffected (no
+  retroactive rollback — it was already committed). Audited `rwx.add_rejected` and thrown
+  like every other rejection; nothing lands. Deliberately narrow: a budget-halt state
+  (`this.budget.check()`) is NOT checked here — nothing about growing the tools map is
+  conditional on the cost/token axis, and `add()` spends no budget itself, so it stays
+  allowed under a halt unless a clearer reason to deny it turns up later.
 - **Built:** §23.3 ("Never written to at runtime") and §23.4 ("edits the file later, not
   mid-run") now read: **the committed file is never written at runtime; the harness may
   `gate.add()` to the gate's in-memory map, tighten-only.**
