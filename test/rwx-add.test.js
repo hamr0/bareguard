@@ -14,6 +14,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { Gate } from "../src/index.js";
+import { rwxCheck } from "../src/primitives/rwx.js";
 import { makeTmpDir, cleanup } from "./_helpers.js";
 
 const MAX_LINE_BYTES = 3500;
@@ -521,18 +522,33 @@ test("add/check race: an add() landing AFTER rwx step 5's read but BEFORE humanC
   assert.equal(d.rule, "rwx.tightened");
 });
 
-test("add/check race: the TERMINAL allow path (no human wait at all) also races a concurrent add() landing during check()'s own audit emit — must deny", async () => {
-  // Debrief round 2 finding: `rwxTightenedCheck` was only ever called on the
-  // two branches that follow a `humanChannel` wait — the top-of-loop
-  // terminal allow/deny branch (no ask, no human wait) awaited its own
-  // `emit()` before returning but never re-checked. A `probe` entry tagged
-  // {r, "tight"} never asks (tight markers don't ask under any askOn
-  // setting) — step 5 resolves ALLOW directly for an agent holding "r".
-  // If a concurrent add() tightens "probe" to {x, "tight"} DURING check()'s
-  // own "gate: allow" audit-line write (an await, real I/O in file mode),
-  // the stale ALLOW is otherwise honored even though the agent (`reader`,
-  // holds only "r") never held "x". Ported directly from the orchestrator's
-  // repro (terminal-allow-race.mjs).
+// §23.21 REDESIGN ("check and audit in the same logical order", debrief
+// round 3): a single gate-wide ordering lock now covers BOTH add()'s whole
+// _addOnce AND check()'s final commit (_commitDecision) — see gate.js. The
+// audit log's line order is the TRUE order: whichever of a check()'s
+// commit or an add()'s mutation acquires the lock first is unambiguously
+// first. A consequence for tests: firing add() from INSIDE a mocked
+// audit.emit and AWAITING it there deadlocks by design whenever that emit
+// call is itself happening while the SAME lock is held (any final "gate"/
+// "approval" line) — add() cannot acquire a lock its own trigger is
+// blocking on. The fix for every such test is to fire add() WITHOUT
+// awaiting it inside the mock; it then queues behind the in-progress
+// commit and lands right after, which is "correct by the invariant," not
+// a workaround.
+
+test("add/check race: the TERMINAL allow path commits atomically — a same-tick, fire-and-forget add() cannot land before the commit (total ordering via the shared lock)", async () => {
+  // Debrief round 2 found this hole: the pre-redesign fix wrote the "allow"
+  // line, THEN re-checked, sometimes downgrading to a second "rwx.tightened"
+  // deny line for the same aid — which (debrief round 3) made spawn-rate/
+  // defer-rate over-count a denied action as allowed, since they scan the
+  // audit log for `decision === "allow"` lines. Under the redesign, the
+  // compare happens INSIDE the lock BEFORE any line is written at all, so a
+  // concurrent add() can never land between the compare and the write — it
+  // either already landed (and the compare catches it) or it's still queued
+  // behind this very commit (and can't possibly have landed yet). Ported
+  // from the orchestrator's repro (terminal-allow-race.mjs), adapted to fire
+  // add() without awaiting it (awaiting it here would deadlock — see the
+  // dedicated test below).
   const gate = new Gate({
     audit: { path: null },
     rwx: {
@@ -543,31 +559,34 @@ test("add/check race: the TERMINAL allow path (no human wait at all) also races 
   await gate.init();
   const originalEmit = gate.audit.emit.bind(gate.audit);
   let fired = false;
+  let addPromise = null;
   gate.audit.emit = async (line) => {
     if (!fired && line.action?.type === "probe") {
       fired = true;
-      await gate.add({ probe: { letter: "x", marker: "tight" } }); // tighten during the terminal "gate: allow" line's own write
+      // Fire WITHOUT awaiting: add() needs the exact lock this call is
+      // currently holding (we're inside check()'s _commitDecision), so it
+      // queues behind this commit and cannot land until this emit — and
+      // the commit around it — finishes.
+      addPromise = gate.add({ probe: { letter: "x", marker: "tight" } });
     }
     return originalEmit(line);
   };
   const d = await gate.check({ type: "probe", args: {} });
-  assert.equal(gate.cfg.rwx.tools.probe.letter, "x", "sanity: the tighten did land");
-  assert.equal(d.outcome, "deny", "the agent only ever held r; the entry is now x-tagged — must not be allowed");
-  assert.equal(d.rule, "rwx.tightened");
+  assert.equal(d.outcome, "allow", "the add() was still queued, not yet landed, when this commit ran — its allow is valid against the map as of that instant in the log");
+  assert.equal(d.rule, "rwx.allow");
+  await addPromise; // let the queued tighten land now
+  assert.equal(gate.cfg.rwx.tools.probe.letter, "x", "the tighten lands AFTER check()'s commit, per the total-ordering invariant");
   const lines = await gate.audit.readAll();
   const gateLines = lines.filter((l) => l.phase === "gate" && l.action?.type === "probe");
-  // Documented audit consequence (not restructured away — the race window
-  // is inside the FIRST emit()'s own await): the original "allow" line is
-  // already durably written by the time the tightened check fires, so a
-  // second "gate" line (the rwx.tightened deny) follows it for the same aid.
-  assert.equal(gateLines.length, 2, "expect both the original allow line and the rwx.tightened deny line");
+  assert.equal(gateLines.length, 1, "exactly one final gate line for this aid — never allow-then-deny");
   assert.equal(gateLines[0].decision, "allow");
-  assert.equal(gateLines[1].decision, "deny");
-  assert.equal(gateLines[1].rule, "rwx.tightened");
-  assert.equal(gateLines[0].aid, gateLines[1].aid, "both lines share the same aid — one eval, two facts");
+  // A SUBSEQUENT check(), now that the tighten has actually landed, denies correctly.
+  const d2 = await gate.check({ type: "probe", args: {} });
+  assert.equal(d2.outcome, "deny");
+  assert.equal(d2.rule, "rwx.denied");
 });
 
-test("add/check race: an UNRELATED-key add() during the terminal allow's own audit emit does not spuriously deny", async () => {
+test("add/check race: an UNRELATED-key add() queued during the terminal allow's own commit lands afterward, without affecting this check()'s outcome", async () => {
   const gate = new Gate({
     audit: { path: null },
     rwx: {
@@ -578,16 +597,50 @@ test("add/check race: an UNRELATED-key add() during the terminal allow's own aud
   await gate.init();
   const originalEmit = gate.audit.emit.bind(gate.audit);
   let fired = false;
+  let addPromise = null;
   gate.audit.emit = async (line) => {
     if (!fired && line.action?.type === "probe") {
       fired = true;
-      await gate.add({ unrelated: "w" }); // bumps the add-generation, but doesn't touch "probe"
+      addPromise = gate.add({ unrelated: "w" }); // fire-and-forget — queued behind this commit
     }
     return originalEmit(line);
   };
   const d = await gate.check({ type: "probe", args: {} });
-  assert.equal(d.outcome, "allow", "an unrelated concurrent add() must not spuriously deny the terminal allow");
+  assert.equal(d.outcome, "allow");
   assert.equal(d.rule, "rwx.allow");
+  await addPromise;
+  assert.equal(gate.cfg.rwx.tools.unrelated, "w", "the unrelated add() still lands, just after this check()'s commit");
+});
+
+test("add/check race: awaiting add() from INSIDE a locked commit's own audit sink deadlocks by design (documented, not detected/thrown — escalated, see PRD §23.21)", async () => {
+  // add() acquires the SAME lock check()'s final commit is holding while it
+  // writes its one audit line. If a caller's audit sink awaits add() from
+  // inside that very write, add() can never acquire the lock (it's waiting
+  // on a commit that is itself waiting on this call to return) — a genuine
+  // deadlock, not a bug this file works around. Detecting "would this
+  // await deadlock" cheaply would need reentrancy tracking on the lock
+  // (an owner token or call-depth counter) for a benefit limited to a
+  // caller doing something already contradictory (blocking a commit on
+  // itself); not implemented — flagged here as an escalated, deliberate
+  // non-decision rather than silently left unstated.
+  const gate = new Gate({
+    audit: { path: null },
+    rwx: { agent: "reader", agents: { reader: "r--" }, tools: { probe: { letter: "r", marker: "tight" } }, bash: {} },
+  });
+  await gate.init();
+  const originalEmit = gate.audit.emit.bind(gate.audit);
+  let fired = false;
+  gate.audit.emit = async (line) => {
+    if (!fired && line.action?.type === "probe") {
+      fired = true;
+      await gate.add({ probe: { letter: "x", marker: "tight" } }); // AWAITED from inside the locked commit — deadlocks
+    }
+    return originalEmit(line);
+  };
+  const checkPromise = gate.check({ type: "probe", args: {} });
+  const timeout = new Promise((resolve) => setTimeout(() => resolve("TIMEOUT"), 200));
+  const result = await Promise.race([checkPromise, timeout]);
+  assert.equal(result, "TIMEOUT", "check() must not resolve — this is the documented deadlock, not a bug");
 });
 
 // ─── 1. audit write failure mid-add() ─────────────────────────────────────
@@ -1061,4 +1114,246 @@ test("add: gate.add() is NOT blocked by a budget-halt state (deliberately not tr
   // gate-wide, unrelated to rwx) — landedness is verified directly against
   // the live map instead, since add() succeeding is the property under test.
   assert.equal(gate.cfg.rwx.tools.probe, "r");
+});
+
+// ─── property test: randomized interleavings, replay-verified ────────────
+//
+// The real proof for §23.21's "check and audit in the same logical order"
+// invariant: "the audit log's line order is the true order; a final allow
+// line is always valid against the tools map as of its position in the
+// log." Runs many randomized interleavings of concurrent check()s (some
+// asking, with random delays) and concurrent tightening add()s, then
+// REPLAYS the audit log in order — rebuilding the tools map from the
+// initial config plus each rwx.added line in sequence — and asserts every
+// final "gate" allow line was genuinely allowed by rwxCheck against the
+// map AS REPLAYED UP TO THAT POINT, and that every check() (by aid) has
+// EXACTLY ONE final (non-askHuman) "gate" line.
+
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// Tighten-only-respecting random move for a tools-map entry, so add()
+// calls in the scenario are always LEGAL (a rejected add() teaches nothing
+// about the property under test — it never lands).
+const LETTERS = ["r", "w", "x"];
+function randomTighten(rng, current) {
+  const norm = typeof current === "string"
+    ? { letter: current, marker: null }
+    : { letter: current.letter, marker: current.marker ?? "loose" };
+  const curRank = LETTERS.indexOf(norm.letter);
+  const nextRank = curRank + Math.floor(rng() * (LETTERS.length - curRank));
+  const letter = LETTERS[Math.min(nextRank, LETTERS.length - 1)];
+  let marker;
+  if (norm.marker === "loose") {
+    marker = "loose"; // loose can only stay loose
+  } else if (norm.marker === null) {
+    marker = null; // bare letter can tighten its letter but has no marker to move (stay bare)
+  } else {
+    marker = rng() < 0.5 ? "tight" : "settled"; // tight<->settled unrestricted
+  }
+  return marker === null ? letter : { letter, marker };
+}
+
+async function runInterleavingScenario(seed) {
+  const rng = mulberry32(seed);
+  const initialTools = {
+    k1: { letter: "r", marker: "loose" },
+    k2: { letter: "r", marker: "tight" },
+    k3: "r",
+    k4: { letter: "r", marker: "settled" },
+  };
+  const gate = new Gate({
+    audit: { path: null },
+    rwx: {
+      // r-- ONLY (not full "rwx"): every key starts at a letter the agent
+      // holds, but add() can tighten a key's letter up to w/x, which the
+      // agent does NOT hold — this is what gives the property test real
+      // teeth. An agent holding every letter could never observe a fresh
+      // rwxCheck "deny" no matter how a key's letter moved, which would
+      // make the letter-insufficiency check below unable to ever fail —
+      // exactly the "test that can't produce the negative" antigen.
+      agent: "agent", agents: { agent: "r--" },
+      tools: JSON.parse(JSON.stringify(initialTools)),
+      bash: {}, askOn: "loose",
+    },
+    humanChannel: async () => {
+      // Random delay so ask-then-allow races land at unpredictable points
+      // relative to concurrent add()s.
+      await new Promise((resolve) => setTimeout(resolve, Math.floor(rng() * 4)));
+      return { decision: "allow" };
+    },
+  });
+  await gate.init();
+  // Jitter the audit write itself (fileless mode's real emit is a near-
+  // instant in-memory push, far too fast to expose an unlocked commit's
+  // race window in practice) — this stands in for real file-mode I/O
+  // latency, so the property test can actually exercise interleavings a
+  // removed lock would let through, not just ones the timing happens to
+  // avoid. Applied to EVERY emit uniformly (not just "gate" lines), same as
+  // real I/O would affect every write.
+  const originalEmit = gate.audit.emit.bind(gate.audit);
+  let forcedFired = false;
+  let forcedAddPromise = null;
+  gate.audit.emit = async (fields) => {
+    // A DETERMINISTIC forced collision, once per seed, layered on top of
+    // the randomized traffic below: the first final "gate" line for key
+    // "k2" (tight — resolves ALLOW directly, no human wait, so its only
+    // race window is this emit's own await) triggers a same-tick,
+    // fire-and-forget add() that tightens k2 past what the agent holds.
+    // Pure random jitter alone was measured NOT to reliably reproduce this
+    // exact interleaving within a practical seed count (Node's timer
+    // queue resolves same-tick setTimeout callbacks predictably enough
+    // that the narrow window rarely got hit by chance) — this forced pair
+    // guarantees the property test actually exercises the violation this
+    // seed's replay is supposed to catch, on the correct implementation
+    // (where it must NOT manifest) and the falsified one (where it must).
+    if (!forcedFired && fields.phase === "gate" && fields.action?.type === "k2" && fields.decision !== "askHuman") {
+      forcedFired = true;
+      forcedAddPromise = gate.add({ k2: { letter: "x", marker: "tight" } }).catch(() => {});
+    }
+    await new Promise((resolve) => setTimeout(resolve, Math.floor(rng() * 3)));
+    return originalEmit(fields);
+  };
+
+  // Concentrate on the first 2 keys (not all 4) to maximize the odds that a
+  // check() and an add() collide on the SAME key within a single seed —
+  // with keys spread thin across many operations, most pairs never
+  // contend for the same entry at all, and the property test would pass
+  // "for free" without ever exercising the thing it claims to prove.
+  const keys = Object.keys(initialTools).slice(0, 2);
+  const checkPromises = [];
+  // Guarantee at least one check() on "k2" every seed, so the deterministic
+  // forced-collision hook above always has something to trigger on.
+  checkPromises.push(gate.check({ type: "k2", args: {} }));
+  const NUM_CHECKS = 16;
+  for (let i = 0; i < NUM_CHECKS; i++) {
+    const key = keys[Math.floor(rng() * keys.length)];
+    checkPromises.push(gate.check({ type: key, args: {} }));
+  }
+  const addPromises = [];
+  const NUM_ADDS = 12;
+  for (let i = 0; i < NUM_ADDS; i++) {
+    const key = keys[Math.floor(rng() * keys.length)];
+    const current = gate.cfg.rwx.tools[key]; // read-time snapshot; a concurrent add() to the SAME key may race this one too — that's fine, one of them wins, the other is a legal-shaped but possibly-stale tighten attempt
+    const entries = { [key]: randomTighten(rng, current) };
+    // Fire-and-forget with a random start delay (some adds race check()'s
+    // reads, some race its commits, some land well before or after).
+    addPromises.push(
+      new Promise((resolve) => setTimeout(resolve, Math.floor(rng() * 3))).then(() => gate.add(entries).catch(() => {})),
+    );
+  }
+
+  // NOTE: `forcedAddPromise` must NOT be read into this array literal —
+  // it's still `null` at this synchronous point (nothing has had a chance
+  // to run its microtasks yet), so capturing it here would wait on a
+  // `Promise.resolve()` stand-in instead of the real, later-assigned
+  // promise — a real bug caught while building this test (the forced
+  // add() would fire but the replay below could run before it actually
+  // landed, silently defeating the deterministic collision). Await the
+  // random traffic first (guaranteed to include the "k2" check that
+  // triggers the forced add(), so `forcedAddPromise` is assigned by now),
+  // THEN await the live reference.
+  await Promise.allSettled([...checkPromises, ...addPromises]);
+  if (forcedAddPromise) await forcedAddPromise;
+
+  // ── Replay the audit log in order, rebuilding the tools map. ──
+  const lines = gate.audit.entries;
+  let replayedTools = JSON.parse(JSON.stringify(initialTools));
+  const finalLinesByAid = new Map();
+  const violations = [];
+
+  for (const line of lines) {
+    if (line.phase === "rwx.added") {
+      replayedTools[line.key] = line.marker != null ? { letter: line.letter, marker: line.marker } : line.letter;
+      continue;
+    }
+    if (line.phase !== "gate") continue;
+    if (line.decision === "askHuman") continue; // not a final line
+    // A final commit line (allow or deny).
+    finalLinesByAid.set(line.aid, (finalLinesByAid.get(line.aid) ?? 0) + 1);
+    if (line.decision === "allow") {
+      const replayCfg = { agent: "agent", agents: { agent: "r--" }, tools: replayedTools, bash: {}, askOn: "loose" };
+      const fresh = rwxCheck(line.action, replayCfg);
+      // NOT a strict "must equal allow": a loose-marked entry's fresh
+      // rwxCheck is ALWAYS "askHuman" (that's what askOn:"loose" does,
+      // unconditionally, for as long as the letter is held) — an allow
+      // reached via a human's approval (rule "humanChannel.allow" /
+      // "topup-on-ask treated as allow") legitimately replays as askHuman
+      // when the entry never actually changed. What the redesign actually
+      // guarantees, and what would be a real security violation to miss,
+      // is that the agent's letters still COVER the matched entry's letter
+      // — i.e., a fresh "deny" (letter insufficiency) is never valid to
+      // find behind a logged allow. (`_commitDecision` itself downgrades to
+      // `rwx.tightened` on ANY fresh non-allow whenever it detects a
+      // change at all, so this is not a gap being waved through — it is
+      // the one legitimate "unchanged, still loose" case the design
+      // deliberately leaves as-is.)
+      if (fresh.outcome === "deny") {
+        violations.push(`seed ${seed}: aid ${line.aid} action ${JSON.stringify(line.action)} was logged ALLOW but rwxCheck against the replayed map (up to this point) says DENY (${fresh.rule}) — letter insufficiency slipped through`);
+      }
+    }
+  }
+  for (const [aid, count] of finalLinesByAid) {
+    if (count !== 1) violations.push(`seed ${seed}: aid ${aid} has ${count} final gate lines, expected exactly 1`);
+  }
+  return violations;
+}
+
+test("property: 200 randomized interleavings of concurrent check()s and tightening add()s replay-verify clean (the real proof of the ordering invariant)", async () => {
+  const NUM_SEEDS = 200;
+  const allViolations = [];
+  for (let seed = 1; seed <= NUM_SEEDS; seed++) {
+    const violations = await runInterleavingScenario(seed);
+    allViolations.push(...violations);
+  }
+  assert.equal(allViolations.length, 0, `${allViolations.length} violation(s) across ${NUM_SEEDS} seeds:\n${allViolations.slice(0, 10).join("\n")}`);
+});
+
+// ─── throughput measurement: check() with and without add() contention ───
+
+test("perf: check() throughput with and without add() contention on the shared lock (measured, reported)", async () => {
+  const N = 500;
+
+  // Baseline: no rwx add() contention at all (a gate with no rwx config —
+  // the lock is still acquired for every commit, but never contended).
+  const plainGate = new Gate({ audit: { path: null }, tools: { allowlist: ["probe"] } });
+  await plainGate.init();
+  const t0 = process.hrtime.bigint();
+  for (let i = 0; i < N; i++) await plainGate.check({ type: "probe", args: {} });
+  const t1 = process.hrtime.bigint();
+  const baselineMs = Number(t1 - t0) / 1e6;
+
+  // Contended: an rwx gate, with a concurrent stream of add() calls competing
+  // for the same lock every check() also needs for its commit.
+  const busyGate = new Gate({
+    audit: { path: null },
+    rwx: { agent: "agent", agents: { agent: "rwx" }, tools: { probe: "r" }, bash: {} },
+  });
+  await busyGate.init();
+  let addCounter = 0;
+  const addLoop = (async () => {
+    for (let i = 0; i < N; i++) await busyGate.add({ [`extra${addCounter++}`]: "r" });
+  })();
+  const t2 = process.hrtime.bigint();
+  for (let i = 0; i < N; i++) await busyGate.check({ type: "probe", args: {} });
+  const t3 = process.hrtime.bigint();
+  await addLoop;
+  const contendedMs = Number(t3 - t2) / 1e6;
+
+  console.log(`  [perf] check() x${N}, no contention:    ${baselineMs.toFixed(2)}ms total, ${(baselineMs / N).toFixed(4)}ms/call`);
+  console.log(`  [perf] check() x${N}, with add() contention (${N} concurrent add()s on the same lock): ${contendedMs.toFixed(2)}ms total, ${(contendedMs / N).toFixed(4)}ms/call`);
+  console.log(`  [perf] contended/baseline ratio: ${(contendedMs / baselineMs).toFixed(2)}x`);
+
+  // Not a strict pass/fail gate on the ratio (contention cost is legitimate
+  // and expected) — just a sanity floor that neither run is pathologically
+  // slow (each call still completes in well under 50ms on average).
+  assert.ok(baselineMs / N < 50, `baseline check() averaged ${(baselineMs / N).toFixed(2)}ms/call — unexpectedly slow`);
+  assert.ok(contendedMs / N < 50, `contended check() averaged ${(contendedMs / N).toFixed(2)}ms/call — unexpectedly slow`);
 });

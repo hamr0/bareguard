@@ -542,14 +542,43 @@ export class Gate {
     // common case (no concurrent add()) costs nothing and an ordinary
     // `askOn:"loose"` ask-then-allow stays byte-identical.
     this._addGeneration = 0;
-    // §23.21: `add()` reads live state, awaits (audit-first writes), then
-    // mutates — a genuine async window. Two concurrent `add()` calls that
-    // both entered before either mutated would both validate against the
-    // same stale state (found by review: this let a tighten-only guard be
-    // bypassed via loosening, and would equally have let two individually-
-    // fitting batches jointly cross the size cap). This queue token
-    // serializes `add()` calls one at a time, in call order; see `add()`.
-    this._addQueue = Promise.resolve();
+    // §23.21 "check and audit in the same logical order" — ONE ordering
+    // lock, shared by `add()` (its whole `_addOnce`: validate → audit →
+    // mutate) and by `check()`'s final commit (`_commitDecision`: possibly
+    // downgrade an allow → write exactly one final audit line). Uncontended
+    // acquisition proceeds immediately (a promise chain whose head is
+    // already resolved); contended acquisition waits its turn, in call
+    // order. A throw from the locked function never wedges it — see
+    // `_withLock`'s own `finally`. This is what makes the audit log's line
+    // order the TRUE order: whichever of a `check()`'s final commit or an
+    // `add()`'s mutation acquires the lock first is unambiguously "first,"
+    // and the other sees its effects (or doesn't) consistently with that.
+    this._gateLock = Promise.resolve();
+  }
+
+  /**
+   * §23.21 "check and audit in the same logical order" — run `fn` with
+   * exclusive access to the gate's ordering lock. Every caller links onto
+   * the previous caller's queue token and awaits it before running its own
+   * `fn`; the token this call hands to the NEXT caller always resolves —
+   * never rejects — regardless of whether `fn` threw, so one failing call
+   * can never wedge the lock for whatever comes after it. Shared by `add()`
+   * (`_addOnce` runs inside it) and `check()`'s final commit
+   * (`_commitDecision` runs inside it) — nothing else acquires it.
+   * @template T
+   * @param {() => (T|Promise<T>)} fn
+   * @returns {Promise<T>}
+   */
+  async _withLock(fn) {
+    const previous = this._gateLock;
+    let releaseNext = (_value) => {}; // always overwritten synchronously below; the no-op default is only to satisfy TS's definite-assignment check
+    this._gateLock = new Promise((resolve) => { releaseNext = resolve; });
+    await previous;
+    try {
+      return await fn();
+    } finally {
+      releaseNext();
+    }
   }
 
   /**
@@ -734,6 +763,75 @@ export class Gate {
    * @param {import("./types.js").Action} action action to evaluate
    * @returns {Promise<import("./types.js").Decision>} terminal decision (never askHuman)
    */
+  /**
+   * §23.21 "check and audit in the same logical order" — the ONE place
+   * every final decision from `check()` is committed. Runs entirely inside
+   * the gate's ordering lock (`_withLock`, shared with `add()`), so no
+   * `add()` can land between the freshness compare below and the single
+   * audit line this writes — the audit log's line order IS the true order:
+   * a final ALLOW line is always valid against the tools map as of its
+   * position in the log.
+   *
+   * If `decision.outcome` is `"allow"`, rwx is active, and `raceSnapshot`
+   * is given, first compares the matched tools-map entry against it (taken
+   * at the step-5 read, or the conservative top-of-iteration default when
+   * step 5 never ran this iteration — see `_stepEval`/`check()`).
+   * Unchanged (fast path: `raceSnapshot.gen === this._addGeneration`, one
+   * integer compare) → the allow stands as given. Changed → a fresh
+   * `rwxCheck`; a non-allow result DOWNGRADES `decision` to a NEW
+   * `rwx.tightened` deny object — `decision` itself is never mutated.
+   * Exactly ONE audit line is written for this `aid`, reflecting whichever
+   * decision is final — never the original AND then a correction; the
+   * compare happens BEFORE any line is written, not after. A terminal
+   * DENY, or an allow with no `raceSnapshot` (rwx not active, or the
+   * matched entry is exempt — e.g. a bash-map match, since `add()` never
+   * touches `rwx.bash`), skips the compare and commits as given.
+   * @param {import("./types.js").Decision} decision the candidate final
+   *   decision (already carries `aid`)
+   * @param {object} [opts]
+   * @param {object} [opts.action] the gated action (`null` for a line that
+   *   names no specific action, matching each call site's own convention)
+   * @param {{gen:number, entry:*}|null} [opts.raceSnapshot] required to
+   *   consider a downgrade; omitted → never downgrades
+   * @param {object} [opts.lineFields] extra fields for the audit line
+   *   (e.g. `rwxLetters`/`rwxLetter`/`rwxMarker`), applied only when the
+   *   decision commits AS GIVEN — a downgrade's line carries its own
+   *   reason, not the original's extra fields
+   * @param {string} [opts.phase] audit phase name (default `"gate"`; some
+   *   call sites use `"approval"`, matching their pre-existing convention)
+   * @returns {Promise<import("./types.js").Decision>}
+   */
+  async _commitDecision(decision, opts = {}) {
+    const { action = null, raceSnapshot = null, lineFields = {}, phase = "gate" } = opts;
+    return this._withLock(async () => {
+      let final = decision;
+      if (
+        final.outcome === "allow" &&
+        raceSnapshot != null &&
+        this.cfg.rwx != null &&
+        raceSnapshot.entry !== undefined &&
+        raceSnapshot.gen !== this._addGeneration
+      ) {
+        const entryNow = rwxToolsEntrySnapshot(this.cfg.rwx, action);
+        if (entryNow !== raceSnapshot.entry) {
+          const fresh = rwxCheck(action, this.cfg.rwx);
+          if (fresh.outcome !== "allow") {
+            const reason = `rwx entry for "${clipKey(action?.type)}" was tightened by a concurrent gate.add() since it was read — re-evaluated as ${fresh.outcome} (${fresh.rule}${fresh.reason ? ": " + fresh.reason : ""})`;
+            final = { outcome: "deny", severity: "action", rule: "rwx.tightened", reason, aid: decision.aid };
+          }
+        }
+      }
+      const isDowngraded = final !== decision;
+      await this.audit.emit({
+        aid: decision.aid, phase, action,
+        decision: final.outcome, severity: final.severity,
+        rule: final.rule, reason: final.reason,
+        ...(isDowngraded ? {} : lineFields),
+      });
+      return final;
+    });
+  }
+
   async check(action) {
     if (!this._initialized) await this.init();
     action = safeAction(action); // own-props only — no inherited field can flip a decision
@@ -744,79 +842,35 @@ export class Gate {
     const aid = randomUUID().slice(0, 8);
     const emit = (fields) => this.audit.emit({ aid, ...fields });
 
-    // §23.21 decision 5 — check()/add() race fix, PER-KEY (twice-corrected:
-    // once from a global-generation false-deny, once from a snapshot-timing
-    // safety hole — see the two corrections below).
+    // §23.21 "check and audit in the same logical order" — the settled
+    // design, after two earlier attempts each closed one race and opened
+    // another (both superseded; PRD §23.21 keeps that history, not repeated
+    // here). rwx step 5 reads the matched tools-map entry and the decision
+    // is COMPUTED from that read; `check()` may then run for an unbounded
+    // time (rate-check I/O, its own audit writes, a human wait) before it's
+    // ready to COMMIT. A concurrent `add()` landing at ANY point in that
+    // window must not let a stale allow ride through, and must not produce
+    // more than one final audit line for this `aid`.
     //
-    // rwx step 5 reads the matched tools-map entry, and the resulting ask
-    // decision is COMPUTED from that exact read. `check()` may then await a
-    // human decision for an unbounded time; the human's eventual "allow"
-    // approves the decision AS COMPUTED, so it must not be honored if the
-    // entry has since changed underneath — at ANY point between that read
-    // and honoring the allow, not only during the human wait itself.
+    // `_commitDecision` (own doc below) is the ONE place that
+    // compares-and-possibly-downgrades an allow AND writes the single final
+    // audit line, atomically, inside the gate's ordering lock shared with
+    // `add()` — so the compare can never be interleaved with a concurrent
+    // `add()`'s own mutation. This makes the audit log's line order the
+    // TRUE order: a final allow line is always valid against the tools map
+    // as of its position in the log.
     //
-    // Correction 1 (global vs per-key): an earlier version gated purely on
-    // the global `_addGeneration` counter, so an UNRELATED concurrent
-    // add() — normal, constant traffic in the spec-less-site flow, one
-    // add() per unmatched request — spuriously denied every in-flight
-    // `askOn:"loose"` ask (a fresh check on an unchanged loose-marked entry
-    // always comes back `askHuman` again, regardless of whether anything
-    // about THAT key changed). Fixed by comparing the matched entry's own
-    // value, not just the generation counter.
-    //
-    // Correction 2 (snapshot timing — a real safety hole, found after
-    // correction 1 shipped): the per-key snapshot was first taken right
-    // before dispatching to `humanChannel`, reasoning that this was "the
-    // state as the ask was raised." That is WRONG: the ask decision is
-    // computed at rwx's step 5, inside `_stepEval` — and `_stepEval` can
-    // itself await real I/O (`deferRateCheck`/`spawnRateCheck`) before
-    // reaching step 5, AND `check()` awaits more (its own "gate"/"halt"
-    // audit lines, `haltContext()`) AFTER `_stepEval` returns but BEFORE
-    // dispatching to `humanChannel`. A concurrent `add()` landing during
-    // ANY of those awaits — including the ones between step 5's read and
-    // the dispatch — already changed the entry by the time a
-    // dispatch-time snapshot ran, so the snapshot silently absorbed the
-    // tighten as if it were the ORIGINAL state, and the post-approval
-    // compare saw "no change" and wrongly allowed (reproduced: an `r--`
-    // agent got a `w`-tagged action allowed). The ONLY correct reference
-    // point is the exact synchronous tick `rwxCheck` reads the map inside
-    // `_stepEval`'s step 5 — see `_stepEval`'s own `raceSnapshot`
-    // parameter, mutated in place there, with no await between that write
-    // and the read it describes. When step 5 does not run this iteration
-    // (an earlier step already denied/asked, e.g. `flags`/`content`), there
-    // is no true rwx "read" moment to anchor to; the conservative fallback
-    // — seeded below, before `_stepEval` is even called — is the state at
-    // the very start of this iteration, so a change any time from there
-    // through approval is still caught (this is what keeps the
-    // marker-only-change-via-an-unrelated-ask case, §23.21's own "if it got
-    // stricter, deny" rule, denying correctly).
-    //
-    // A fresh per-call object, never shared instance state — `check()`
-    // calls can run concurrently for different actions.
-    const rwxTightenedCheck = async (raceSnapshot) => {
-      if (this.cfg.rwx == null || raceSnapshot.entry === undefined) return null; // no rwx, or a bash-map match (exempt)
-      if (raceSnapshot.gen === this._addGeneration) return null; // fast path: nothing landed during the whole eval+wait window
-      const entryNow = rwxToolsEntrySnapshot(this.cfg.rwx, action);
-      if (entryNow === raceSnapshot.entry) return null; // something landed, but not for THIS key — not stricter, not our business
-      const fresh = rwxCheck(action, this.cfg.rwx);
-      if (fresh.outcome === "allow") return null;
-      const reason = `rwx entry for "${clipKey(action?.type)}" changed under a concurrent gate.add() before this check()'s decision was honored — re-evaluated as ${fresh.outcome} (${fresh.rule}${fresh.reason ? ": " + fresh.reason : ""})`;
-      await emit({
-        phase: "gate", action,
-        decision: "deny", severity: "action", rule: "rwx.tightened", reason,
-      });
-      /** @type {import("./types.js").Decision} */
-      const decided = { outcome: "deny", severity: "action", rule: "rwx.tightened", reason, aid };
-      return decided;
-    };
-
+    // `raceSnapshot` (fresh per loop iteration — never shared instance
+    // state, since `check()` calls run concurrently) is seeded below with
+    // the state at the very top of the iteration, before `_stepEval` runs.
+    // `_stepEval`'s step 5 (if it runs this iteration) OVERWRITES both
+    // fields with a same-tick read — more precise than the default,
+    // because an earlier step (`deferRateCheck`/`spawnRateCheck`) can await
+    // real I/O first. When step 5 does NOT run (an earlier step already
+    // decided, e.g. `flags`/`content`), the top-of-iteration default is
+    // what `_commitDecision` compares against.
     let iterations = 0;
     while (true) {
-      // Default/fallback race snapshot for this iteration — the state at
-      // the very start, before `_stepEval` runs. `_stepEval`'s step 5 (if
-      // it runs this iteration) OVERWRITES both fields with a precise,
-      // same-tick read; if step 5 does NOT run, this fallback is what
-      // `rwxTightenedCheck` compares against — see the long comment above.
       const raceSnapshot = {
         gen: this._addGeneration,
         entry: this.cfg.rwx != null ? rwxToolsEntrySnapshot(this.cfg.rwx, action) : undefined,
@@ -839,50 +893,28 @@ export class Gate {
           }
         : {};
 
-      // Terminal allow/deny → audit and return.
+      // Terminal allow/deny → commit (single lock-protected compare + one
+      // audit line) and return. rwx (§23.5): "the audit line carries the
+      // letter." rwxLetters/rwxLetter/rwxMarker are a closed, tiny alphabet
+      // ("r"/"w"/"x"/"-", "tight"/"loose"/"settled") derived from OPERATOR
+      // config, never caller/reply data — same non-redacted, non-LINE_FIELDS
+      // treatment as `rule`/`severity`/classify's `classification`/`tier`.
+      // Absent for every decision that isn't an rwx one, so a non-rwx
+      // gate's audit line is byte-identical. Applied only when the decision
+      // commits AS GIVEN — a downgrade to `rwx.tightened` carries its own
+      // reason, not these fields (see `_commitDecision`).
       if (decision.outcome === "allow" || decision.outcome === "deny") {
-        // rwx (§23.5): "the audit line carries the letter." rwxLetters/
-        // rwxLetter/rwxMarker are a closed, tiny alphabet ("r"/"w"/"x"/"-",
-        // "tight"/"loose"/"settled") derived from OPERATOR config, never
-        // caller/reply data — same non-redacted, non-LINE_FIELDS treatment
-        // as `rule`/`severity`/classify's `classification`/`tier`. Absent
-        // for every decision that isn't an rwx one, so a non-rwx gate's
-        // audit line is byte-identical.
-        await emit({
-          phase: "gate", action,
-          decision: decision.outcome, severity: decision.severity,
-          rule: decision.rule, reason: decision.reason,
-          ...rwxAuditFields,
-        });
-        // §23.21 decision 5: this terminal (no human wait at all) ALLOW path
-        // can ALSO race a concurrent `add()` — the `emit()` just above may
-        // itself await real I/O, and a tighten landing during THAT await is
-        // otherwise invisible: this branch would honor the allow it already
-        // logged, computed from a read that's since gone stale. Same final
-        // check as the human-allow branches below (§23.21 decision 5),
-        // called as the LAST thing before honoring the allow — never on a
-        // terminal DENY, which needs no defending. `rwxTightenedCheck`'s own
-        // fast path (`raceSnapshot.gen === this._addGeneration`) keeps the
-        // common case (nothing landed) a single integer compare. Audit
-        // consequence: on the rare tightened case this line's "allow" is
-        // ALREADY durably written by the time the check fires, so a second
-        // "gate"/deny `rwx.tightened` line for the same `aid` follows it —
-        // not restructured away (the race window is inside `emit()`'s own
-        // await, so nothing can run before it that would also see a
-        // concurrent add() landing during the write itself) — this is the
-        // same two-line shape the human-allow branches already produce.
-        if (decision.outcome === "allow") {
-          const tightened = await rwxTightenedCheck(raceSnapshot);
-          if (tightened) return tightened;
-        }
         // Control flow above guarantees outcome is "allow" | "deny"; the cast
         // pins the internal eval result to the public Decision shape.
-        return /** @type {import("./types.js").Decision} */ ({ ...decision, aid });
+        const asDecision = /** @type {import("./types.js").Decision} */ ({ ...decision, aid });
+        return this._commitDecision(asDecision, { action, raceSnapshot, lineFields: rwxAuditFields });
       }
 
-      // askHuman path: emit gate audit, dispatch to humanChannel, apply.
-      // rwx.askOn:"loose" (D103) resolves an rwx match to askHuman too, so
-      // this line carries the same rwx fields as the terminal branch above.
+      // askHuman path: emit gate audit (OUTSIDE the ordering lock — this is
+      // not a final line, and `add()` must never block on a human),
+      // dispatch to humanChannel, apply. rwx.askOn:"loose" (D103) resolves
+      // an rwx match to askHuman too, so this line carries the same rwx
+      // fields as the terminal branch above.
       await emit({
         phase: "gate", action,
         decision: "askHuman", severity: decision.severity,
@@ -915,19 +947,13 @@ export class Gate {
             `See https://github.com/hamr0/bareguard#wiring-with-humanchannel\n`
           );
         }
-        /** @type {import("./types.js").Decision} */
-        const denial = {
-          outcome: "deny", severity: "halt",
-          rule: decision.rule,
-          reason: `${decision.reason} (no humanChannel registered)`,
-          aid,
-        };
-        await emit({
-          phase: "gate", action,
-          decision: "deny", severity: "halt",
-          rule: denial.rule, reason: denial.reason,
-        });
-        return denial;
+        return this._commitDecision(
+          {
+            outcome: "deny", severity: "halt", rule: decision.rule,
+            reason: `${decision.reason} (no humanChannel registered)`, aid,
+          },
+          { action },
+        );
       }
 
       // event.action is ALWAYS the action being checked (v0.4). For halt
@@ -998,11 +1024,10 @@ export class Gate {
           clearTimeout(timer);
           if (raced === TIMEOUT) {
             const reason = `humanChannel timeout after ${this.humanChannelTimeoutMs}ms`;
-            await emit({
-              phase: "approval", action,
-              decision: "deny", reason,
-            });
-            return { outcome: "deny", severity: "halt", rule: decision.rule, reason, aid };
+            return this._commitDecision(
+              { outcome: "deny", severity: "halt", rule: decision.rule, reason, aid },
+              { action, phase: "approval" },
+            );
           }
           response = raced;
         } else {
@@ -1010,15 +1035,20 @@ export class Gate {
         }
       }
       catch (err) {
-        await emit({
-          phase: "approval", action,
-          decision: "deny", reason: `humanChannel threw: ${err.message}`,
-        });
-        return { outcome: "deny", severity: "halt", rule: decision.rule,
-                 reason: `humanChannel threw: ${err.message}`, aid };
+        return this._commitDecision(
+          {
+            outcome: "deny", severity: "halt", rule: decision.rule,
+            reason: `humanChannel threw: ${err.message}`, aid,
+          },
+          { action, phase: "approval" },
+        );
       }
 
       const human = response ?? { decision: "deny", reason: "humanChannel returned nothing" };
+      // The raw human response is its OWN audit fact, written unconditionally
+      // and OUTSIDE the lock — it records what the human SAID, not what the
+      // gate finally decided; the branch below still commits the actual
+      // outcome (and, for "allow", still re-validates freshness).
       await emit({
         phase: "approval", action,
         decision: human.decision, reason: human.reason ?? null,
@@ -1026,53 +1056,43 @@ export class Gate {
       });
 
       if (human.decision === "allow") {
-        const tightened = await rwxTightenedCheck(raceSnapshot);
-        if (tightened) return tightened;
-        /** @type {import("./types.js").Decision} */
-        const decided = { outcome: "allow", severity: "action", rule: "humanChannel.allow", reason: human.reason ?? null, aid };
-        await emit({
-          phase: "gate", action,
-          decision: "allow", severity: "action",
-          rule: decided.rule, reason: decided.reason,
-        });
-        return decided;
+        return this._commitDecision(
+          { outcome: "allow", severity: "action", rule: "humanChannel.allow", reason: human.reason ?? null, aid },
+          { action, raceSnapshot },
+        );
       }
       if (human.decision === "deny") {
-        /** @type {import("./types.js").Decision} */
-        const decided = {
-          outcome: "deny",
-          severity: decision.severity, // preserve halt vs action source
-          rule: decision.rule,
-          reason: human.reason ?? "human denied",
-          aid,
-        };
-        await emit({
-          phase: "gate", action,
-          decision: "deny", severity: decided.severity,
-          rule: decided.rule, reason: decided.reason,
-        });
-        return decided;
+        return this._commitDecision(
+          {
+            outcome: "deny",
+            severity: decision.severity, // preserve halt vs action source
+            rule: decision.rule,
+            reason: human.reason ?? "human denied",
+            aid,
+          },
+          { action },
+        );
       }
       if (human.decision === "topup") {
         if (decision.severity !== "halt") {
           // topup only meaningful for halt; for ask events, treat as allow.
-          const tightened = await rwxTightenedCheck(raceSnapshot);
-          if (tightened) return tightened;
-          /** @type {import("./types.js").Decision} */
-          const decided = { outcome: "allow", severity: "action", rule: "humanChannel.allow", reason: "topup-on-ask treated as allow", aid };
-          await emit({
-            phase: "gate", action,
-            decision: "allow", severity: "action",
-            rule: decided.rule, reason: decided.reason,
-          });
-          return decided;
+          return this._commitDecision(
+            { outcome: "allow", severity: "action", rule: "humanChannel.allow", reason: "topup-on-ask treated as allow", aid },
+            { action, raceSnapshot },
+          );
         }
         if (typeof human.newCap !== "number" || !isFinite(human.newCap) || human.newCap < 0) {
-          return { outcome: "deny", severity: "halt", rule: decision.rule, reason: "topup with invalid newCap", aid };
+          return this._commitDecision(
+            { outcome: "deny", severity: "halt", rule: decision.rule, reason: "topup with invalid newCap", aid },
+            { action },
+          );
         }
         const dimension = this._haltDimension(decision.rule);
         if (!dimension) {
-          return { outcome: "deny", severity: "halt", rule: decision.rule, reason: "topup not applicable to this rule", aid };
+          return this._commitDecision(
+            { outcome: "deny", severity: "halt", rule: decision.rule, reason: "topup not applicable to this rule", aid },
+            { action },
+          );
         }
         const oldCap = this._haltCap(decision.rule);
         await this.budget.raiseCap(dimension, human.newCap);
@@ -1081,23 +1101,36 @@ export class Gate {
           dimension, oldCap, newCap: human.newCap,
         });
         if (++iterations >= MAX_TOPUP_ITERATIONS) {
-          return { outcome: "deny", severity: "halt", rule: decision.rule,
-                   reason: `topup loop exceeded ${MAX_TOPUP_ITERATIONS} iterations`, aid };
+          return this._commitDecision(
+            {
+              outcome: "deny", severity: "halt", rule: decision.rule,
+              reason: `topup loop exceeded ${MAX_TOPUP_ITERATIONS} iterations`, aid,
+            },
+            { action },
+          );
         }
         // re-evaluate gate.check in the next loop iteration
         continue;
       }
       if (human.decision === "terminate") {
         await this.terminate(human.reason ?? "human chose terminate");
-        return { outcome: "deny", severity: "halt", rule: "gate.terminated",
-                 reason: human.reason ?? "human chose terminate", aid };
+        return this._commitDecision(
+          {
+            outcome: "deny", severity: "halt", rule: "gate.terminated",
+            reason: human.reason ?? "human chose terminate", aid,
+          },
+          { action },
+        );
       }
 
       // Unknown decision: defensive deny.
-      return {
-        outcome: "deny", severity: "halt", rule: decision.rule,
-        reason: `humanChannel returned unknown decision: ${human.decision}`, aid,
-      };
+      return this._commitDecision(
+        {
+          outcome: "deny", severity: "halt", rule: decision.rule,
+          reason: `humanChannel returned unknown decision: ${human.decision}`, aid,
+        },
+        { action },
+      );
     }
   }
 
@@ -1331,35 +1364,23 @@ export class Gate {
    *   budget itself and nothing in §23.21 makes growing the tools map
    *   conditional on the cost/token axis.
    *
-   * **Serialized.** `add()` reads the live tools map, then AWAITS (the
-   * audit-first writes), then mutates — a genuine async window between
-   * "validate against current state" and "use that validation." Two
-   * concurrent `add()` calls that both entered before either had mutated
-   * would both validate against the SAME stale state: found by review, this
-   * let an `x`-tagged key concurrently "tighten" to `w` (loosening it, past
-   * the tighten-only guard, because the `w` call's tighten-check read the
-   * map before the `x` call had landed) and would equally have let two
-   * batches that each individually fit the 10,000-key cap jointly cross it.
-   * A promise-chain mutex on the gate (`this._addQueue`) now runs `add()`
-   * calls strictly one at a time, in call order — see the wrapper below.
+   * **Serialized**, on the SAME gate-wide ordering lock `check()`'s final
+   * commit uses (`_withLock`) — not a separate queue. `add()` reads the live
+   * tools map, then AWAITS (the audit-first writes), then mutates — a
+   * genuine async window between "validate against current state" and "use
+   * that validation." Two concurrent `add()` calls that both entered before
+   * either had mutated would both validate against the SAME stale state:
+   * found by review, this let an `x`-tagged key concurrently "tighten" to
+   * `w` (loosening it, past the tighten-only guard, because the `w` call's
+   * tighten-check read the map before the `x` call had landed) and would
+   * equally have let two batches that each individually fit the 10,000-key
+   * cap jointly cross it. Sharing the lock with `check()`'s final commit
+   * (rather than a separate `add()`-only queue) is what makes the audit
+   * log's line order the TRUE order across BOTH operations (§23.21).
    */
   async add(entries) {
     if (!this._initialized) await this.init();
-    // Promise-chain mutex: each call links onto the previous call's queue
-    // token and waits for it before running its own logic. The queue token
-    // ALWAYS resolves (never rejects) — `releaseNext()` runs unconditionally
-    // in `finally`, regardless of whether this call's `_addOnce` succeeded or
-    // threw — so a rejected `add()` can never wedge the queue for whatever
-    // comes after it (falsified: see test/rwx-add.test.js).
-    const previous = this._addQueue;
-    let releaseNext = (_value) => {}; // always overwritten synchronously below; the no-op default is only to satisfy TS's definite-assignment check
-    this._addQueue = new Promise((resolve) => { releaseNext = resolve; });
-    await previous;
-    try {
-      return await this._addOnce(entries);
-    } finally {
-      releaseNext();
-    }
+    return this._withLock(() => this._addOnce(entries));
   }
 
   /**
