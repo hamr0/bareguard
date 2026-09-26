@@ -1402,6 +1402,21 @@ narrow, tighten-only operation.
   IT throws (the audit sink is fully down), that exception propagates in its place, which
   still satisfies "propagates," though the caller then sees the audit failure's message
   rather than the original rejection reason.
+- **`add()` calls are serialized — a real bug the audit-first change above introduced, found
+  by review.** Audit-first means `add()` genuinely awaits (the per-key `rwx.added` writes)
+  BETWEEN validating against the live tools map and mutating it. Two concurrent `add()`
+  calls that both entered before either had mutated both validated against the SAME stale
+  state — reproduced: an `x`-tagged key concurrently "tightened" to `w` actually LOOSENED it
+  (the `w` call's tighten-check read the map before the `x` call had landed), and two
+  batches that each individually fit the 10,000-key cap could jointly cross it the same way.
+  Fixed with a promise-chain mutex on the gate (`this._addQueue`): every `add()` call links
+  onto the previous call's queue token and awaits it before running its own logic, so calls
+  run strictly one at a time, in call order. The queue token itself always resolves — never
+  rejects — regardless of whether the call it gates threw, so a rejected `add()` can never
+  wedge the queue for whatever comes after it. This serializes the WHOLE `add()` call
+  (validation through the final audit write), which is also the answer to "any other async
+  window of the same class": `add()`'s only awaits are its own audit writes, all of which
+  now happen inside the lock.
 - **`add()`'s tools-map KEY joins the audit redactor and the per-field byte re-bound.**
   `rwx.added`'s `key` and `rwx.add_rejected`'s `keys` are caller-controlled and unbounded at
   the source (a spec-less site's rwxmap-minted key can itself carry a query-string token),
