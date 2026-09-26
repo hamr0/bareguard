@@ -1316,16 +1316,40 @@ export class Gate {
         );
       }
 
-      // 5) Every check above passed for the WHOLE batch — land it. No throw
-      // point exists after this line, so all-or-nothing is structural: a
-      // batch that fails any check above never touches `currentTools`.
-      for (const [key, raw] of batchEntries) currentTools[key] = raw;
-      rwx.tools = currentTools;
-      this._addGeneration++; // §23.21 decision 5: check()/add() race fix
+      // 5) Every check above passed for the WHOLE batch. AUDIT FIRST, MUTATE
+      // AFTER — an audit write failure must PROPAGATE (repo rule), and the
+      // only way to guarantee "every ALLOWED key traces back to a logged
+      // add" is to never let a key become live before its own line is
+      // durably written. Writing every rwx.added line BEFORE touching
+      // `currentTools` means a mid-batch audit-write throw (e.g. the 2nd of
+      // 3 lines) leaves NOTHING landed — the mutation loop below never
+      // runs — at the cost of a residual in the opposite, SAFE direction:
+      // an EARLIER key in the same batch may already have a real
+      // `rwx.added` line on disk describing a key that ultimately never
+      // landed ("logged but not landed"). This is deliberately preferred
+      // over the alternative (mutate first, roll back on audit failure):
+      // rolling back after a partial audit write would leave an
+      // `rwx.added` line for a key that was subsequently reverted — the
+      // exact same residual, PLUS a live rollback path that itself must
+      // never partially fail. Logged-but-not-landed is safe because
+      // `check()`/`rwxCheck` only ever consult the live tools map, never
+      // the audit log — a stray log line can never grant anything; the
+      // rejected alternative, landed-but-not-logged, would be a real,
+      // usable capability with no audit trail explaining it, which is the
+      // one thing "every allowed key traces back to a logged add" forbids.
       for (const [key] of batchEntries) {
         const norm = newNorms.get(key);
         await this.audit.emit({ phase: "rwx.added", key, letter: norm.letter, marker: norm.marker });
       }
+      // 6) Every rwx.added line landed durably — NOW mutate. No throw point
+      // exists after this line, so all-or-nothing is structural: a batch
+      // that fails any check above, OR whose audit write fails, never
+      // touches `currentTools`. `_addGeneration` bumps in the same
+      // breath as the mutation, so it is always consistent with what
+      // actually landed (never bumped when nothing did).
+      for (const [key, raw] of batchEntries) currentTools[key] = raw;
+      rwx.tools = currentTools;
+      this._addGeneration++; // §23.21 decision 5: check()/add() race fix
     } catch (err) {
       await this.audit.emit({
         phase: "rwx.add_rejected", reason: err.message,

@@ -11,7 +11,12 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
 import { Gate } from "../src/index.js";
+import { makeTmpDir, cleanup } from "./_helpers.js";
+
+const MAX_LINE_BYTES = 3500;
 
 function gateFor(rwxOverrides = {}, humanChannel) {
   return new Gate({
@@ -437,4 +442,318 @@ test("add/check race: humanChannel is never called twice (no re-entering the ask
   human.resolve({ decision: "allow" });
   await checkPromise;
   assert.equal(humanChannelCalls, 1);
+});
+
+// ─── 1. audit write failure mid-add() ─────────────────────────────────────
+//
+// Repo rule: an audit WRITE failure PROPAGATES (never silently swallowed).
+// Additional invariant this section proves: add() must never end with a key
+// that is LIVE in the tools map (checks allow it) but has no rwx.added line
+// — "every allowed key traces back to a logged add." The chosen ordering is
+// audit-lines-first, mutate-after: every rwx.added line for the batch is
+// written BEFORE any key is copied into the live tools map. If an audit
+// write throws partway through a batch, nothing has been mutated yet, so
+// the whole batch simply fails to land (all-or-nothing holds). The residual
+// this leaves is "logged but not landed" (an earlier key in the same batch
+// may already have a real rwx.added line on disk even though the batch as a
+// whole didn't land) — never "landed but not logged". Logged-but-not-landed
+// is safe: the audit trail can over-claim what's granted, but `check()`
+// only ever consults the live tools map, never the audit log, so a stray
+// log line grants nothing. Landed-but-not-logged would be unsafe: a real,
+// usable capability with no audit trail explaining it.
+
+function makeThrowingAudit(gate, { failOnPhase, failOnNth, failMessage }) {
+  const original = gate.audit.emit.bind(gate.audit);
+  let count = 0;
+  gate.audit.emit = async (fields) => {
+    if (fields.phase === failOnPhase) {
+      count++;
+      if (count === failOnNth) throw new Error(failMessage);
+    }
+    return original(fields);
+  };
+  return () => { gate.audit.emit = original; };
+}
+
+test("add: audit write failure on the 1st rwx.added line of a 3-key batch propagates; nothing lands", async () => {
+  const gate = gateFor();
+  await gate.init();
+  makeThrowingAudit(gate, { failOnPhase: "rwx.added", failOnNth: 1, failMessage: "disk full (simulated)" });
+
+  await assert.rejects(() => gate.add({ k1: "r", k2: "w", k3: "x" }), /disk full \(simulated\)/);
+
+  for (const k of ["k1", "k2", "k3"]) {
+    const d = await gate.check({ type: k, args: {} });
+    assert.equal(d.rule, "rwx.unlisted", `${k} must not have landed`);
+  }
+  const lines = await gate.audit.readAll();
+  assert.equal(lines.filter((l) => l.phase === "rwx.added").length, 0, "no rwx.added lines at all — the failure was on the very first one");
+  const rejected = lines.filter((l) => l.phase === "rwx.add_rejected");
+  assert.equal(rejected.length, 1);
+  assert.match(rejected[0].reason, /disk full \(simulated\)/);
+  assert.deepEqual(rejected[0].keys.sort(), ["k1", "k2", "k3"]);
+});
+
+test("add: audit write failure on the 2nd rwx.added line of a 3-key batch propagates; nothing lands (residual: k1's rwx.added line is logged-but-not-landed)", async () => {
+  const gateGen = gateFor();
+  await gateGen.init();
+  const genBefore = gateGen._addGeneration;
+
+  const gate = gateFor();
+  await gate.init();
+  makeThrowingAudit(gate, { failOnPhase: "rwx.added", failOnNth: 2, failMessage: "disk full on 2nd line (simulated)" });
+
+  await assert.rejects(() => gate.add({ k1: "r", k2: "w", k3: "x" }), /disk full on 2nd line/);
+
+  // Structural guarantee: NONE of the batch landed (audit-first, mutate-after
+  // — the mutation loop never ran because the audit-writing loop threw).
+  for (const k of ["k1", "k2", "k3"]) {
+    const d = await gate.check({ type: k, args: {} });
+    assert.equal(d.rule, "rwx.unlisted", `${k} must not have landed`);
+  }
+  // _addGeneration must be consistent with "nothing landed" — unchanged.
+  assert.equal(gate._addGeneration, genBefore, "_addGeneration must not bump when nothing actually landed");
+
+  const lines = await gate.audit.readAll();
+  const added = lines.filter((l) => l.phase === "rwx.added");
+  // The documented residual: k1's line was written before k2's write threw.
+  // This is "logged but not landed" — safe, because check() never consults
+  // the audit log, only the live (untouched) tools map.
+  assert.equal(added.length, 1, "exactly one rwx.added line — for k1, the only write that completed before the failure");
+  assert.equal(added[0].key, "k1");
+  const rejected = lines.filter((l) => l.phase === "rwx.add_rejected");
+  assert.equal(rejected.length, 1);
+  assert.match(rejected[0].reason, /disk full on 2nd line/);
+  assert.deepEqual(rejected[0].keys.sort(), ["k1", "k2", "k3"]);
+});
+
+test("add: audit write failure on the rwx.add_rejected line itself (a genuinely-bad batch whose rejection audit ALSO fails to write) propagates", async () => {
+  const gate = gateFor();
+  await gate.init();
+  makeThrowingAudit(gate, { failOnPhase: "rwx.add_rejected", failOnNth: 1, failMessage: "audit sink fully down (simulated)" });
+
+  // bad_key: "q" is a genuinely malformed entry — would normally be
+  // rejected with a "must be r/w/x or {...}" message, but the audit write
+  // for THAT rejection also throws, so the propagated error is the audit
+  // failure, not the original validation message. This still satisfies the
+  // repo rule (a write failure PROPAGATES, is never swallowed into a
+  // resolved promise) — it does not additionally promise to preserve the
+  // original rejection reason when the rejection's OWN audit write fails.
+  await assert.rejects(() => gate.add({ bad_key: "q" }), /audit sink fully down \(simulated\)/);
+  const d = await gate.check({ type: "bad_key", args: {} });
+  assert.equal(d.rule, "rwx.unlisted", "bad_key must not have landed either way");
+});
+
+// ─── 2. race + human says NO (deny), and humanChannel timeout ────────────
+
+test("add/check race: human explicitly DENIES during a pending tighten — the human's deny stands (no rwx.tightened needed)", async () => {
+  const asked = deferred();
+  const human = deferred();
+  const gate = new Gate({
+    audit: { path: null },
+    rwx: {
+      agent: "researcher", agents: { researcher: "r--" },
+      tools: { probe: { letter: "r", marker: "loose" } }, askOn: "loose",
+    },
+    humanChannel: async () => { asked.resolve(); return human.promise; },
+  });
+  await gate.init();
+  const checkPromise = gate.check({ type: "probe", args: {} });
+  await asked.promise;
+  await gate.add({ probe: { letter: "w", marker: "loose" } }); // tighten DURING the wait — irrelevant, human said no
+  human.resolve({ decision: "deny", reason: "operator said no" });
+  const d = await checkPromise;
+  assert.equal(d.outcome, "deny");
+  assert.equal(d.rule, "rwx.ask", "the ORIGINAL ask rule, not rwx.tightened — the race-check only runs on the allow path");
+  assert.equal(d.reason, "operator said no");
+});
+
+test("add/check race: humanChannel TIMES OUT during a pending tighten — denies via the timeout path, not rwx.tightened", async () => {
+  const asked = deferred();
+  // A humanChannel that answers eventually via a real setTimeout, but only
+  // long after the 20ms gate timeout has already fired — matching the style
+  // of the existing humanChannelTimeoutMs tests in test/halt-flow.test.js
+  // (a manually-resolved deferred left pending past the test's own end
+  // trips node:test's dangling-promise detection at process exit).
+  const gate = new Gate({
+    audit: { path: null },
+    humanChannelTimeoutMs: 20,
+    rwx: {
+      agent: "researcher", agents: { researcher: "r--" },
+      tools: { probe: { letter: "r", marker: "loose" } }, askOn: "loose",
+    },
+    humanChannel: (event) => {
+      asked.resolve();
+      return new Promise((resolve) => setTimeout(() => resolve({ decision: "allow" }), 200));
+    },
+  });
+  await gate.init();
+  const checkPromise = gate.check({ type: "probe", args: {} });
+  await asked.promise;
+  await gate.add({ probe: { letter: "w", marker: "loose" } }); // tighten while the timeout is ticking
+  const d = await checkPromise;
+  assert.equal(d.outcome, "deny");
+  assert.match(d.reason, /humanChannel timeout/);
+  assert.notEqual(d.rule, "rwx.tightened", "timeout denies on its own terms, not via the race-check");
+});
+
+// ─── 3. race, marker-only change, ask raised by something OTHER than rwx ──
+
+test("add/check race: an UNRELATED ask (flags) is pending; a concurrent add() moves the matched key's MARKER only (letter unchanged) — denies rwx.tightened on the fresh askHuman", async () => {
+  // "probe" starts as a bare "r" (no marker at all — never asks under
+  // askOn:"loose"). The pending ask is raised by `flags` (step 4b), which
+  // runs BEFORE rwx's own step 5 in the eval order — so rwx's step 5 is
+  // never even reached for THIS check() call; the ask has nothing to do
+  // with rwx. While that unrelated ask is pending, add() moves "probe" to
+  // {letter:"r", marker:"loose"} — letter unchanged, so this is legal under
+  // decision 4's tighten-only rule (loose is not a loosen of a bare "r").
+  // A fresh rwxCheck on "probe" now returns askHuman (marker is loose,
+  // askOn:"loose"), which is exactly what "if it got stricter, deny" means:
+  // the human answered an ask that had nothing to do with rwx, and the
+  // action would NOW independently require an rwx ask it didn't before.
+  const asked = deferred();
+  const human = deferred();
+  const gate = new Gate({
+    audit: { path: null },
+    rwx: {
+      agent: "researcher", agents: { researcher: "r--" },
+      tools: { probe: "r" }, // bare "r" — no marker, never asks via rwx alone
+      askOn: "loose",
+    },
+    flags: { severity: { high: "ask" } }, // an ask source with NOTHING to do with rwx
+    humanChannel: async () => { asked.resolve(); return human.promise; },
+  });
+  await gate.init();
+  const checkPromise = gate.check({ type: "probe", args: {}, severity: "high" });
+  await asked.promise;
+  await gate.add({ probe: { letter: "r", marker: "loose" } }); // marker-only change, letter unchanged
+  human.resolve({ decision: "allow" });
+  const d = await checkPromise;
+  assert.equal(d.outcome, "deny");
+  assert.equal(d.rule, "rwx.tightened");
+  assert.match(d.reason, /askHuman/);
+});
+
+// ─── 4. audit hygiene of add lines: redaction + byte bounds ──────────────
+
+test("add: a secret-looking key is redacted in the rwx.added line", async () => {
+  const dir = await makeTmpDir();
+  try {
+    const auditPath = path.join(dir, "audit.jsonl");
+    const gate = new Gate({
+      audit: { path: auditPath },
+      rwx: { agent: "fixer", agents: { fixer: "rw-" }, tools: {} },
+      humanChannel: async () => ({ decision: "deny" }),
+    });
+    await gate.init();
+    const secretKey = "api.example.com.GET /v1/x?token=sk-abc123def456ghi789";
+    await gate.add({ [secretKey]: "r" });
+    const raw = fs.readFileSync(auditPath, "utf8").trim().split("\n");
+    const line = raw.map((l) => JSON.parse(l)).find((l) => l.phase === "rwx.added");
+    assert.ok(line, "expected an rwx.added line");
+    assert.ok(!line.key.includes("sk-abc123def456ghi789"), `key was not redacted: ${line.key}`);
+    assert.match(line.key, /\[REDACTED:pattern=/);
+  } finally { await cleanup(dir); }
+});
+
+test("add: a Bearer-token-looking key is redacted in the rwx.add_rejected line's keys array", async () => {
+  const dir = await makeTmpDir();
+  try {
+    const auditPath = path.join(dir, "audit.jsonl");
+    const gate = new Gate({
+      audit: { path: auditPath },
+      rwx: { agent: "fixer", agents: { fixer: "rw-" }, tools: {} },
+      humanChannel: async () => ({ decision: "deny" }),
+    });
+    await gate.init();
+    const secretKey = "Authorization: Bearer sk-liveSECRETtoken1234567890abcdef";
+    await assert.rejects(() => gate.add({ [secretKey]: "q" /* bad letter, forces rejection */ }));
+    const raw = fs.readFileSync(auditPath, "utf8").trim().split("\n");
+    const line = raw.map((l) => JSON.parse(l)).find((l) => l.phase === "rwx.add_rejected");
+    assert.ok(line, "expected an rwx.add_rejected line");
+    const serializedKeys = JSON.stringify(line.keys);
+    assert.ok(!serializedKeys.includes("sk-liveSECRETtoken1234567890abcdef"), `keys not redacted: ${serializedKeys}`);
+  } finally { await cleanup(dir); }
+});
+
+test("add: a 50KB key in a successful add() keeps the rwx.added line at or under MAX_LINE_BYTES", async () => {
+  const dir = await makeTmpDir();
+  try {
+    const auditPath = path.join(dir, "audit.jsonl");
+    const gate = new Gate({
+      audit: { path: auditPath },
+      rwx: { agent: "fixer", agents: { fixer: "rw-" }, tools: {} },
+      humanChannel: async () => ({ decision: "deny" }),
+    });
+    await gate.init();
+    const hugeKey = "k".repeat(50 * 1024);
+    await gate.add({ [hugeKey]: "r" });
+    const raw = fs.readFileSync(auditPath, "utf8").trim().split("\n");
+    let sawAdded = false;
+    for (const l of raw) {
+      const bytes = Buffer.byteLength(l, "utf8");
+      assert.ok(bytes <= MAX_LINE_BYTES, `line was ${bytes} bytes, over the ${MAX_LINE_BYTES}-byte cap: ${l.slice(0, 200)}...`);
+      const parsed = JSON.parse(l);
+      if (parsed.phase === "rwx.added") sawAdded = true;
+    }
+    assert.ok(sawAdded, "expected an rwx.added line even though the key was huge");
+  } finally { await cleanup(dir); }
+});
+
+test("add: a 50KB key in a REJECTED add() keeps the rwx.add_rejected line at or under MAX_LINE_BYTES", async () => {
+  const dir = await makeTmpDir();
+  try {
+    const auditPath = path.join(dir, "audit.jsonl");
+    const gate = new Gate({
+      audit: { path: auditPath },
+      rwx: { agent: "fixer", agents: { fixer: "rw-" }, tools: {} },
+      humanChannel: async () => ({ decision: "deny" }),
+    });
+    await gate.init();
+    const hugeKey = "k".repeat(50 * 1024);
+    await assert.rejects(() => gate.add({ [hugeKey]: "q" }));
+    const raw = fs.readFileSync(auditPath, "utf8").trim().split("\n");
+    let sawRejected = false;
+    for (const l of raw) {
+      const bytes = Buffer.byteLength(l, "utf8");
+      assert.ok(bytes <= MAX_LINE_BYTES, `line was ${bytes} bytes, over the ${MAX_LINE_BYTES}-byte cap`);
+      const parsed = JSON.parse(l);
+      if (parsed.phase === "rwx.add_rejected") sawRejected = true;
+    }
+    assert.ok(sawRejected, "expected an rwx.add_rejected line even though the key was huge");
+  } finally { await cleanup(dir); }
+});
+
+test("add: a long multibyte-UTF8 key is bounded correctly (byte-counted, not UTF-16-unit-counted)", async () => {
+  const dir = await makeTmpDir();
+  try {
+    const auditPath = path.join(dir, "audit.jsonl");
+    const gate = new Gate({
+      audit: { path: auditPath },
+      rwx: { agent: "fixer", agents: { fixer: "rw-" }, tools: {} },
+      humanChannel: async () => ({ decision: "deny" }),
+    });
+    await gate.init();
+    // U+4E2D is 3 bytes in UTF-8 but 1 UTF-16 code unit — repeating it enough
+    // times to exceed MAX_LINE_BYTES in bytes while staying "short" in units.
+    const multibyteKey = "中".repeat(2000); // 2000 units, 6000 bytes
+    await gate.add({ [multibyteKey]: "r" });
+    const raw = fs.readFileSync(auditPath, "utf8").trim().split("\n");
+    for (const l of raw) {
+      const bytes = Buffer.byteLength(l, "utf8");
+      assert.ok(bytes <= MAX_LINE_BYTES, `line was ${bytes} bytes (not units), over the ${MAX_LINE_BYTES}-byte cap`);
+    }
+  } finally { await cleanup(dir); }
+});
+
+test("add: the thrown Error message for a rejected key is clipped (bounded), not unbounded like the raw key", async () => {
+  const gate = gateFor();
+  await gate.init();
+  const hugeKey = "k".repeat(50 * 1024);
+  const err = await gate.add({ [hugeKey]: "q" }).then(() => null, (e) => e);
+  assert.ok(err, "expected add() to throw");
+  // The thrown message embeds the key via clipKey (64-char clip with an
+  // ellipsis), same treatment every other rwx error message gives a
+  // caller-supplied key — it must not carry the full 50KB key verbatim.
+  assert.ok(err.message.length < 1000, `error message was ${err.message.length} chars, expected it clipped`);
 });
