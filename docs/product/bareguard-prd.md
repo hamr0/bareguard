@@ -1186,6 +1186,14 @@ questions the POC was scoped to answer (§23.18):
 3. **`fetch` is split by action type** (`fetch.get` r, `fetch.post` w or x) rather than gaining
    a second axis — tag-by-action-type, consistent with §23.7. Make this explicit in
    `bareguard.context.md` too, once shipped.
+   **SECURITY FIX (0.18.0):** shipping this decision as `fetch.get`/`fetch.post` action types
+   exposed a pre-existing `net` bug — `netCheck` gated on the literal string `action.type ===
+   "fetch"`, so neither split type (nor `<vendor>.<operationId>` from §23.12, nor a spec-less
+   `<host>.<METHOD> <path>` key from §23.21) ever ran `net.allowDomains`/`net.denyPrivateIps`.
+   Fixed by gating `net` on **URL presence** (`action.url`/`action.args.url`) instead of on
+   `action.type`. The harness contract for every rwx web-call shape: put the URL the harness
+   will actually fetch in `url` (or `args.url`) — a URL carried in any other field is not
+   checked. See CHANGELOG [Unreleased].
 4. **bareguard takes the parsed object, never a file path** — all config is a JS object today
    (per §10's public API); the caller does the file I/O. bareguard does not gain its own
    settings-file loader by this decision (see the open question at §23.18).
@@ -1520,7 +1528,10 @@ sharpening on item 5 below (see the check()/add() race bullet above):**
   (best guess, documented: all-digit segments, UUIDs, long hex strings).
 - bareguard matches `action.type` literally, as always, so the harness must set the action's
   `type` to that key (bareguard's own raw-fetch convention, `fetch.get`/`fetch.post`, carries
-  the URL in a field, not the type).
+  the URL in a field, not the type). **`net` gates on that field, not on `type`** (0.18.0 fix,
+  see CHANGELOG): put the URL the harness will actually fetch in `url` (or `args.url`) on the
+  action so `net.allowDomains`/`net.denyPrivateIps` run — a spec-less key alone does not exempt
+  the action from `net`, and a URL carried anywhere else is not checked.
 
 **Known property of spec-less sites (accepted; stated here now that `gate.add()` is built):** in
 per-request mode the agent chooses the method and URL that `classifyRow` sees, and every GET
