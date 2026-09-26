@@ -1459,29 +1459,42 @@ narrow, tighten-only operation.
   DID change is treated the same conservative way as a fresh deny. An unrelated concurrent
   `add()` — the false positive the first pass produced — now correctly leaves the human's
   "allow" standing.
-- **check()/add() race, snapshot-timing bug found by debrief review, fixed.** The per-key
-  snapshot above (generation + matched entry) was taken BEFORE `check()` called
-  `_stepEval(action)` at all — but `_stepEval` itself can await real I/O ahead of rwx's own
-  step 5 (`deferRateCheck`/`spawnRateCheck` read the audit log to enforce their rate caps),
-  and `check()` awaits its own "gate"/"halt" audit lines and `haltContext()` after
-  `_stepEval` returns, before ever dispatching to `humanChannel`. Repro'd: a concurrent
-  `add()` landing during ONE OF THOSE awaits (not during the human wait) meant step 5's
-  `rwxCheck` read the ALREADY-tightened entry — the ask itself was correctly computed
-  against the new entry, and a human legitimately approved it — but the stale
-  pre-`_stepEval` snapshot still disagreed with the post-approval re-check, producing a
-  false `rwx.tightened` deny with a misleading audit reason ("while this check() awaited a
-  human decision" — it had not; the tighten predated the ask). **Fixed** by moving the
-  snapshot to the LAST synchronous point before the human wait actually begins — immediately
-  before dispatching to `humanChannel`, after every await `_stepEval`/`check()` needed to
-  reach that point — rather than threading a snapshot through `_stepEval`'s internal step
-  order. This is a strictly later, more accurate reference point ("the entry as it stood
-  when THIS ask was raised") and needs no other code path changes: the legitimate
-  tighten-during-the-actual-wait case (case 12b/29) and the marker-only-change-via-an-
-  unrelated-ask case (case 37, where rwx step 5 is never reached at all that iteration) both
-  still deny correctly, because neither of those scenarios' add() lands before this new,
-  later snapshot point either. Grepped for any other await between the (new) snapshot point
-  and the fresh `rwxCheck` re-read inside the race-check itself: none — that re-read runs
-  synchronously, in the same tick the human's "allow" is observed.
+- **check()/add() race, snapshot-timing corrected TWICE — the second correction closed a
+  genuine safety hole the first one introduced, found by orchestrator review.**
+  - **First attempt (wrong, "later is more accurate"):** the per-key snapshot (generation +
+    matched entry) was originally taken BEFORE `check()` called `_stepEval(action)` at all —
+    but `_stepEval` itself can await real I/O ahead of rwx's own step 5
+    (`deferRateCheck`/`spawnRateCheck` read the audit log for their rate caps). Repro'd: a
+    concurrent `add()` landing during that internal await meant step 5's `rwxCheck` read the
+    ALREADY-tightened entry — the ask was correctly computed against the new entry and a
+    human legitimately approved it — but the stale pre-`_stepEval` snapshot still disagreed,
+    producing a false `rwx.tightened` deny. The fix chosen at the time moved the snapshot to
+    the LAST synchronous point before dispatching to `humanChannel`, reasoning that this was
+    "the entry as it stood when the ask was raised."
+  - **That reasoning was backwards, and reopened a real safety hole.** The ask decision is
+    computed at rwx step 5's read, not at dispatch time. `check()` itself awaits more (its
+    own "gate"/askHuman audit line, `haltContext()`) AFTER step 5 runs but BEFORE dispatching
+    to `humanChannel`. A concurrent `add()` landing in THAT window — after the read the ask
+    was computed from, but before the dispatch-time snapshot ran — was already absorbed into
+    the dispatch-time snapshot as if it were the ORIGINAL value, so the post-approval compare
+    saw "no change" and wrongly allowed. Repro'd (orchestrator): an `r--` agent's `probe`
+    action, tagged `{r, loose}`, tightened to `{w, loose}` from inside `check()`'s own ask
+    audit-line write — result: `allow`, even though the human only ever approved the
+    `r`-tagged decision and the agent never held `w`.
+  - **Fixed, correctly this time:** the snapshot is taken in the EXACT SAME synchronous tick
+    `rwxCheck` reads the map, inside `_stepEval`'s step 5 itself (an out-parameter,
+    `raceSnapshot`, mutated in place — a fresh per-call object each `check()` call, never
+    shared instance state, since `check()` calls can run concurrently). `check()` seeds
+    `raceSnapshot` with a conservative default (the generation + matched entry at the very
+    top of the loop iteration, before `_stepEval` is even called) for the case where step 5
+    does NOT run this iteration (an earlier step — `flags`/`content` — already asked); if
+    step 5 DOES run, it overwrites both fields with the precise same-tick read, which is
+    strictly more accurate than the default whenever `_stepEval`'s own earlier steps
+    (`deferRateCheck`/`spawnRateCheck`) awaited real I/O first. Both the legitimate
+    tighten-during-the-actual-human-wait case and the marker-only-change-via-an-unrelated-ask
+    case (rwx step 5 never runs that iteration — the conservative default covers it) still
+    deny correctly. Grepped for any other await between the snapshot write and the fresh
+    `rwxCheck` re-read at approval time: none — that re-read is fully synchronous.
 - Callable from harness code only. Holds structurally: the agent only sends actions and never
   holds gate methods.
 - **`add()` rejects once the gate is `terminate()`d, found by debrief.** Checked first thing
