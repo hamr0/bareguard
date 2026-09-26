@@ -83,10 +83,14 @@ const MARKERS = new Set(["tight", "loose", "settled"]);
  * deny (never a throw at read time; the construct-time throw in
  * {@link assertRwxConfig} is the earlier, non-TOCTOU catch of the same
  * shape error).
+ * Exported (0.18.0) so `gate.js`'s `add()` (§23.21) can read back an
+ * existing/incoming tools-map entry's letter+marker for its tighten-only
+ * comparison, reusing the exact same normalization `rwxCheck`/
+ * `assertRwxConfig` already apply — no second, hand-copied implementation.
  * @param {*} v raw map value
  * @returns {{letter:string, marker:(string|null)}|null}
  */
-function normalizeEntry(v) {
+export function normalizeEntry(v) {
   if (typeof v === "string") {
     return TOOL_LETTER_RE.test(v) ? { letter: v, marker: null } : null;
   }
