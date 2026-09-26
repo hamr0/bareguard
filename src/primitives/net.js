@@ -1,4 +1,10 @@
-// net primitive (PRD §8 row 4). Runs at step 3 when action.type === "fetch".
+// net primitive (PRD §8 row 4). Runs at step 3 on ANY action that carries a
+// URL (action.url or action.args.url present), regardless of action.type —
+// not just "fetch". Under rwx (§23.12/§23.13/§23.21), web calls are typed
+// "fetch.get"/"fetch.post", "<vendor>.<operationId>", or a runtime spec-less
+// "<host>.<METHOD> <path>" key; gating on a literal "fetch" type let all of
+// those skip net entirely (fixed in 0.18.0 — see CHANGELOG). A plain
+// {type:"fetch"} with no url at all is still a no-op (nothing to check).
 // Domain allowlist + private-IP deny.
 
 /**
@@ -59,9 +65,15 @@ function isPrivateIp(host) {
 // wireGate-style {type, args, _ctx} adapters compose without a translation
 // layer. (v0.4.1, multis seam fix.)
 /**
- * Step-3 deny for `fetch` actions: invalid-URL deny, optional private-IP deny, optional domain allowlist.
+ * Step-3 deny for any action carrying a URL: invalid-URL deny, optional private-IP deny, optional domain allowlist.
+ * Applies regardless of `action.type` — gated on the PRESENCE of `action.url`
+ * or `action.args.url` (not null/undefined), not on any particular type
+ * string. bareguard does not maintain a list of "fetch-like" types and does
+ * not tie itself to any caller's key format (e.g. rwxmap's); the harness
+ * contract is: put the URL you will actually fetch in `url` (or `args.url`).
+ * A URL carried in any other field is not checked.
  * @param {object} action action being evaluated; URL read from action.url or action.args.url
- * @param {string} action.type action type (no-op unless "fetch")
+ * @param {string} [action.type] action type (no-op only when no url is present at all)
  * @param {string} [action.url] target URL (flat shape)
  * @param {object} [action.args] nested-shape args
  * @param {object} [cfg] net config
@@ -75,13 +87,14 @@ function isPrivateIp(host) {
  * @returns {{outcome:string,severity:string,rule:string,reason:string}|null} deny decision, or null if allowed/not applicable
  */
 export function netCheck(action, cfg = {}) {
-  if (action.type !== "fetch") return null;
   const url = action.url ?? action.args?.url;
+  // No url anywhere (incl. a plain {type:"fetch"} with none) → nothing to
+  // check; net gates on url PRESENCE, never on action.type.
+  if (url == null) return null;
   // A present-but-non-string url fails OPEN if waved through (the action
   // reaches the allowlist while the executor coerces it back to a fetchable
-  // string). Deny anything that isn't a plain string. (Absent → not a fetch
-  // shape we gate.)
-  if (url != null && typeof url !== "string") {
+  // string). Deny anything that isn't a plain string.
+  if (typeof url !== "string") {
     return { outcome: "deny", severity: "action", rule: "net.invalidUrl", reason: `url is not a string (type ${typeof url})` };
   }
   if (typeof url !== "string") return null;

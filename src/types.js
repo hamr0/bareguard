@@ -260,7 +260,13 @@ export {};
  */
 
 /**
- * `net` config — applies when `action.type === "fetch"`.
+ * `net` config — applies to any action carrying a URL (`action.url` or
+ * `action.args.url`, present and not null/undefined), regardless of
+ * `action.type`. Not limited to `type === "fetch"`: under rwx, web calls may
+ * be typed `fetch.get`/`fetch.post`, `<vendor>.<operationId>`, or a
+ * spec-less `<host>.<METHOD> <path>` key — the harness contract is that the
+ * URL actually being fetched lives in `url` (or `args.url`); a URL carried
+ * in any other field is not checked.
  *
  * @typedef {object} NetConfig
  * @property {string[]} [allowDomains]   Host must equal or be a subdomain of an
