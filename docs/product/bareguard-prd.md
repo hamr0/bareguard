@@ -1246,7 +1246,9 @@ release is a new minor, **0.17.0**. Once shipped, the `rwx` config keys, the
 and the audit letter all **join the 1.0 SemVer surface** (Future features / SemVer-surface
 list) alongside the rest of §19's list. Downstream: **bareagent** must pass the agent's
 **name** and the clamped letters to its children on spawn (§23.9, §23.11) — this is a bareagent
-change, not a new bareagent primitive. Planned 0.18.0 additions to this surface — `gate.add`, the `rwx.added` phase, the size-cap deny rule — are tracked separately in §23.21. (bareguard-prd.md:1241-1249)
+change, not a new bareagent primitive. Planned 0.18.0 additions to this surface — `gate.add`,
+the `rwx.added`/`rwx.add_rejected` phases, the `rwx.tightened` deny rule, and the 10,000-entry
+size cap — are tracked separately in §23.21.
 
 ### 23.18 Open questions (remaining open)
 
@@ -1352,23 +1354,69 @@ narrow, tighten-only operation.
 
 - Takes 1..n `tools` entries: `{ key: "r" | {letter, marker} }`. Startup load and one mid-run
   request use the same code path.
-- **Tighten-only.** A new key is added. An existing key — **including a hand-written one** —
-  can only go stricter (`r` < `w` < `x`); an add never loosens a key.
+- **Tighten-only, letter AND marker.** A new key is added. An existing key — **including a
+  hand-written one** — can only go stricter: the letter can only rise (`r` < `w` < `x`), and
+  an entry currently marked `"loose"` can only move to another `"loose"` entry — never to
+  `"tight"`/`"settled"`, and never to a bare letter string either, because a bare letter
+  normalizes to `marker: null` (a state distinct from `"loose"`, confirmed against
+  `src/primitives/rwx.js`'s `normalizeEntry`), not to `"loose"`. `"tight"` <-> `"settled"`
+  moves are unrestricted (neither ever asks). A missing/unrecognized marker string on an
+  object entry still normalizes to `"loose"` per §23.20, so a `"loose"` -> `{marker: <typo>}`
+  move is `"loose"` -> `"loose"`, not a violation. An add never loosens a key by either axis.
 - **Tools map only.** The `bash` map, `agents`, and grants are out of reach. The grant stays the
   ceiling: nothing added can exceed what the human granted.
-- **Validated exactly as at construct time** (bare letter or `{letter, marker}`, §23.20). A bad
-  entry throws. **All-or-nothing:** the whole batch lands or none of it does.
-- **Audited:** every add writes an audit line, new phase `rwx.added` (key, letter, marker), so
-  every allowed key traces back to either the committed file or a logged add.
+- **Validated exactly as at construct time** (bare letter or `{letter, marker}`, §23.20), over
+  the batch's own entries only — not the whole map (delta validation; `assertRwxConfig` has no
+  cross-key rule, so this matches whole-map validation exactly per entry while keeping `add()`
+  independent of the tools map's total size). A bad entry throws. **All-or-nothing:** the
+  whole batch lands or none of it does.
+- **Size cap: 10,000 entries on the tools map.** `add()` itself is the only cap check: it
+  refuses (throws, nothing lands) when the batch would push the map past 10,000 entries;
+  landing exactly at 10,000 is fine, only crossing it refuses. There is no separate
+  gate-wide "every `check()` denies past the cap" state — the only way the map grows is
+  through `add()`, so that would be unreachable.
+- **Audited on success, and audited loudly on rejection.** Every landed add writes an audit
+  line, new phase `rwx.added` (key, letter, marker), so every allowed key traces back to
+  either the committed file or a logged add. Every REJECTED add — bad shape, a tighten-only
+  violation, or over the cap — writes an audit line too, new phase `rwx.add_rejected`
+  (reason, the batch's attempted keys), before throwing. This is the default; there is no
+  silent-reject mode.
 - **The gate copies the rwx config at construct** and `add()` mutates that private copy — this
   also closes today's live link to the caller's object.
-- **Size cap** on the tools map (value TBD at build). Past it the gate fails **closed** (deny)
-  and the harness must rebuild the gate.
+- **check()/add() race, closed.** `check()` reads the matched entry's letter and may then
+  await a human decision (an `askOn:"loose"` ask, or any other ask/halt) for an unbounded
+  time. If an `add()` lands during that wait and tightens the SAME key such that the agent's
+  held letters no longer cover it, the human's eventual "allow" must not ride the stale read
+  through: `check()` re-reads the current entry immediately before returning allow (any
+  await after the rwx read), and if the action would now be denied, returns deny instead, new
+  rule `rwx.tightened` (audited). A concurrent `add()` that leaves the matched key's letter
+  sufficiency unchanged (including one that still asks under `askOn:"loose"`) does not
+  trigger this — only a fresh denial does.
 - Callable from harness code only. Holds structurally: the agent only sends actions and never
   holds gate methods.
 - When built, §23.3 ("Never written to at runtime") and §23.4 ("edits the file later, not
   mid-run") change to: **the committed file is never written at runtime; the harness may
   `add()` to the gate's in-memory map, tighten-only.**
+
+**Settled (hamr, 2026-09-26), on top of the shape above — still PLANNED, not built:**
+
+1. **Cap enforcement is add()-only.** No gate-wide poisoned-past-cap state; `add()` refusing
+   before landing a batch is the entire fail-closed behavior.
+2. **Rejected add is audited loudly by default.** New phase `rwx.add_rejected` (reason, keys
+   attempted), always, on every thrown `add()` — not an opt-in wrapper.
+3. **Cap = 10,000.** `add()` validates only the batch's own new entries (delta), not the whole
+   map, while still matching construct-time acceptance/rejection exactly per entry — proven
+   in the POC by reading `assertRwxConfig` and confirming it has no cross-key rule. This keeps
+   `add()`'s cost independent of the tools map's size (POC measurement: whole-map validation
+   scaled ~200x from a 10-key to a 10,000-key map; delta validation scaled ~20-28x over the
+   same range, the residual coming from re-validating the small, fixed-size `agents`/`bash`
+   sections, not the tools map).
+4. **The marker is tighten-only too**, per the bullet above — closes a gap the original POC
+   pass had flagged as escalated (a same-letter marker downgrade was previously unexamined).
+5. **The check()/add() race is fixed**, per the bullet above — closes a hole the original POC
+   pass had not yet identified: an `add()` landing while a `check()` awaits a human decision
+   could otherwise let a stale, since-tightened read ride a human "allow" through to a
+   decision the current grant no longer supports.
 
 **Keys for requests without a spec (rwxmap owns the format):**
 
@@ -1390,5 +1438,5 @@ rwxmap measured the cost of losing the spec as exactness only: on its unseen 427
 too-loose stays 0.8% for full spec, method+path, and method alone; exact goes 82.3% → 81.9% →
 81.1%, all of the difference in the too-tight direction (rwxmap's numbers, not re-derived here).
 
-**On ship:** `gate.add`, the `rwx.added` phase, and the size-cap deny rule join the 1.0 SemVer
-surface (§23.17).
+**On ship:** `gate.add`, the `rwx.added` phase, the `rwx.add_rejected` phase, the `rwx.tightened`
+deny rule, and the 10,000-entry size cap all join the 1.0 SemVer surface (§23.17).
