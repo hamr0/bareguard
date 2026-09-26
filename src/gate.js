@@ -270,6 +270,19 @@ function deepCopyRwx(rwx) {
 }
 
 /**
+ * Best-effort key list for an `add()` batch that failed before it could be
+ * safely snapshotted (a bad shape, or a rejection raised before `add()` even
+ * reads `entries`) — used only for the `rwx.add_rejected` audit line's
+ * `keys` field, never for anything that decides what lands. Never throws.
+ * @param {*} entries the raw `add()` argument
+ * @returns {string[]}
+ */
+function attemptedRwxKeys(entries) {
+  try { return (entries && typeof entries === "object") ? Object.keys(entries) : []; }
+  catch { return []; }
+}
+
+/**
  * The single chokepoint every agent action passes through. Construct once per
  * run, `await gate.init()`, then call {@link Gate#check} / {@link Gate#record}
  * (or {@link Gate#run}) for each action. Runs PRE-EVAL halt checks then the
@@ -742,8 +755,6 @@ export class Gate {
     while (true) {
       // PRE-EVAL: halt, else the 6-step eval. `_stepEval` always returns a
       // terminal decision, so `??` makes `decision` provably non-null.
-      const rwxGenAtRead = this._addGeneration;
-      const rwxEntryAtRead = this.cfg.rwx != null ? rwxToolsEntrySnapshot(this.cfg.rwx) : undefined;
       const decision = this._haltCheck() ?? await this._stepEval(action);
       // bash.classify (harness §7.1) may attach a severity tier; read it via a
       // widened view since not every decision shape carries these optionals.
@@ -882,6 +893,26 @@ export class Gate {
         );
         if (surfacing.length) event.annotations = surfacing.map((a) => ({ ...a }));
       }
+
+      // §23.21 decision 5 (corrected): the race snapshot is taken HERE — the
+      // last synchronous point before the human wait actually begins — not
+      // before `_stepEval` was called. `_stepEval` itself can await real I/O
+      // ahead of rwx's own step 5 (`deferRateCheck`/`spawnRateCheck`), and so
+      // can the audit lines emitted just above (the "gate"/"halt" lines) and
+      // `haltContext()`. A snapshot taken before any of that reflects state
+      // from BEFORE the ask was even computed, not state "as the ask was
+      // asked" — comparing against it produces a false "changed" whenever an
+      // add() happened to land during one of THOSE awaits rather than during
+      // the human wait itself (reproduced: a spawnRateCheck read racing a
+      // concurrent add() made the ask itself get computed against the
+      // ALREADY-tightened entry, which the human then legitimately approved,
+      // but the stale earlier snapshot still disagreed and forced a false
+      // `rwx.tightened` deny). Snapshotting immediately before dispatch means
+      // "the entry as it stood when this exact ask was raised" is always the
+      // baseline, regardless of what `_stepEval` or the audit lines above
+      // needed to await to get here.
+      const rwxGenAtRead = this._addGeneration;
+      const rwxEntryAtRead = this.cfg.rwx != null ? rwxToolsEntrySnapshot(this.cfg.rwx) : undefined;
 
       let response;
       try {
@@ -1220,13 +1251,16 @@ export class Gate {
    *   1..n tools-map entries, the same shape `rwx.tools` accepts at
    *   construct time (a bare `"r"`/`"w"`/`"x"`, or `{letter, marker?}`).
    * @returns {Promise<void>}
-   * @fails Throws (after emitting `rwx.add_rejected`) when: this gate has no
-   *   `rwx` config; `entries` is not a non-empty plain object, or is
-   *   unreadable; a key is `__proto__`/`constructor`/`prototype`; an entry's
-   *   shape is malformed (same rule as construct time); an entry would
-   *   loosen an existing key's letter or move it off marker `"loose"`; or
-   *   the batch would push `rwx.tools` past {@link RWX_TOOLS_CAP} keys.
-   *   Nothing lands on any throw.
+   * @fails Throws (after emitting `rwx.add_rejected`) when: this gate has
+   *   been {@link Gate#terminate}d; it has no `rwx` config; `entries` is not
+   *   a non-empty plain object, or is unreadable; a key is
+   *   `__proto__`/`constructor`/`prototype`; an entry's shape is malformed
+   *   (same rule as construct time); an entry would loosen an existing
+   *   key's letter or move it off marker `"loose"`; or the batch would push
+   *   `rwx.tools` past {@link RWX_TOOLS_CAP} keys. Nothing lands on any
+   *   throw. A budget-halt state does NOT block `add()` — it spends no
+   *   budget itself and nothing in §23.21 makes growing the tools map
+   *   conditional on the cost/token axis.
    *
    * **Serialized.** `add()` reads the live tools map, then AWAITS (the
    * audit-first writes), then mutates — a genuine async window between
@@ -1273,11 +1307,20 @@ export class Gate {
       await this.audit.emit({ phase: "rwx.add_rejected", reason: message, keys });
       throw new Error(message);
     };
-    const attemptedKeys = () => {
-      try { return (entries && typeof entries === "object") ? Object.keys(entries) : []; }
-      catch { return []; }
-    };
-
+    // Checked first, same convention as `_haltCheck()` — a terminated gate
+    // accepts nothing more. Checked at EXECUTION time (inside `_addOnce`,
+    // after the serialization queue, not in the `add()` wrapper before it),
+    // so an `add()` that was already WAITING in the queue when `terminate()`
+    // ran is rejected too, not just one called after — "terminated" means
+    // nothing more lands, full stop, regardless of when it was queued.
+    // Deliberately narrow: a budget-halt state (`this.budget.check()`) is
+    // NOT checked here — nothing in §23.21 or the halt design says growing
+    // the tools map should be blocked by an exhausted cost/token cap, and
+    // `add()` spends no budget itself, so it stays allowed unless a clearer
+    // reason to deny it shows up.
+    if (this.terminated) {
+      return reject("gate.add: gate has been terminated — nothing is accepted", attemptedRwxKeys(entries));
+    }
     if (this.cfg.rwx == null) {
       return reject("gate.add: this gate has no rwx config — nothing to tighten against, so nothing is accepted", []);
     }
@@ -1288,7 +1331,7 @@ export class Gate {
     if (!entriesUsable) {
       return reject(
         "gate.add: entries must be a non-empty plain object { key: letter | {letter,marker} }",
-        attemptedKeys(),
+        attemptedRwxKeys(entries),
       );
     }
 

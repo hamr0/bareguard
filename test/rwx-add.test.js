@@ -444,6 +444,41 @@ test("add/check race: humanChannel is never called twice (no re-entering the ask
   assert.equal(humanChannelCalls, 1);
 });
 
+test("add/check race: an add() landing during an await INSIDE _stepEval (before rwx step 5 ever reads the map) must NOT cause a false rwx.tightened deny", async () => {
+  // Debrief finding: the race snapshot used to be taken BEFORE `check()`
+  // even called `_stepEval` — but `_stepEval` itself awaits real I/O ahead
+  // of rwx's own step 5 (`deferRateCheck`/`spawnRateCheck` read the audit
+  // log). If an add() landed during ONE OF THOSE internal awaits, step 5
+  // ends up reading the ALREADY-tightened entry — the ask itself is
+  // correctly computed against the new entry, and the human legitimately
+  // approves it — but the stale pre-_stepEval snapshot still disagreed,
+  // producing a false `rwx.tightened` deny with a misleading audit reason
+  // ("while this check() awaited a human decision" — it did not; the add()
+  // landed before the ask was even raised). Reproduced here deterministically
+  // by wrapping `_stepEval` with a controllable pause point BEFORE it does
+  // any of its own real work, standing in for spawnRateCheck's fs read.
+  const gate = gateFor(
+    { askOn: "loose", tools: { probe: { letter: "r", marker: "loose" } } },
+    async () => ({ decision: "allow" }),
+  );
+  await gate.init();
+  const paused = deferred();
+  const pausedEntered = deferred();
+  const originalStepEval = gate._stepEval.bind(gate);
+  gate._stepEval = async (action) => {
+    pausedEntered.resolve();
+    await paused.promise; // stand-in for spawnRateCheck's real I/O await, BEFORE rwx step 5 runs
+    return originalStepEval(action);
+  };
+  const checkPromise = gate.check({ type: "probe", args: {} });
+  await pausedEntered.promise; // check() is blocked inside _stepEval, before ANY rwx read has happened
+  await gate.add({ probe: { letter: "w", marker: "loose" } }); // tighten lands during _stepEval's OWN internal pause, not during the human wait
+  paused.resolve(); // _stepEval continues; step 5 now reads the ALREADY-tightened "w" entry
+  const d = await checkPromise;
+  assert.equal(d.outcome, "allow", "the ask was computed against the already-tightened entry and legitimately approved by the human — must not be denied as stale");
+  assert.notEqual(d.rule, "rwx.tightened");
+});
+
 // ─── 1. audit write failure mid-add() ─────────────────────────────────────
 //
 // Repo rule: an audit WRITE failure PROPAGATES (never silently swallowed).
@@ -845,4 +880,74 @@ test("add: a rejected add() followed by a concurrent GOOD add() still lands (the
   await gate.add({ third_key: "w" });
   const d3 = await gate.check({ type: "third_key", args: {} });
   assert.equal(d3.outcome, "allow");
+});
+
+// ─── add() after terminate() rejects ──────────────────────────────────────
+
+test("add: gate.add() after gate.terminate() rejects — nothing lands, one rwx.add_rejected line", async () => {
+  const gate = gateFor();
+  await gate.init();
+  await gate.terminate("shutting down");
+  await assert.rejects(() => gate.add({ probe: "r" }), /gate has been terminated/);
+  // A terminated gate's check() itself halt-denies before ever reaching rwx
+  // eval, so "did it land" is checked directly against the live map instead.
+  assert.equal("probe" in gate.cfg.rwx.tools, false, "probe must not have landed");
+  const lines = await gate.audit.readAll();
+  const rejected = lines.filter((l) => l.phase === "rwx.add_rejected");
+  assert.equal(rejected.length, 1);
+  assert.match(rejected[0].reason, /gate has been terminated/);
+  assert.deepEqual(rejected[0].keys, ["probe"]);
+  assert.equal(lines.filter((l) => l.phase === "rwx.added").length, 0);
+});
+
+test("add: an add() already IN FLIGHT (past its terminated check) still lands; one merely QUEUED behind it is rejected once terminate() has run", async () => {
+  // The terminated check is the FIRST synchronous statement in _addOnce, so
+  // there is no separate "grandfathering" rule to test beyond ordinary
+  // program order: a call already PAST that line when terminate() runs is
+  // unaffected (nothing re-checks it later); a call whose _addOnce hasn't
+  // started yet (still waiting in the add() queue) sees the new state.
+  // Paused via the audit-write step (which only runs AFTER the terminated
+  // check) rather than by wrapping _addOnce itself, so this genuinely tests
+  // "already past the check," not "queued but not yet started."
+  const gate = gateFor();
+  await gate.init();
+  const pause = deferred();
+  const entered = deferred();
+  const originalEmit = gate.audit.emit.bind(gate.audit);
+  let paused = false;
+  gate.audit.emit = async (fields) => {
+    if (fields.phase === "rwx.added" && !paused) {
+      paused = true;
+      entered.resolve();
+      await pause.promise; // hold this add() mid-flight, already past the terminated check
+    }
+    return originalEmit(fields);
+  };
+  const firstAdd = gate.add({ blocker: "r" });
+  await entered.promise;
+  const secondAdd = gate.add({ probe: "r" }); // queued behind firstAdd — has NOT entered _addOnce at all yet
+  await gate.terminate("mid-flight shutdown");
+  pause.resolve(); // let firstAdd (already past the check) finish landing
+  await firstAdd;
+  await assert.rejects(() => secondAdd, /gate has been terminated/);
+  assert.equal(gate.cfg.rwx.tools.blocker, "r", "an add() already past the terminated check must still land");
+  assert.equal("probe" in gate.cfg.rwx.tools, false, "a merely-queued add() is rejected once terminated");
+});
+
+test("add: gate.add() is NOT blocked by a budget-halt state (deliberately not treated the same as termination)", async () => {
+  const gate = new Gate({
+    audit: { path: null },
+    rwx: { agent: "fixer", agents: { fixer: "rw-" }, tools: {} },
+    budget: { maxCostUsd: 0.01 },
+    humanChannel: async () => ({ decision: "deny" }),
+  });
+  await gate.init();
+  await gate.record({ type: "x" }, { costUsd: 0.5 }); // blow the cost cap
+  const halted = await gate.check({ type: "x" });
+  assert.equal(halted.severity, "halt", "sanity: the budget is genuinely in a halt state");
+  await assert.doesNotReject(() => gate.add({ probe: "r" }));
+  // check() itself would ALSO halt-deny "probe" now (the budget halt applies
+  // gate-wide, unrelated to rwx) — landedness is verified directly against
+  // the live map instead, since add() succeeding is the property under test.
+  assert.equal(gate.cfg.rwx.tools.probe, "r");
 });
