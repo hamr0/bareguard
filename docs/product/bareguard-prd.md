@@ -1402,21 +1402,12 @@ narrow, tighten-only operation.
   IT throws (the audit sink is fully down), that exception propagates in its place, which
   still satisfies "propagates," though the caller then sees the audit failure's message
   rather than the original rejection reason.
-- **`add()` calls are serialized — a real bug the audit-first change above introduced, found
-  by review.** Audit-first means `add()` genuinely awaits (the per-key `rwx.added` writes)
-  BETWEEN validating against the live tools map and mutating it. Two concurrent `add()`
-  calls that both entered before either had mutated both validated against the SAME stale
-  state — reproduced: an `x`-tagged key concurrently "tightened" to `w` actually LOOSENED it
-  (the `w` call's tighten-check read the map before the `x` call had landed), and two
-  batches that each individually fit the 10,000-key cap could jointly cross it the same way.
-  Fixed with a promise-chain mutex on the gate (`this._addQueue`): every `add()` call links
-  onto the previous call's queue token and awaits it before running its own logic, so calls
-  run strictly one at a time, in call order. The queue token itself always resolves — never
-  rejects — regardless of whether the call it gates threw, so a rejected `add()` can never
-  wedge the queue for whatever comes after it. This serializes the WHOLE `add()` call
-  (validation through the final audit write), which is also the answer to "any other async
-  window of the same class": `add()`'s only awaits are its own audit writes, all of which
-  now happen inside the lock.
+- **`add()` is serialized on the gate's ONE ordering lock** (`_withLock`/`this._gateLock` —
+  see the "check and audit in the same logical order" design below; this replaced an
+  `add()`-only queue, `_addQueue`, once `check()`'s own final commit needed the same
+  exclusion). `add()`'s whole `_addOnce` — validate, write every `rwx.added` line, mutate —
+  runs inside it, one call at a time, in call order; a rejected call never wedges the lock
+  for whatever comes after it (the lock's own release always runs, success or throw).
 - **`add()`'s tools-map KEY joins the audit redactor and the per-field byte re-bound.**
   `rwx.added`'s `key` and `rwx.add_rejected`'s `keys` are caller-controlled and unbounded at
   the source (a spec-less site's rwxmap-minted key can itself carry a query-string token),
@@ -1431,97 +1422,61 @@ narrow, tighten-only operation.
   helper (`src/primitives/rwx.js`), unrelated to this addition.
 - **The gate copies the rwx config at construct** and `add()` mutates that private copy — this
   also closes today's live link to the caller's object.
-- **check()/add() race, closed — PER-KEY, corrected after an orchestrator review caught a
-  real bug in the first build pass.** `check()` reads the matched entry's letter and may
-  then await a human decision (an `askOn:"loose"` ask, or any other ask/halt) for an
-  unbounded time. If an `add()` lands during that wait, the human's eventual "allow" must
-  not ride a since-tightened, stale read through — but the check that closes this must be
-  scoped to THIS action's own matched entry, not to "did any `add()` land anywhere." The
-  first build pass gated re-validation purely on a global per-gate add-generation counter:
-  ANY landed `add()` — including one to a totally unrelated key, which is normal, constant
-  traffic in the spec-less-site flow (§23.21's own "one add() per unmatched request") —
-  forced a fresh `rwxCheck` on the currently-asked key. For a loose-marked entry under
-  `askOn:"loose"`, a fresh check on an entry that itself never changed always comes back
-  `askHuman` again (asking is what a loose marker does, unconditionally), and the first
-  pass then denied that as `rwx.tightened` — a false positive with no security value, since
-  nothing about the asked key had gotten stricter. hamr's rule is "if it got STRICTER in
-  the meantime, deny"; an unrelated `add()` is not stricter for this key.
-  **Fixed, per-key:** `check()` snapshots the matched tools-map entry's own raw value (not
-  just the generation counter) at the top of the loop. Two gates, both must trip: (1) the
-  add-generation counter changed at all (fast integer compare — the common case, nothing
-  landed, costs nothing and stays byte-identical); (2) THIS action's own matched entry is
-  no longer identical to what it was at the top of the iteration (a bash-map match is
-  structurally exempt — `add()` only ever touches `rwx.tools`, never `rwx.bash`). Only when
-  BOTH trip is `rwxCheck` re-run fresh: a hard `"deny"` (the letter no longer covers the
-  now-tighter entry) or a fresh `"askHuman"` (e.g. the entry moved to a still/newly-loose
-  marker) both deny, new rule `rwx.tightened` (audited) — the build does not re-enter the
-  ask path from inside this return branch, so a fresh `askHuman` for a key that genuinely
-  DID change is treated the same conservative way as a fresh deny. An unrelated concurrent
-  `add()` — the false positive the first pass produced — now correctly leaves the human's
-  "allow" standing.
-- **check()/add() race, snapshot-timing corrected TWICE — the second correction closed a
-  genuine safety hole the first one introduced, found by orchestrator review.**
-  - **First attempt (wrong, "later is more accurate"):** the per-key snapshot (generation +
-    matched entry) was originally taken BEFORE `check()` called `_stepEval(action)` at all —
-    but `_stepEval` itself can await real I/O ahead of rwx's own step 5
-    (`deferRateCheck`/`spawnRateCheck` read the audit log for their rate caps). Repro'd: a
-    concurrent `add()` landing during that internal await meant step 5's `rwxCheck` read the
-    ALREADY-tightened entry — the ask was correctly computed against the new entry and a
-    human legitimately approved it — but the stale pre-`_stepEval` snapshot still disagreed,
-    producing a false `rwx.tightened` deny. The fix chosen at the time moved the snapshot to
-    the LAST synchronous point before dispatching to `humanChannel`, reasoning that this was
-    "the entry as it stood when the ask was raised."
-  - **That reasoning was backwards, and reopened a real safety hole.** The ask decision is
-    computed at rwx step 5's read, not at dispatch time. `check()` itself awaits more (its
-    own "gate"/askHuman audit line, `haltContext()`) AFTER step 5 runs but BEFORE dispatching
-    to `humanChannel`. A concurrent `add()` landing in THAT window — after the read the ask
-    was computed from, but before the dispatch-time snapshot ran — was already absorbed into
-    the dispatch-time snapshot as if it were the ORIGINAL value, so the post-approval compare
-    saw "no change" and wrongly allowed. Repro'd (orchestrator): an `r--` agent's `probe`
-    action, tagged `{r, loose}`, tightened to `{w, loose}` from inside `check()`'s own ask
-    audit-line write — result: `allow`, even though the human only ever approved the
-    `r`-tagged decision and the agent never held `w`.
-  - **Fixed, correctly this time:** the snapshot is taken in the EXACT SAME synchronous tick
-    `rwxCheck` reads the map, inside `_stepEval`'s step 5 itself (an out-parameter,
-    `raceSnapshot`, mutated in place — a fresh per-call object each `check()` call, never
-    shared instance state, since `check()` calls can run concurrently). `check()` seeds
-    `raceSnapshot` with a conservative default (the generation + matched entry at the very
-    top of the loop iteration, before `_stepEval` is even called) for the case where step 5
-    does NOT run this iteration (an earlier step — `flags`/`content` — already asked); if
-    step 5 DOES run, it overwrites both fields with the precise same-tick read, which is
-    strictly more accurate than the default whenever `_stepEval`'s own earlier steps
-    (`deferRateCheck`/`spawnRateCheck`) awaited real I/O first. Both the legitimate
-    tighten-during-the-actual-human-wait case and the marker-only-change-via-an-unrelated-ask
-    case (rwx step 5 never runs that iteration — the conservative default covers it) still
-    deny correctly. Grepped for any other await between the snapshot write and the fresh
-    `rwxCheck` re-read at approval time: none — that re-read is fully synchronous.
-  - **Coverage widened (debrief round 2, orchestrator-found): the protection covers ANY
-    `add()` landing before `check()` returns, not only a landed `add()` during a human
-    wait.** `rwxTightenedCheck` had only ever been called on the two branches that follow a
-    `humanChannel` wait — the top-of-loop TERMINAL allow/deny branch (no ask at all: a
-    `"tight"`/`"settled"` marker never asks, under any `askOn` setting, so step 5 can resolve
-    a bare `allow` directly) awaited its own "gate" audit line before returning but never
-    re-checked. Repro'd (orchestrator): a `reader` agent holding only `r`, a `probe` entry
-    tagged `{r, "tight"}` (resolves ALLOW directly, no human involved), tightened to
-    `{x, "tight"}` by a concurrent `add()` landing during `check()`'s OWN allow-line audit
-    write — the stale allow was honored, granting `x` to an agent that never held it. Fixed:
-    the terminal branch now calls `rwxTightenedCheck(raceSnapshot)` too, as the LAST thing
-    before honoring the decision, but ONLY when `decision.outcome === "allow"` (a terminal
-    deny needs no defending). Every `return` of an allow decision in `check()` now goes
-    through this same call: the terminal branch, the direct human-allow branch, and the
-    topup-on-ask-treated-as-allow branch — nothing else in `check()` returns `allow`.
-    **Audit consequence, not restructured away:** on the terminal branch's rare tightened
-    case, the original "gate: allow" line is already durably written by the time the check
-    fires (the race window is inside that `emit()`'s own await — nothing can run before it
-    that would also see a concurrent `add()` landing during the real write), so a second
-    "gate: deny `rwx.tightened`" line for the same `aid` follows it. This is the identical
-    two-line shape the human-allow branches already produced before this widening, not a new
-    pattern introduced by it.
+- **check()/add() race — "check and audit in the same logical order."** The settled design,
+  after three iterations each closed one gap and (twice) opened another; PRD history is kept
+  brief here on purpose — see CHANGELOG.md's `[Unreleased]` entries for the blow-by-blow if
+  needed.
+
+  **The invariant.** The audit log's line order is the TRUE order. `check()`'s ONE final
+  audit line per `aid` (whichever of terminal-allow, terminal-deny, human-allow, human-deny,
+  a halt/timeout deny, or topup-as-allow it is) and every `add()`'s `rwx.added` line(s) are
+  totally ordered against each other; a final ALLOW line is always valid against the tools
+  map as of its position in the log.
+
+  **How.** ONE gate-wide ordering lock (`_withLock`) is shared by `add()` (above) and by
+  `check()`'s single commit helper, `_commitDecision` — called by EVERY exit from `check()`,
+  not just the ones that used to carry the old `rwxTightenedCheck` re-check. Inside the lock,
+  and only when the candidate decision is `"allow"`, `_commitDecision` compares the matched
+  tools-map entry against a snapshot (`raceSnapshot`) taken in the exact same synchronous
+  tick `rwxCheck` read the map at rwx's step 5 inside `_stepEval` — an out-parameter, mutated
+  in place there, never shared instance state (`check()` calls run concurrently). When step 5
+  does not run an iteration (an earlier step — `flags`/`content` — already decided),
+  `check()`'s own conservative default (the generation + matched entry at the very top of
+  the iteration, before `_stepEval` runs) is what's compared instead. Unchanged (fast path:
+  one integer generation compare) → commits as given. Changed → a fresh `rwxCheck`; any
+  non-allow result DOWNGRADES the decision to a NEW `rwx.tightened` deny — `decision` itself
+  is never mutated, and nothing is emitted before this decides. Exactly ONE audit line is
+  then written, inside the same locked section, reflecting whichever decision is final —
+  never the original allow followed by a correction. Because `add()`'s own mutation only
+  ever happens inside the same lock, the compare and the write can never be interleaved with
+  a concurrent `add()`: whichever of the two acquires the lock first is unambiguously first,
+  and the loser's effects land strictly after.
+
+  **Why this replaced three earlier attempts, briefly:** (1) a global `_addGeneration`-only
+  compare false-denied on any unrelated concurrent `add()`; (2) moving the snapshot to
+  "immediately before the human wait" missed that `_stepEval`'s own rate-check awaits could
+  already be stale by then; (3) moving it to "immediately before dispatching to humanChannel"
+  overcorrected — it absorbed a tighten landing between step 5's read and the dispatch as if
+  it were the ORIGINAL state, silently allowing a stale approval through; and the pre-lock
+  version of the fix, even once the snapshot was correctly anchored to step 5, still let an
+  `add()` land during a commit's own audit-line WRITE (the terminal path and, separately, the
+  human-allow path each had this hole found independently) — since two SEPARATE decisions
+  (compare, then write) with no lock between them is exactly the shape a race exploits. Only
+  making "compare-then-write" one atomic, lock-protected unit — covering every exit from
+  `check()`, not a subset — closes the whole class at once, verified by a randomized
+  property test (`test/rwx-add.test.js`) that replays the audit log and checks every final
+  allow line against the tools map reconstructed at that log position.
+
+  **Verified, not merely reasoned:** the earlier over-count consequence (a stale
+  allow-then-tightened-deny pair for one `aid` made `spawn`/`defer`-rate primitives, which
+  scan the log for `decision === "allow"` lines, count a denied action as allowed) is closed
+  structurally by "exactly one line, decided before any line is written" — there is no
+  intermediate "allow" line left in the log for a rate check to ever see.
 - Callable from harness code only. Holds structurally: the agent only sends actions and never
   holds gate methods.
 - **`add()` rejects once the gate is `terminate()`d, found by debrief.** Checked first thing
   inside `_addOnce` (the same convention `_haltCheck()` uses for `this.terminated`), at
-  EXECUTION time — after the serialization queue, not before it — so an `add()` that was
+  EXECUTION time — after the ordering lock, not before it — so an `add()` that was
   already waiting in the queue when `terminate()` ran is rejected too, not just one called
   afterward: "terminated" means nothing more lands, full stop, regardless of when it was
   queued. An `add()` already PAST that check line when `terminate()` runs is unaffected (no
