@@ -1495,6 +1495,28 @@ narrow, tighten-only operation.
     case (rwx step 5 never runs that iteration — the conservative default covers it) still
     deny correctly. Grepped for any other await between the snapshot write and the fresh
     `rwxCheck` re-read at approval time: none — that re-read is fully synchronous.
+  - **Coverage widened (debrief round 2, orchestrator-found): the protection covers ANY
+    `add()` landing before `check()` returns, not only a landed `add()` during a human
+    wait.** `rwxTightenedCheck` had only ever been called on the two branches that follow a
+    `humanChannel` wait — the top-of-loop TERMINAL allow/deny branch (no ask at all: a
+    `"tight"`/`"settled"` marker never asks, under any `askOn` setting, so step 5 can resolve
+    a bare `allow` directly) awaited its own "gate" audit line before returning but never
+    re-checked. Repro'd (orchestrator): a `reader` agent holding only `r`, a `probe` entry
+    tagged `{r, "tight"}` (resolves ALLOW directly, no human involved), tightened to
+    `{x, "tight"}` by a concurrent `add()` landing during `check()`'s OWN allow-line audit
+    write — the stale allow was honored, granting `x` to an agent that never held it. Fixed:
+    the terminal branch now calls `rwxTightenedCheck(raceSnapshot)` too, as the LAST thing
+    before honoring the decision, but ONLY when `decision.outcome === "allow"` (a terminal
+    deny needs no defending). Every `return` of an allow decision in `check()` now goes
+    through this same call: the terminal branch, the direct human-allow branch, and the
+    topup-on-ask-treated-as-allow branch — nothing else in `check()` returns `allow`.
+    **Audit consequence, not restructured away:** on the terminal branch's rare tightened
+    case, the original "gate: allow" line is already durably written by the time the check
+    fires (the race window is inside that `emit()`'s own await — nothing can run before it
+    that would also see a concurrent `add()` landing during the real write), so a second
+    "gate: deny `rwx.tightened`" line for the same `aid` follows it. This is the identical
+    two-line shape the human-allow branches already produced before this widening, not a new
+    pattern introduced by it.
 - Callable from harness code only. Holds structurally: the agent only sends actions and never
   holds gate methods.
 - **`add()` rejects once the gate is `terminate()`d, found by debrief.** Checked first thing
