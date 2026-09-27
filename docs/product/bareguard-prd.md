@@ -1270,7 +1270,7 @@ trusted channel for a child's letters, bash edge forms, and the `fetch` split ar
    the parsed object and leaving file I/O to the caller (§23.13 decision 4 settles *what*
    bareguard accepts today; whether a convenience loader is ever added is still open).
 2. How the starter file is **versioned** as bareguard's own curated defaults change underneath
-   an operator's edited copy. See also §23.21 for the planned (not yet built) `add()` shape. (bareguard-prd.md:1251-1260)
+   an operator's edited copy. See also §23.21 for the `add()` shape (built, 0.18.0). (bareguard-prd.md:1251-1260)
 
 ### 23.19 Origin / relation
 
