@@ -96,6 +96,42 @@ test("addToGates: still rejects a plain object with no brand at all (unchanged b
   assert.equal(d.rule, "rwx.unlisted", "the valid gate must not have been touched either — validation runs before any gate is attempted");
 });
 
+test("addToGates: reads a gate-like object's `add` exactly once — a getter that answers differently on a second read does not get re-invoked", async () => {
+  // A debrief finding: `isGateLike(g)` read `g.add` once (a `typeof` check),
+  // then `addToGates` called `gate.add(snapshot)` later — a SECOND read. A
+  // getter-backed `add` that returns a real function the first time and a
+  // non-function (or a DIFFERENT function) the second time could pass
+  // validation on one function and run another. Fixed by capturing `add`
+  // during the single validation-loop read and invoking THAT captured
+  // function later via `Reflect.apply`, never re-reading `gate.add`.
+  let reads = 0;
+  let addCalls = 0;
+  const realAdd = async function (entries) {
+    addCalls++;
+    for (const [k, v] of Object.entries(entries)) state.tools[k] = v;
+    return undefined;
+  };
+  const decoyAdd = async () => { throw new Error("decoy add() must never be invoked"); };
+  const state = { tools: {} };
+  const gateLike = {
+    runId: "getter-gate",
+    cfg: { rwx: { agent: "getter-gate", tools: state.tools } },
+    rwxTools() { return { ...state.tools }; },
+    get add() {
+      reads++;
+      return reads === 1 ? realAdd : decoyAdd;
+    },
+  };
+  Object.defineProperty(gateLike, GATE_BRAND, { value: true, enumerable: false });
+
+  const summary = await addToGates([gateLike], { "site.read": "r" });
+  assert.equal(summary.length, 1);
+  assert.equal(summary[0].ok, true);
+  assert.equal(reads, 1, "gate.add must be read exactly once — never re-read to invoke it");
+  assert.equal(addCalls, 1, "the FUNCTION captured on that one read must be the one actually called");
+  assert.deepEqual(gateLike.rwxTools(), { "site.read": "r" });
+});
+
 test("addToGates: the GATE_BRAND symbol is non-enumerable on a real Gate — no leak into for...in/Object.keys/JSON", async () => {
   const gate = gateFor("a");
   assert.equal(Object.keys(gate).includes(GATE_BRAND), false); // Object.keys never includes symbol keys regardless; this documents intent

@@ -1842,14 +1842,25 @@ function gateIdentity(gate) {
  * hostile or accidental object that merely happens to carry the symbol but
  * has no real gate behind it is still rejected. Never throws; a `null`/
  * primitive/throwing-getter input reads as "not gate-like."
+ *
+ * Reads `g.add` EXACTLY ONCE and hands the captured function back as the
+ * proof of gate-likeness (`undefined` for "not gate-like", rather than a
+ * bare boolean) so `addToGates` never has to read `g.add` a second time to
+ * invoke it. A getter-backed `add` that answered `typeof g.add === "function"`
+ * on one read and something else — or a DIFFERENT function — on the next
+ * would otherwise let a gate pass validation on one function and run
+ * another; capturing here closes that gap at the source.
  * @param {*} g
- * @returns {boolean}
+ * @returns {Function|undefined} the gate's own `add` function, captured
+ *   once, when `g` is gate-like; `undefined` otherwise
  */
-function isGateLike(g) {
+function captureGateAdd(g) {
   try {
-    return g != null && g[GATE_BRAND] === true && typeof g.add === "function";
+    if (g == null || g[GATE_BRAND] !== true) return undefined;
+    const addFn = g.add;
+    return typeof addFn === "function" ? addFn : undefined;
   } catch {
-    return false;
+    return undefined;
   }
 }
 
@@ -1881,11 +1892,11 @@ function isGateLike(g) {
  * identical resulting snapshot object is then passed to every gate's own
  * `add()` call, so no gate ever re-reads the caller's raw `entries`.
  * Each element of `gates` is accepted when it carries the
- * `Symbol.for("bareguard.Gate")` brand and a callable `add` (see
- * {@link isGateLike}) — not by `instanceof Gate`, which fails for a
- * genuine `Gate` instance constructed from a SECOND copy of this package in
- * the same process (a real gate, wrongly rejected). Every element still
- * fails synchronously, before any gate is touched, when it is not
+ * `Symbol.for("bareguard.Gate")` brand and a callable `add`, captured
+ * exactly once (see {@link captureGateAdd}) — not by `instanceof Gate`,
+ * which fails for a genuine `Gate` instance constructed from a SECOND copy
+ * of this package in the same process (a real gate, wrongly rejected).
+ * Every element still fails synchronously, before any gate is touched, when it is not
  * gate-like — a malformed fleet list is a caller bug, and rejecting it
  * closed attempts nothing, which is safe. Duplicate-instance rejection
  * (`===` on the array elements) is unaffected — two DIFFERENT gates that
@@ -1921,8 +1932,13 @@ export async function addToGates(gates, entries) {
     throw new AggregateError([], "addToGates: gates must be a non-empty array of Gate instances");
   }
   const seen = new Set();
-  for (const g of gates) {
-    if (!isGateLike(g)) {
+  // `add` is captured here, ONCE per gate, alongside the brand check —
+  // never re-read later to invoke it (see captureGateAdd's TOCTOU note).
+  const addFns = new Array(gates.length);
+  for (let i = 0; i < gates.length; i++) {
+    const g = gates[i];
+    const addFn = captureGateAdd(g);
+    if (addFn === undefined) {
       throw new AggregateError([], "addToGates: every element of gates must be a Gate instance");
     }
     // Conservative: reject duplicate gate instances outright rather than
@@ -1934,6 +1950,7 @@ export async function addToGates(gates, entries) {
       throw new AggregateError([], "addToGates: gates must not contain the same Gate instance twice");
     }
     seen.add(g);
+    addFns[i] = addFn;
   }
 
   // Read `entries` EXACTLY ONCE, same idiom as safeAction()/gate.add()'s own
@@ -1958,13 +1975,16 @@ export async function addToGates(gates, entries) {
   // Attempt EVERY gate, even if an earlier one throws — no short-circuiting.
   // The SAME snapshot object (not the caller's raw `entries`) is handed to
   // every gate's own add(), which does its own full validation/audit/mutate
-  // independently.
+  // independently. Invoked via the FUNCTION captured once above (not a fresh
+  // `gate.add` read) so a getter-backed `add` can't swap functions between
+  // validation and invocation; `Reflect.apply` binds it to `gate` as `this`,
+  // identical to a normal `gate.add(snapshot)` call.
   const results = new Array(gates.length);
   const failures = [];
   await Promise.all(gates.map(async (gate, i) => {
     const identity = gateIdentity(gate);
     try {
-      await gate.add(snapshot);
+      await Reflect.apply(addFns[i], gate, [snapshot]);
       results[i] = { index: i, gate: identity, ok: true };
     } catch (err) {
       results[i] = { index: i, gate: identity, ok: false, error: err.message };
