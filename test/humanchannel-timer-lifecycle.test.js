@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
 
 // Regression for: a humanChannel that never resolves, raced against
@@ -17,6 +17,9 @@ import path from "node:path";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
+// On Windows, a bare absolute path (e.g. "d:\\...") is not a valid ESM
+// specifier — the child process's import needs a real file:// URL.
+const gateModuleUrl = pathToFileURL(path.join(repoRoot, "src/index.js")).href;
 
 function runScript(script) {
   return new Promise((resolve) => {
@@ -38,7 +41,7 @@ function runScript(script) {
 
 test("humanChannelTimeoutMs fires and exits cleanly when humanChannel never resolves", async () => {
   const script = `
-    import { Gate } from ${JSON.stringify(path.join(repoRoot, "src/index.js"))};
+    import { Gate } from ${JSON.stringify(gateModuleUrl)};
     const gate = new Gate({
       audit: { path: null },
       humanChannelTimeoutMs: 20,
@@ -59,7 +62,7 @@ test("humanChannelTimeoutMs fires and exits cleanly when humanChannel never reso
 
 test("a settled humanChannel does not keep the process alive until humanChannelTimeoutMs", async () => {
   const script = `
-    import { Gate } from ${JSON.stringify(path.join(repoRoot, "src/index.js"))};
+    import { Gate } from ${JSON.stringify(gateModuleUrl)};
     const gate = new Gate({
       audit: { path: null },
       humanChannelTimeoutMs: 30000,
