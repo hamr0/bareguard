@@ -539,14 +539,14 @@ A primitive is any exported symbol whose JSDoc block carries an `@when` tag —
 the tag is the inclusion marker, so there is no separate target list that can
 drift from the source. `@when` / `@fails` / `@example` are the only
 hand-authored fields on each entry; `name` / `import` / `signature` /
-`category` are derived from the source. As of 0.19.0 the generator also
+`category` are derived from the source. As of 0.18.1 the generator also
 picks up `@when` on `Gate`'s own class METHODS (named `Gate#add` etc., since
 a bare method name is ambiguous across classes) — added for `add()`,
 `rwxTools()`, and `readAudit()`, harness-only rwx/audit verbs the AI
 **building** a harness reaches for even though the running agent never
 holds a `Gate` reference. 14 of the package's 15 public exports are
 manifested (13 module-level primitives + `addToGates()`, which joined the
-manifest in 0.19.0 for the same harness-only reasoning), plus the 3
+manifest in 0.18.1 for the same harness-only reasoning), plus the 3
 `Gate#`-method entries above, for 17 manifest entries total.
 `BudgetUnavailableError` remains deliberately excluded (a bare error class —
 you catch it, you don't reach for it as a capability). (bareguard-prd.md:498-505)
