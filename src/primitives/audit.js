@@ -60,6 +60,19 @@ const LINE_FIELDS = Object.freeze([
   Object.freeze({ key: "where",   redactIf: (v) => typeof v === "string",              bound: "clip" }),
   Object.freeze({ key: "verdict", redactIf: (v) => typeof v === "string",              bound: "clip" }),
   Object.freeze({ key: "meta",    redactIf: (v) => v != null && typeof v === "object", bound: "wholesale" }),
+  // `gate.add()` (§23.21, 0.18.0) audit lines carry a harness-supplied tools-
+  // map KEY — `rwx.added`'s singular `key` and `rwx.add_rejected`'s plural
+  // `keys` (the whole attempted batch). For a spec-less site these are
+  // rwxmap-minted, e.g. `api.example.com.GET /v1/orders/{id}?token=sk-...`
+  // (§23.21's own key format) — caller-controlled and unbounded at the
+  // source, same class as `reason`. `keys` is an array, not a scalar, so it
+  // takes the `meta`-style wholesale bound: `redact()` still runs the
+  // value-pattern pass over its full serialized form regardless of shape
+  // (it JSON.stringifies whatever it's handed), so a secret embedded in any
+  // one element is still caught; the wholesale collapse only fires if the
+  // array's OWN serialized bytes are still oversize after that.
+  Object.freeze({ key: "key",     redactIf: (v) => typeof v === "string",              bound: "clip" }),
+  Object.freeze({ key: "keys",    redactIf: (v) => Array.isArray(v) && v.length > 0,   bound: "wholesale" }),
 ]);
 
 /** Keys whose object payload collapses wholesale when the LINE is still oversize. */

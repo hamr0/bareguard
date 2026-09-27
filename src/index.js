@@ -29,7 +29,7 @@
  * @typedef {import("./types.js").AuditConfig} AuditConfig
  */
 
-export { Gate, routeAnnotation } from "./gate.js";
+export { Gate, routeAnnotation, addToGates } from "./gate.js";
 export { redact } from "./primitives/secrets.js";
 export {
   SAFE_DEFAULT_DENY_PATTERNS,

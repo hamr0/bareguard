@@ -1027,8 +1027,9 @@ no `rwx` config, behavior is byte-identical to today. (bareguard-prd.md:1018-102
 
 Three maps. bareguard ships a **starter file** derived from what it already curates (built-in
 action types + common read/write commands), clearly marked as the shipped list; the operator
-copies and edits it. Never written to at runtime. (Planned 0.18.0: the harness may `add()` to
-the gate's in-memory copy, tighten-only — §23.21.)
+copies and edits it. **The committed file is never written to at runtime; since 0.18.0 a
+harness may `gate.add()` to the gate's own in-memory copy of the tools map, tighten-only — never
+the committed file itself (§23.21).**
 
 The snippet below is illustrative and abbreviated — it is **not** kept row-for-row in sync with
 the shipped file. The shipped `bareguard.rwx.json` (repo root) is the source of truth; read its
@@ -1060,8 +1061,10 @@ An **unlisted tool**, **unlisted command**, or **unlisted agent** is denied — 
 never guessed. An unlisted agent gets `---`: it starts, but every action denies. The deny is a
 structured in-band refusal that names the fix: `policy_denied rwx.unlisted: "npm run build" is
 not in the rwx tools map — an operator must add it to bareguard.rwx.json as r, w or x`. The
-operator edits the file later, calmly, not mid-run. (Planned 0.18.0: a harness may `add()` rows
-mid-run for spec-less sites, tighten-only — §23.21.) (bareguard-prd.md:1057-1064)
+operator edits the **committed file** later, calmly, not mid-run. **Since 0.18.0, a harness may
+separately `gate.add()` rows mid-run into the gate's own in-memory tools map for spec-less sites
+the operator never listed — tighten-only, never a write to the committed file (§23.21).**
+(bareguard-prd.md:1057-1064)
 
 ### 23.5 Enforcement — two places, both required
 
@@ -1183,6 +1186,14 @@ questions the POC was scoped to answer (§23.18):
 3. **`fetch` is split by action type** (`fetch.get` r, `fetch.post` w or x) rather than gaining
    a second axis — tag-by-action-type, consistent with §23.7. Make this explicit in
    `bareguard.context.md` too, once shipped.
+   **SECURITY FIX (0.18.0):** shipping this decision as `fetch.get`/`fetch.post` action types
+   exposed a pre-existing `net` bug — `netCheck` gated on the literal string `action.type ===
+   "fetch"`, so neither split type (nor `<vendor>.<operationId>` from §23.12, nor a spec-less
+   `<host>.<METHOD> <path>` key from §23.21) ever ran `net.allowDomains`/`net.denyPrivateIps`.
+   Fixed by gating `net` on **URL presence** (`action.url`/`action.args.url`) instead of on
+   `action.type`. The harness contract for every rwx web-call shape: put the URL the harness
+   will actually fetch in `url` (or `args.url`) — a URL carried in any other field is not
+   checked. See CHANGELOG [Unreleased].
 4. **bareguard takes the parsed object, never a file path** — all config is a JS object today
    (per §10's public API); the caller does the file I/O. bareguard does not gain its own
    settings-file loader by this decision (see the open question at §23.18).
@@ -1246,7 +1257,9 @@ release is a new minor, **0.17.0**. Once shipped, the `rwx` config keys, the
 and the audit letter all **join the 1.0 SemVer surface** (Future features / SemVer-surface
 list) alongside the rest of §19's list. Downstream: **bareagent** must pass the agent's
 **name** and the clamped letters to its children on spawn (§23.9, §23.11) — this is a bareagent
-change, not a new bareagent primitive. Planned 0.18.0 additions to this surface — `gate.add`, the `rwx.added` phase, the size-cap deny rule — are tracked separately in §23.21. (bareguard-prd.md:1241-1249)
+change, not a new bareagent primitive. Shipped-in-0.18.0 additions to this surface — `gate.add`,
+the `rwx.added`/`rwx.add_rejected` phases, the `rwx.tightened` deny rule, and the 10,000-entry
+size cap — are tracked separately in §23.21.
 
 ### 23.18 Open questions (remaining open)
 
@@ -1257,7 +1270,7 @@ trusted channel for a child's letters, bash edge forms, and the `fetch` split ar
    the parsed object and leaving file I/O to the caller (§23.13 decision 4 settles *what*
    bareguard accepts today; whether a convenience loader is ever added is still open).
 2. How the starter file is **versioned** as bareguard's own curated defaults change underneath
-   an operator's edited copy. See also §23.21 for the planned (not yet built) `add()` shape. (bareguard-prd.md:1251-1260)
+   an operator's edited copy. See also §23.21 for the `add()` shape (built, 0.18.0). (bareguard-prd.md:1251-1260)
 
 ### 23.19 Origin / relation
 
@@ -1325,9 +1338,10 @@ committed or reviewed, tighten-only; the no-dependency half of this boundary is 
 §23.21.)
 (bareguard-prd.md:1270-1326)
 
-### 23.21 Runtime `add()` for spec-less sites (PLANNED 0.18.0 — hamr, 2026-09-25; settled with rwxmap)
+### 23.21 Runtime `add()` for spec-less sites (BUILT 0.18.0 — hamr, 2026-09-25/26; settled with rwxmap)
 
-**Not built. 0.17.0 ships without it.** Written down here so the agreed shape is not lost.
+**Built in `src/` this session (Unreleased, see CHANGELOG.md).** Not yet published as a version
+bump — release is a separate decision.
 
 **Why.** An agent that visits websites (e.g. a flight-search agent) meets sites the operator
 never listed. The harness — never the agent — fetches each site's API spec and runs rwxmap
@@ -1352,23 +1366,157 @@ narrow, tighten-only operation.
 
 - Takes 1..n `tools` entries: `{ key: "r" | {letter, marker} }`. Startup load and one mid-run
   request use the same code path.
-- **Tighten-only.** A new key is added. An existing key — **including a hand-written one** —
-  can only go stricter (`r` < `w` < `x`); an add never loosens a key.
+- **Tighten-only, letter AND marker.** A new key is added. An existing key — **including a
+  hand-written one** — can only go stricter: the letter can only rise (`r` < `w` < `x`), and
+  an entry currently marked `"loose"` can only move to another `"loose"` entry — never to
+  `"tight"`/`"settled"`, and never to a bare letter string either, because a bare letter
+  normalizes to `marker: null` (a state distinct from `"loose"`, confirmed against
+  `src/primitives/rwx.js`'s `normalizeEntry`), not to `"loose"`. `"tight"` <-> `"settled"`
+  moves are unrestricted (neither ever asks). A missing/unrecognized marker string on an
+  object entry still normalizes to `"loose"` per §23.20, so a `"loose"` -> `{marker: <typo>}`
+  move is `"loose"` -> `"loose"`, not a violation. An add never loosens a key by either axis.
 - **Tools map only.** The `bash` map, `agents`, and grants are out of reach. The grant stays the
   ceiling: nothing added can exceed what the human granted.
-- **Validated exactly as at construct time** (bare letter or `{letter, marker}`, §23.20). A bad
-  entry throws. **All-or-nothing:** the whole batch lands or none of it does.
-- **Audited:** every add writes an audit line, new phase `rwx.added` (key, letter, marker), so
-  every allowed key traces back to either the committed file or a logged add.
+- **Validated exactly as at construct time** (bare letter or `{letter, marker}`, §23.20), over
+  the batch's own entries only — not the whole map (delta validation; `assertRwxConfig` has no
+  cross-key rule, so this matches whole-map validation exactly per entry while keeping `add()`
+  independent of the tools map's total size). A bad entry throws. **All-or-nothing:** the
+  whole batch lands or none of it does.
+- **Size cap: 10,000 entries on the tools map.** `add()` itself is the only cap check: it
+  refuses (throws, nothing lands) when the batch would push the map past 10,000 entries;
+  landing exactly at 10,000 is fine, only crossing it refuses. There is no separate
+  gate-wide "every `check()` denies past the cap" state — the only way the map grows is
+  through `add()`, so that would be unreachable.
+- **Audited on success, and audited loudly on rejection.** Every landed add writes an audit
+  line, new phase `rwx.added` (key, letter, marker), so every allowed key traces back to
+  either the committed file or a logged add. Every REJECTED add — bad shape, a tighten-only
+  violation, or over the cap — writes an audit line too, new phase `rwx.add_rejected`
+  (reason, the batch's attempted keys), before throwing. This is the default; there is no
+  silent-reject mode.
+- **An audit WRITE failure propagates (repo rule), audit-lines-first.** `add()` writes every
+  `rwx.added` line for the batch BEFORE mutating the live tools map, not after — if a write
+  throws partway through (disk full, an unwritable path), nothing has been mutated yet, so
+  the whole batch fails closed and `_addGeneration` is left unbumped, consistent with
+  nothing having landed. The one residual this leaves is deliberately in the SAFE direction:
+  an earlier key in the same batch may already have a real `rwx.added` line on disk
+  describing a key that ultimately never landed ("logged but not landed") — never the
+  reverse. This is preferred over mutate-then-roll-back-on-failure, which produces the same
+  residual (a stray `rwx.added` line for a reverted key) plus a rollback path that itself
+  must never partially fail. Logged-but-not-landed is safe because `check()`/`rwxCheck` only
+  ever consult the live tools map, never the audit log, so a stray line grants nothing;
+  landed-but-not-logged — a real, usable capability with no audit trail — is the one thing
+  "every allowed key traces back to a logged add" forbids, and audit-first structurally
+  cannot produce it. The `rwx.add_rejected` write itself is not specially guarded either — if
+  IT throws (the audit sink is fully down), that exception propagates in its place, which
+  still satisfies "propagates," though the caller then sees the audit failure's message
+  rather than the original rejection reason.
+- **`add()` is serialized on the gate's ONE ordering lock** (`_withLock`/`this._gateLock` —
+  see the "check and audit in the same logical order" design below; this replaced an
+  `add()`-only queue, `_addQueue`, once `check()`'s own final commit needed the same
+  exclusion). `add()`'s whole `_addOnce` — validate, write every `rwx.added` line, mutate —
+  runs inside it, one call at a time, in call order; a rejected call never wedges the lock
+  for whatever comes after it (the lock's own release always runs, success or throw).
+- **`add()`'s tools-map KEY joins the audit redactor and the per-field byte re-bound.**
+  `rwx.added`'s `key` and `rwx.add_rejected`'s `keys` are caller-controlled and unbounded at
+  the source (a spec-less site's rwxmap-minted key can itself carry a query-string token),
+  same class as `reason`/`aid` — added to `LINE_FIELDS` in `src/primitives/audit.js` so both
+  passes that already exist for every other caller-controlled field (secrets redaction, and
+  the oversize-line per-field clip) cover them too, rather than adding a third, one-off
+  mechanism. The overall MAX_LINE_BYTES line cap was already structurally guaranteed before
+  this — the pre-existing last-resort `scalarOnlyLine` fallback clips every scalar field
+  (`key` included) to 120 bytes regardless — so this change's real, load-bearing effect is
+  the REDACTION `key`/`keys` previously had none of, not the byte bound itself. Thrown
+  `Error` messages from a rejected `add()` were already clipped via the existing `clipKey`
+  helper (`src/primitives/rwx.js`), unrelated to this addition.
 - **The gate copies the rwx config at construct** and `add()` mutates that private copy — this
   also closes today's live link to the caller's object.
-- **Size cap** on the tools map (value TBD at build). Past it the gate fails **closed** (deny)
-  and the harness must rebuild the gate.
+- **check()/add() race — "check and audit in the same logical order."** The settled design,
+  after three iterations each closed one gap and (twice) opened another; PRD history is kept
+  brief here on purpose — see CHANGELOG.md's `[Unreleased]` entries for the blow-by-blow if
+  needed.
+
+  **The invariant.** The audit log's line order is the TRUE order. `check()`'s ONE final
+  audit line per `aid` (whichever of terminal-allow, terminal-deny, human-allow, human-deny,
+  a halt/timeout deny, or topup-as-allow it is) and every `add()`'s `rwx.added` line(s) are
+  totally ordered against each other; a final ALLOW line is always valid against the tools
+  map as of its position in the log.
+
+  **How.** ONE gate-wide ordering lock (`_withLock`) is shared by `add()` (above) and by
+  `check()`'s single commit helper, `_commitDecision` — called by EVERY exit from `check()`,
+  not just the ones that used to carry the old `rwxTightenedCheck` re-check. Inside the lock,
+  and only when the candidate decision is `"allow"`, `_commitDecision` compares the matched
+  tools-map entry against a snapshot (`raceSnapshot`) taken in the exact same synchronous
+  tick `rwxCheck` read the map at rwx's step 5 inside `_stepEval` — an out-parameter, mutated
+  in place there, never shared instance state (`check()` calls run concurrently). When step 5
+  does not run an iteration (an earlier step — `flags`/`content` — already decided),
+  `check()`'s own conservative default (the generation + matched entry at the very top of
+  the iteration, before `_stepEval` runs) is what's compared instead. Unchanged (fast path:
+  one integer generation compare) → commits as given. Changed → a fresh `rwxCheck`; any
+  non-allow result DOWNGRADES the decision to a NEW `rwx.tightened` deny — `decision` itself
+  is never mutated, and nothing is emitted before this decides. Exactly ONE audit line is
+  then written, inside the same locked section, reflecting whichever decision is final —
+  never the original allow followed by a correction. Because `add()`'s own mutation only
+  ever happens inside the same lock, the compare and the write can never be interleaved with
+  a concurrent `add()`: whichever of the two acquires the lock first is unambiguously first,
+  and the loser's effects land strictly after.
+
+  **Why this replaced three earlier attempts, briefly:** (1) a global `_addGeneration`-only
+  compare false-denied on any unrelated concurrent `add()`; (2) moving the snapshot to
+  "immediately before the human wait" missed that `_stepEval`'s own rate-check awaits could
+  already be stale by then; (3) moving it to "immediately before dispatching to humanChannel"
+  overcorrected — it absorbed a tighten landing between step 5's read and the dispatch as if
+  it were the ORIGINAL state, silently allowing a stale approval through; and the pre-lock
+  version of the fix, even once the snapshot was correctly anchored to step 5, still let an
+  `add()` land during a commit's own audit-line WRITE (the terminal path and, separately, the
+  human-allow path each had this hole found independently) — since two SEPARATE decisions
+  (compare, then write) with no lock between them is exactly the shape a race exploits. Only
+  making "compare-then-write" one atomic, lock-protected unit — covering every exit from
+  `check()`, not a subset — closes the whole class at once, verified by a randomized
+  property test (`test/rwx-add.test.js`) that replays the audit log and checks every final
+  allow line against the tools map reconstructed at that log position.
+
+  **Verified, not merely reasoned:** the earlier over-count consequence (a stale
+  allow-then-tightened-deny pair for one `aid` made `spawn`/`defer`-rate primitives, which
+  scan the log for `decision === "allow"` lines, count a denied action as allowed) is closed
+  structurally by "exactly one line, decided before any line is written" — there is no
+  intermediate "allow" line left in the log for a rate check to ever see.
 - Callable from harness code only. Holds structurally: the agent only sends actions and never
   holds gate methods.
-- When built, §23.3 ("Never written to at runtime") and §23.4 ("edits the file later, not
-  mid-run") change to: **the committed file is never written at runtime; the harness may
-  `add()` to the gate's in-memory map, tighten-only.**
+- **`add()` rejects once the gate is `terminate()`d, found by debrief.** Checked first thing
+  inside `_addOnce` (the same convention `_haltCheck()` uses for `this.terminated`), at
+  EXECUTION time — after the ordering lock, not before it — so an `add()` that was
+  already waiting in the queue when `terminate()` ran is rejected too, not just one called
+  afterward: "terminated" means nothing more lands, full stop, regardless of when it was
+  queued. An `add()` already PAST that check line when `terminate()` runs is unaffected (no
+  retroactive rollback — it was already committed). Audited `rwx.add_rejected` and thrown
+  like every other rejection; nothing lands. Deliberately narrow: a budget-halt state
+  (`this.budget.check()`) is NOT checked here — nothing about growing the tools map is
+  conditional on the cost/token axis, and `add()` spends no budget itself, so it stays
+  allowed under a halt unless a clearer reason to deny it turns up later.
+- **Built:** §23.3 ("Never written to at runtime") and §23.4 ("edits the file later, not
+  mid-run") now read: **the committed file is never written at runtime; the harness may
+  `gate.add()` to the gate's in-memory map, tighten-only.**
+
+**Settled (hamr, 2026-09-26), on top of the shape above — built as described, with one further
+sharpening on item 5 below (see the check()/add() race bullet above):**
+
+1. **Cap enforcement is add()-only.** No gate-wide poisoned-past-cap state; `add()` refusing
+   before landing a batch is the entire fail-closed behavior.
+2. **Rejected add is audited loudly by default.** New phase `rwx.add_rejected` (reason, keys
+   attempted), always, on every thrown `add()` — not an opt-in wrapper.
+3. **Cap = 10,000.** `add()` validates only the batch's own new entries (delta), not the whole
+   map, while still matching construct-time acceptance/rejection exactly per entry — proven
+   in the POC by reading `assertRwxConfig` and confirming it has no cross-key rule. This keeps
+   `add()`'s cost independent of the tools map's size (POC measurement: whole-map validation
+   scaled ~200x from a 10-key to a 10,000-key map; delta validation scaled ~20-28x over the
+   same range, the residual coming from re-validating the small, fixed-size `agents`/`bash`
+   sections, not the tools map).
+4. **The marker is tighten-only too**, per the bullet above — closes a gap the original POC
+   pass had flagged as escalated (a same-letter marker downgrade was previously unexamined).
+5. **The check()/add() race is fixed**, per the bullet above — closes a hole the original POC
+   pass had not yet identified: an `add()` landing while a `check()` awaits a human decision
+   could otherwise let a stale, since-tightened read ride a human "allow" through to a
+   decision the current grant no longer supports.
 
 **Keys for requests without a spec (rwxmap owns the format):**
 
@@ -1380,15 +1528,94 @@ narrow, tighten-only operation.
   (best guess, documented: all-digit segments, UUIDs, long hex strings).
 - bareguard matches `action.type` literally, as always, so the harness must set the action's
   `type` to that key (bareguard's own raw-fetch convention, `fetch.get`/`fetch.post`, carries
-  the URL in a field, not the type).
+  the URL in a field, not the type). **`net` gates on that field, not on `type`** (0.18.0 fix,
+  see CHANGELOG): put the URL the harness will actually fetch in `url` (or `args.url`) on the
+  action so `net.allowDomains`/`net.denyPrivateIps` run — a spec-less key alone does not exempt
+  the action from `net`, and a URL carried anywhere else is not checked.
 
-**Known property of spec-less sites (accepted, state it in the docs when built):** in
+**Known property of spec-less sites (accepted; stated here now that `gate.add()` is built):** in
 per-request mode the agent chooses the method and URL that `classifyRow` sees, and every GET
 floors to `r`. So an `r--` agent can reach any GET. The only case that slips is a site whose
 GETs change state — the same GET-floor leak already accepted under "we take rwxmap's letter."
 rwxmap measured the cost of losing the spec as exactness only: on its unseen 4279-row exam,
 too-loose stays 0.8% for full spec, method+path, and method alone; exact goes 82.3% → 81.9% →
 81.1%, all of the difference in the too-tight direction (rwxmap's numbers, not re-derived here).
+bareguard itself never runs `classifyRow` or sees a spec — this property lives entirely on the
+harness/rwxmap side of the boundary (§23.20); it is recorded here only so the same "GET floors
+to r" leak already accepted for the committed-file case is not mistaken for something new.
 
-**On ship:** `gate.add`, the `rwx.added` phase, and the size-cap deny rule join the 1.0 SemVer
-surface (§23.17).
+**Two follow-ons (hamr, 2026-09-27), surfaced by the rwx-e2e bench's own "things that felt
+wrong" findings against the shipped `add()` (harness-code-mode/rwx-e2e.md):**
+
+- **`gate.rwxTools()` — the read side of `add()`'s write** (bench finding #1: `add()` was the
+  only *write* path onto `rwx.tools`, with no corresponding *read* path other than reaching
+  into the private `gate.cfg.rwx.tools`). Returns a DECOUPLED deep copy of the gate's current
+  `rwx.tools` map — mutating the returned object, at any depth, can never affect the gate's
+  live decisions or a future `check()`/`add()` — or `null` when the gate has no `rwx` config
+  at all (the sentinel for "not in rwx mode"). Exposes only the tools map; `bash`, `agents`,
+  and the agent's own grant stay unreachable through it. Not a `@when`-tagged, separately
+  manifested primitive — same documentation treatment `check()`/`record()`/`add()` already
+  have as plain methods on the one `Gate` primitive.
+- **`addToGates(gates, entries)` — fan one learned batch out to a fleet in one call** (bench
+  finding #3: one `Gate` per agent identity meant a harness that learns something about a
+  shared site has to fan `gate.add()` out to every gate in the fleet by hand, with no built-in
+  "add to every gate for this operator's fleet" call). **Not all-or-nothing across gates** —
+  each gate gets its own fully independent `add()` call (own lock, tighten-only check, cap,
+  audit line); every gate is attempted even if an earlier one throws, and a gate that rejects
+  simply stays at its own stricter existing state (fail-closed, correct — not a bug). On full
+  success, resolves to a per-gate summary; if one or more gates rejected, throws ONE
+  `AggregateError` naming every failing gate (`.errors`/`.message`/`.failures`) — the other
+  gates' adds still land. `gates` must be a non-empty array of DISTINCT `Gate` instances (a
+  duplicate is rejected outright, conservatively); `entries` is read EXACTLY ONCE (the same
+  own-props-only, hostile-getter-safe copy `add()` itself uses) and the identical snapshot is
+  handed to every gate — no gate re-reads the caller's raw object. Pure orchestration over the
+  existing `add()` primitive (no new admission decision of its own), so it is exported but not
+  itself manifested in `primitives.json`.
+
+The bench's separate finding #2 (`gate.audit.readAll()` "not part of the exported public API
+... reachable only via `gate.audit`, ... not documented as a stable surface") was FIRST closed,
+in the same session, as a documentation-only fix: `gate.audit` is, and always was, a public
+instance property, so the fix was to document `gate.audit.readAll()` — and `gate.audit.entries`
+for fileless mode — as the blessed replay path. A later debrief on THIS project's own fix found
+that framing incomplete, not wrong about reachability: `gate.audit` is the LIVE `Audit`
+instance, and `Audit` carries a public `emit()` — any caller holding a `Gate` reference could
+already write an arbitrary line straight onto the log (e.g. a forged `rwx.added` entry that
+never went through `add()`'s own tighten-only validation), and `readAll()` would hand that line
+back indistinguishably from a real one. Blessing `gate.audit.readAll()` as THE replay path
+therefore blessed a path that could return forged data.
+
+Closed by adding **`gate.readAudit()`** — a plain instance method (the same documentation shape
+`check()`/`record()`/`add()`/`rwxTools()` already have; not a separate `primitives.json` entry)
+that returns a DECOUPLED copy of every audit line, in both file and fileless mode. This does
+NOT close the write path — `gate.audit` is unchanged, still public, still carries `emit()`, and
+code that already holds a `Gate` reference remains trusted the same way `add()` itself trusts
+its caller (the audit log records what the GATE did; it was never meant to be tamper-evident
+against code that already has gate access, only against a caller with no such access).
+`readAudit()` simply hands out no write capability of its own, so a caller that only ever calls
+it can read the log back but can never forge a line through it. `gate.audit.readAll()`
+continues to work exactly as before (additive, not a removal) but is no longer the DOCUMENTED
+path; `readAudit()` is.
+
+A related fix in the same debrief, to `addToGates` itself: it previously accepted a gate only
+via `instanceof Gate`, which fails for a genuine `Gate` instance constructed from a SECOND copy
+of `bareguard` in the same process (e.g. two dependencies of a fleet-managing app each pulling
+their own install) — wrongly rejecting a real gate, and since `addToGates` validates every
+element before touching any of them, that one unrecognized gate silently starved the WHOLE
+fleet, not just itself. Fixed by branding `Gate` with the global-registry symbol
+`Symbol.for("bareguard.Gate")` (stamped non-enumerable in the constructor) and accepting any
+object carrying that brand plus a callable `add` — `Symbol.for` resolves to the identical
+symbol across separate module copies, which is exactly the property `instanceof` lacks.
+Duplicate-instance rejection (`===`) is unaffected.
+
+A third fix, also `addToGates`: two DIFFERENT gates sharing the same rwx `agent` identity (a
+realistic fleet shape) produced a `.failures`/`.errors` report that could not tell them apart,
+and a failing call discarded every gate's individual outcome. Fixed by adding `index` (the
+gate's position in the `gates` array) to every success result and every `.failures` entry, and
+by attaching the FULL per-index `results` array — success and failure alike, same shape as the
+resolved value on full success — to the thrown `AggregateError` as `.results`.
+
+**On ship:** `gate.add`, `gate.rwxTools`, `gate.readAudit`, `addToGates`, the `rwx.added` phase,
+the `rwx.add_rejected` phase, the `rwx.tightened` deny rule, and the 10,000-entry size cap all
+join the 1.0 SemVer surface (§23.17). Built this session on `main`'s `feat/rwx-add` branch; not
+yet released as a version bump (release is a separate decision, per this project's own standing
+rule).

@@ -14,13 +14,27 @@ import { netCheck } from "./primitives/net.js";
 import {
   toolsDenylistCheck, toolsDenyArgsCheck, toolsAllowlistCheck,
 } from "./primitives/tools.js";
-import { assertRwxConfig, rwxCheck, matchRwxLetter, resolveAgentLetters, clampLetters } from "./primitives/rwx.js";
+import { assertRwxConfig, rwxCheck, matchRwxLetter, resolveAgentLetters, clampLetters, normalizeEntry } from "./primitives/rwx.js";
 import { contentDenyCheck, contentAskCheck } from "./primitives/content.js";
 import { flagsDenyCheck, flagsAskCheck } from "./primitives/flags.js";
 import { deferRateCheck } from "./primitives/defer-rate.js";
 import { spawnRateCheck } from "./primitives/spawn-rate.js";
 
 const MAX_TOPUP_ITERATIONS = 5;
+
+// §23.21 fleet-brand — a GLOBAL-REGISTRY symbol (`Symbol.for`, not `Symbol()`)
+// so it resolves to the IDENTICAL symbol across separate copies of this
+// package in the same process (e.g. two different versions/installs of
+// `bareguard` deduped differently by two dependencies of a fleet-managing
+// app). `addToGates` brand-checks against this instead of `instanceof Gate`,
+// because `instanceof` fails across module copies even for a genuine `Gate`
+// instance from a second `bareguard` install — that second, equally-real
+// Gate would otherwise be rejected outright and NO gate in the batch would
+// be attempted (addToGates validates every element before touching any
+// gate). Set once, in the constructor, as a non-enumerable own property so
+// it never shows up in a `for...in`/`Object.keys`/JSON-serialization of a
+// Gate instance.
+const GATE_BRAND = Symbol.for("bareguard.Gate");
 
 function structuredError(decision, action) {
   return {
@@ -73,6 +87,83 @@ function copyOwnSafely(src) {
     try { out[k] = src[k]; } catch { out[k] = UNREADABLE; }
   }
   return out;
+}
+
+/**
+ * Deep, decoupled, never-throwing clone used only as {@link Gate#readAudit}'s
+ * last-resort per-line fallback — reached when a whole-array/whole-line JSON
+ * round-trip fails, which in fileless mode is the ONLY way an unserializable
+ * value (a BigInt, a circular reference, a throwing getter/`toJSON`) can
+ * reach a caller here: `Audit.emit()` pushes the caller's raw `action`/
+ * `result` object straight into `this.entries` with no degrade step (that
+ * degrade only runs in FILE mode's `emit()`), so a live in-memory line can
+ * hold exactly those values. A plain `JSON.parse(JSON.stringify(...))`
+ * throws on all three; the previous fallback, `{ ...line }`, "recovered" by
+ * handing back the SAME nested `action`/`result` OBJECT the live log holds —
+ * a caller mutating that "copy" was mutating the live audit line, breaking
+ * the README/bareguard.context.md promise that mutating a `readAudit()` line
+ * "can never affect the gate's live audit state."
+ *
+ * Walks own-enumerable keys by hand — it never invokes a hostile `toJSON`,
+ * because it never calls `JSON.stringify` on the untrusted value — one key
+ * at a time inside its own try/catch, so a single throwing getter can only
+ * sink that one field rather than the whole line (same posture as
+ * {@link copyOwnSafely}). It reproduces `JSON.stringify`'s own semantics for
+ * everything else, so the fallback's output is the SAME shape the JSON fast
+ * path would have produced had it not thrown: a `BigInt` is rendered to its
+ * string form (JSON has no BigInt literal); a function, `Symbol`, or
+ * `undefined` value is OMITTED as an object property and rendered as `null`
+ * inside an array — never passed through by reference, so the clone can
+ * never hand a caller something that would let `JSON.stringify` on the
+ * returned line invoke caller code. Only a TRUE cycle — an object that is
+ * its own ancestor on the current recursion path — is cut and replaced with
+ * `"[Circular]"`; an object referenced twice in non-ancestor positions (e.g.
+ * two fields sharing one sub-object) is cloned independently both times, via
+ * an `ancestors` set that's added-to before recursing into a value and
+ * removed from (in a `finally`, so a throw can't leave it stale) once that
+ * value's subtree is done. A chain nested past {@link MAX_CLONE_DEPTH} is cut
+ * and replaced with `"[MaxDepthExceeded]"` rather than risk a stack-
+ * overflowing `RangeError` escaping the recursion. `__proto__` is dropped as
+ * an own key at every depth — the same treatment {@link boundMeta}/
+ * {@link deepCopyRwx} give reply-derived/operator-authored data respectively.
+ * @param {*} v value to clone
+ * @param {Set<object>} [ancestors] the current recursion path; callers omit it
+ * @param {number} [depth] current recursion depth; callers omit it
+ * @returns {*} a fully decoupled clone; never throws
+ */
+const MAX_CLONE_DEPTH = 2000;
+function safeDeepClone(v, ancestors = new Set(), depth = 0) {
+  if (v === null || typeof v !== "object") {
+    if (typeof v === "bigint") return v.toString();
+    // JSON semantics: a function/symbol/undefined VALUE has no JSON form.
+    // The caller (object-key vs array-index loop below) decides whether
+    // that means "omit the key" or "null in this slot".
+    if (typeof v === "function" || typeof v === "symbol" || typeof v === "undefined") return undefined;
+    return v;
+  }
+  if (depth > MAX_CLONE_DEPTH) return "[MaxDepthExceeded]";
+  if (ancestors.has(v)) return "[Circular]";
+  ancestors.add(v);
+  try {
+    let keys;
+    try { keys = Object.keys(v); } catch { return UNREADABLE; }
+    let isArr;
+    try { isArr = Array.isArray(v); } catch { isArr = false; }
+    const out = isArr ? [] : {};
+    for (const k of keys) {
+      if (k === "__proto__") continue;
+      let cloned;
+      try { cloned = safeDeepClone(v[k], ancestors, depth + 1); } catch { cloned = UNREADABLE; }
+      if (isArr) {
+        out[k] = cloned === undefined ? null : cloned;
+      } else if (cloned !== undefined) {
+        out[k] = cloned;
+      }
+    }
+    return out;
+  } finally {
+    ancestors.delete(v);
+  }
 }
 
 function safeAction(action) {
@@ -227,6 +318,85 @@ function boundMeta(meta) {
   } catch {
     return { _unserializable: true };
   }
+}
+
+/**
+ * §23.21: the size cap `gate.add()` enforces on `rwx.tools`. Landing exactly
+ * at this many keys is fine; only a batch that would push the map PAST it
+ * refuses (throws, nothing lands) — there is no separate gate-wide
+ * poisoned-past-cap state, since `add()` is the only way the map grows.
+ * @type {number}
+ */
+const RWX_TOOLS_CAP = 10000;
+
+/**
+ * Letter rank for `gate.add()`'s tighten-only check (§23.21): a letter can
+ * only rise, never fall (`r` < `w` < `x`).
+ * @type {Readonly<{r:number,w:number,x:number}>}
+ */
+const RWX_LETTER_RANK = Object.freeze({ r: 0, w: 1, x: 2 });
+
+/**
+ * Deep, decoupled copy of an already construct-time-validated `rwx` config
+ * (§23.21) — closes the live-reference hole where mutating the caller's
+ * original `rwx.tools`/`bash`/`agents` object AFTER construction changed a
+ * running gate's decisions (every eval step reads `this.cfg.rwx` by
+ * reference). A JSON round-trip is sufficient because `assertRwxConfig` has
+ * already required every legal `rwx` value to be JSON-shaped (strings, or
+ * plain `{letter,marker}` objects); `__proto__` is stripped at every depth
+ * in the reviver, the same treatment {@link boundMeta} gives reply-derived
+ * `meta`. `rwx` is operator-authored config (not agent-reachable input), so
+ * a construct-time throw on an unserializable value (e.g. a circular
+ * reference) is the right failure mode — the same posture as every other
+ * construct-time config validator in this file.
+ * @param {object} rwx already-validated rwx config
+ * @returns {object} a decoupled deep copy
+ */
+function deepCopyRwx(rwx) {
+  try {
+    return JSON.parse(JSON.stringify(rwx), (k, v) => (k === "__proto__" ? undefined : v));
+  } catch (err) {
+    throw new Error(`invalid bareguard config: rwx could not be deep-copied at construct time (${err.message})`);
+  }
+}
+
+/**
+ * Best-effort key list for an `add()` batch that failed before it could be
+ * safely snapshotted (a bad shape, or a rejection raised before `add()` even
+ * reads `entries`) — used only for the `rwx.add_rejected` audit line's
+ * `keys` field, never for anything that decides what lands. Never throws.
+ * @param {*} entries the raw `add()` argument
+ * @returns {string[]}
+ */
+function attemptedRwxKeys(entries) {
+  try { return (entries && typeof entries === "object") ? Object.keys(entries) : []; }
+  catch { return []; }
+}
+
+/**
+ * §23.21 decision 5 (check()/add() race fix) — a JSON-stable snapshot of the
+ * ONE tools-map entry a given action would match, or a sentinel for "not
+ * applicable": `undefined` for a `bash` action (`add()` only ever touches
+ * `rwx.tools`, never `rwx.bash`, so a bash action's match can never have
+ * changed — structurally exempt) or when `rwxCfg` isn't usable; `null` for
+ * an action type absent from the tools map ("unlisted"). Module-level (not
+ * a `check()`-local closure) so it can be called from BOTH `check()` (the
+ * default, top-of-iteration baseline) and `_stepEval` (the precise,
+ * same-tick overwrite taken exactly when step 5 reads the map) — see
+ * `check()`'s race-snapshot comment for why both call sites exist.
+ * @param {*} rwxCfg `cfg.rwx`
+ * @param {object} action the action being evaluated
+ * @returns {string|null|undefined}
+ */
+function rwxToolsEntrySnapshot(rwxCfg, action) {
+  if (action?.type === "bash") return undefined;
+  if (!isPlainObject(rwxCfg)) return null;
+  const toolsMap = isPlainObject(rwxCfg.tools) ? rwxCfg.tools : {};
+  if (!Object.prototype.hasOwnProperty.call(toolsMap, action?.type)) return null; // "absent"
+  // A JSON-stable string is enough to compare "did THIS key's raw value
+  // change at all" — the exact shape doesn't matter, only equality.
+  try { return JSON.stringify(toolsMap[action.type]); }
+  catch { return "[unserializable]"; }
 }
 
 /**
@@ -411,9 +581,22 @@ export class Gate {
    * if (decision.outcome === "allow") await gate.record(action, { costUsd: 0.01 });
    */
   constructor(config = {}) {
+    // §23.21 fleet-brand (see GATE_BRAND above): non-enumerable so it is
+    // invisible to for...in/Object.keys/JSON.stringify — purely an internal
+    // marker `addToGates` (and any future cross-copy helper) can check for.
+    Object.defineProperty(this, GATE_BRAND, {
+      value: true, enumerable: false, configurable: false, writable: false,
+    });
     assertArrayShapedConfig(config);
     assertRwxConfig(config); // §23.2: rwx is a second mode, mutually exclusive with tools.allowlist/bash.allow
-    this.cfg = config;
+    // §23.21: the gate copies `rwx` at construct time, deep and decoupled —
+    // every other section is still held by reference (unchanged), but rwx
+    // alone gets this treatment because `gate.add()` needs a private map it
+    // owns to mutate, and because a caller mutating their own `rwx.tools`
+    // object post-construct must no longer be able to flip a running gate's
+    // decisions (the hole §23.21 exists to close). `config` itself is never
+    // mutated by `add()` — only this private copy is.
+    this.cfg = config.rwx != null ? { ...config, rwx: deepCopyRwx(config.rwx) } : config;
     this.runId = config.runId ?? randomUUID();
     this.parentRunId = config.parentRunId ?? process.env.BAREGUARD_PARENT_RUN_ID ?? null;
     this.spawnDepth = config.spawnDepth ?? +(process.env.BAREGUARD_SPAWN_DEPTH ?? 0);
@@ -437,7 +620,24 @@ export class Gate {
       // the backstop is explicitly disabled with no other secrets config.
       redact: makeRedactor(config.secrets),
     });
-
+    // `gate.audit` is the LIVE `Audit` instance this gate records to — kept
+    // as a plain, pre-existing public property (unchanged, not renamed) for
+    // backward compatibility, but it is internal plumbing, NOT the
+    // documented replay path: `Audit` carries a public `emit()`, so any
+    // caller holding a `Gate` reference could always write a line straight
+    // onto `gate.audit` that never went through `check()`/`add()`'s own
+    // validation — `gate.audit.readAll()` would then hand that forged line
+    // back indistinguishably from a real one. The documented, read-only path
+    // for a caller that needs to read its own audit log back programmatically
+    // — e.g. the §23.21 replay contract ("every allow line traces to the
+    // tools map at that log position") — is {@link Gate#readAudit}, which
+    // returns a DECOUPLED copy and offers no write method of its own. This
+    // does not make `gate.audit` any less reachable than before, and does
+    // not stop code that already holds a `Gate` reference from writing to it
+    // directly (the same trust boundary `add()` itself sits behind — the
+    // audit log records what the GATE did; code with gate access is
+    // trusted); `readAudit()` simply hands out no write path. See
+    // README.md's rwx section and bareguard.context.md for the full contract.
     const sharedFile = config.budget?.sharedFile ?? process.env.BAREGUARD_BUDGET_FILE ?? null;
     this.budget = new Budget({ ...config.budget, sharedFile });
     this.limits = new Limits({ ...config.limits, startingDepth: this.spawnDepth });
@@ -446,27 +646,93 @@ export class Gate {
     this.humanChannelTimeoutMs = config.humanChannelTimeoutMs ?? null;
     this.terminated = false;
     this._initialized = false;
+    // Memoized in-flight init() promise: two concurrent first callers (e.g.
+    // two `check()`s racing on the `!this._initialized` guard) must share
+    // ONE init run, not each kick off their own audit.init()/budget.init()
+    // (the latter's cold-start rebuild reads the whole audit log and writes
+    // the shared budget file — two concurrent runs are a lost-update race,
+    // not a safe no-op). Cleared on failure so the next call retries fresh;
+    // every waiter on a failed init sees the SAME rejection.
+    this._initPromise = null;
     // Axis B (§6.6/§8.2): buffered return-time-judge facts awaiting a human ask
     // to ride / an agent-feedback drain. Empty unless the caller calls annotate().
     this._annotations = [];
+    // §23.21 decision 5: bumped once per successfully-landed `add()` batch.
+    // `check()` snapshots this before awaiting a human decision and, if it
+    // changed by the time a human "allow" is about to be returned, re-checks
+    // rwx fresh (the check()/add() race fix) — gated on this counter so the
+    // common case (no concurrent add()) costs nothing and an ordinary
+    // `askOn:"loose"` ask-then-allow stays byte-identical.
+    this._addGeneration = 0;
+    // §23.21 "check and audit in the same logical order" — ONE ordering
+    // lock, shared by `add()` (its whole `_addOnce`: validate → audit →
+    // mutate) and by `check()`'s final commit (`_commitDecision`: possibly
+    // downgrade an allow → write exactly one final audit line). Uncontended
+    // acquisition proceeds immediately (a promise chain whose head is
+    // already resolved); contended acquisition waits its turn, in call
+    // order. A throw from the locked function never wedges it — see
+    // `_withLock`'s own `finally`. This is what makes the audit log's line
+    // order the TRUE order: whichever of a `check()`'s final commit or an
+    // `add()`'s mutation acquires the lock first is unambiguously "first,"
+    // and the other sees its effects (or doesn't) consistently with that.
+    this._gateLock = Promise.resolve();
+  }
+
+  /**
+   * §23.21 "check and audit in the same logical order" — run `fn` with
+   * exclusive access to the gate's ordering lock. Every caller links onto
+   * the previous caller's queue token and awaits it before running its own
+   * `fn`; the token this call hands to the NEXT caller always resolves —
+   * never rejects — regardless of whether `fn` threw, so one failing call
+   * can never wedge the lock for whatever comes after it. Shared by `add()`
+   * (`_addOnce` runs inside it) and `check()`'s final commit
+   * (`_commitDecision` runs inside it) — nothing else acquires it.
+   * @template T
+   * @param {() => (T|Promise<T>)} fn
+   * @returns {Promise<T>}
+   */
+  async _withLock(fn) {
+    const previous = this._gateLock;
+    let releaseNext = (_value) => {}; // always overwritten synchronously below; the no-op default is only to satisfy TS's definite-assignment check
+    this._gateLock = new Promise((resolve) => { releaseNext = resolve; });
+    await previous;
+    try {
+      return await fn();
+    } finally {
+      releaseNext();
+    }
   }
 
   /**
    * Initialize audit and budget subsystems (idempotent; auto-called by check/allows/record/etc.).
+   * Concurrent first callers share a single in-flight init (memoized on
+   * `_initPromise`) rather than each independently running audit.init()/
+   * budget.init() — the latter's cold-start rebuild reads the whole audit
+   * log and writes the shared budget file, so two concurrent runs race on
+   * that write instead of being a safe no-op. A failed init clears the
+   * memo so the next call retries; every waiter on that failed init sees
+   * the same rejection.
    * @returns {Promise<void>}
    */
   async init() {
     if (this._initialized) return;
-    await this.audit.init();
-    await this.budget.init({
-      rebuildFromAudit: async () => {
-        const rebuilt = await this._rebuildBudgetFromAudit();
-        this.limits.turns = rebuilt.turns;
-        this.limits.toolRounds = rebuilt.toolRounds;
-        return rebuilt;
-      },
+    if (this._initPromise) return this._initPromise;
+    this._initPromise = (async () => {
+      await this.audit.init();
+      await this.budget.init({
+        rebuildFromAudit: async () => {
+          const rebuilt = await this._rebuildBudgetFromAudit();
+          this.limits.turns = rebuilt.turns;
+          this.limits.toolRounds = rebuilt.toolRounds;
+          return rebuilt;
+        },
+      });
+      this._initialized = true;
+    })().catch((err) => {
+      this._initPromise = null;
+      throw err;
     });
-    this._initialized = true;
+    return this._initPromise;
   }
 
   async _rebuildBudgetFromAudit() {
@@ -504,7 +770,21 @@ export class Gate {
   }
 
   // STEP 1-6 (PRD v0.5 §3). First terminal wins.
-  async _stepEval(action) {
+  /**
+   * @param {object} action
+   * @param {{gen:number, entry:(string|null|undefined)}} [raceSnapshot]
+   *   §23.21 decision 5 out-parameter, mutated in place. `check()` seeds it
+   *   with a default (the top-of-iteration generation + entry, used as-is
+   *   when step 5 below never runs — an earlier step already denied/asked).
+   *   If step 5 DOES run, it overwrites both fields with a read taken in the
+   *   exact same synchronous tick as `rwxCheck` itself — more precise than
+   *   the default, because steps 3/3b (`deferRateCheck`/`spawnRateCheck`)
+   *   can await real I/O before step 5 is ever reached, during which a
+   *   concurrent `add()` could otherwise land unnoticed. A plain per-call
+   *   object, not shared instance state — `check()` calls can run
+   *   concurrently for different actions.
+   */
+  async _stepEval(action, raceSnapshot) {
     const t = this.cfg.tools;
     const c = this.cfg.content;
 
@@ -554,8 +834,23 @@ export class Gate {
 
     // 5. rwx mode (§23.5) OR tools.allowlist enforcement — mutually exclusive
     // (construct-time throw enforces exactly one), same eval-order slot.
-    const d5 = this.cfg.rwx != null ? rwxCheck(action, this.cfg.rwx) : toolsAllowlistCheck(action, t);
-    if (d5) return d5;
+    if (this.cfg.rwx != null) {
+      // §23.21 decision 5: overwrite the race snapshot HERE, synchronously,
+      // in the exact same tick `rwxCheck` reads the map — no await between
+      // this line and the read. This is what the ask decision below is
+      // actually computed from; a snapshot taken any earlier (even one
+      // statement earlier, if something above it had awaited) or any later
+      // could disagree with what `rwxCheck` itself just saw.
+      if (raceSnapshot) {
+        raceSnapshot.gen = this._addGeneration;
+        raceSnapshot.entry = rwxToolsEntrySnapshot(this.cfg.rwx, action);
+      }
+      const d5 = rwxCheck(action, this.cfg.rwx);
+      if (d5) return d5;
+    } else {
+      const d5 = toolsAllowlistCheck(action, t);
+      if (d5) return d5;
+    }
 
     // 6. default → allow
     return { outcome: "allow", severity: "action", rule: "default", reason: null };
@@ -604,6 +899,75 @@ export class Gate {
    * @param {import("./types.js").Action} action action to evaluate
    * @returns {Promise<import("./types.js").Decision>} terminal decision (never askHuman)
    */
+  /**
+   * §23.21 "check and audit in the same logical order" — the ONE place
+   * every final decision from `check()` is committed. Runs entirely inside
+   * the gate's ordering lock (`_withLock`, shared with `add()`), so no
+   * `add()` can land between the freshness compare below and the single
+   * audit line this writes — the audit log's line order IS the true order:
+   * a final ALLOW line is always valid against the tools map as of its
+   * position in the log.
+   *
+   * If `decision.outcome` is `"allow"`, rwx is active, and `raceSnapshot`
+   * is given, first compares the matched tools-map entry against it (taken
+   * at the step-5 read, or the conservative top-of-iteration default when
+   * step 5 never ran this iteration — see `_stepEval`/`check()`).
+   * Unchanged (fast path: `raceSnapshot.gen === this._addGeneration`, one
+   * integer compare) → the allow stands as given. Changed → a fresh
+   * `rwxCheck`; a non-allow result DOWNGRADES `decision` to a NEW
+   * `rwx.tightened` deny object — `decision` itself is never mutated.
+   * Exactly ONE audit line is written for this `aid`, reflecting whichever
+   * decision is final — never the original AND then a correction; the
+   * compare happens BEFORE any line is written, not after. A terminal
+   * DENY, or an allow with no `raceSnapshot` (rwx not active, or the
+   * matched entry is exempt — e.g. a bash-map match, since `add()` never
+   * touches `rwx.bash`), skips the compare and commits as given.
+   * @param {import("./types.js").Decision} decision the candidate final
+   *   decision (already carries `aid`)
+   * @param {object} [opts]
+   * @param {object} [opts.action] the gated action (`null` for a line that
+   *   names no specific action, matching each call site's own convention)
+   * @param {{gen:number, entry:*}|null} [opts.raceSnapshot] required to
+   *   consider a downgrade; omitted → never downgrades
+   * @param {object} [opts.lineFields] extra fields for the audit line
+   *   (e.g. `rwxLetters`/`rwxLetter`/`rwxMarker`), applied only when the
+   *   decision commits AS GIVEN — a downgrade's line carries its own
+   *   reason, not the original's extra fields
+   * @param {string} [opts.phase] audit phase name (default `"gate"`; some
+   *   call sites use `"approval"`, matching their pre-existing convention)
+   * @returns {Promise<import("./types.js").Decision>}
+   */
+  async _commitDecision(decision, opts = {}) {
+    const { action = null, raceSnapshot = null, lineFields = {}, phase = "gate" } = opts;
+    return this._withLock(async () => {
+      let final = decision;
+      if (
+        final.outcome === "allow" &&
+        raceSnapshot != null &&
+        this.cfg.rwx != null &&
+        raceSnapshot.entry !== undefined &&
+        raceSnapshot.gen !== this._addGeneration
+      ) {
+        const entryNow = rwxToolsEntrySnapshot(this.cfg.rwx, action);
+        if (entryNow !== raceSnapshot.entry) {
+          const fresh = rwxCheck(action, this.cfg.rwx);
+          if (fresh.outcome !== "allow") {
+            const reason = `rwx entry for "${clipKey(action?.type)}" was tightened by a concurrent gate.add() since it was read — re-evaluated as ${fresh.outcome} (${fresh.rule}${fresh.reason ? ": " + fresh.reason : ""})`;
+            final = { outcome: "deny", severity: "action", rule: "rwx.tightened", reason, aid: decision.aid };
+          }
+        }
+      }
+      const isDowngraded = final !== decision;
+      await this.audit.emit({
+        aid: decision.aid, phase, action,
+        decision: final.outcome, severity: final.severity,
+        rule: final.rule, reason: final.reason,
+        ...(isDowngraded ? {} : lineFields),
+      });
+      return final;
+    });
+  }
+
   async check(action) {
     if (!this._initialized) await this.init();
     action = safeAction(action); // own-props only — no inherited field can flip a decision
@@ -614,11 +978,42 @@ export class Gate {
     const aid = randomUUID().slice(0, 8);
     const emit = (fields) => this.audit.emit({ aid, ...fields });
 
+    // §23.21 "check and audit in the same logical order" — the settled
+    // design, after two earlier attempts each closed one race and opened
+    // another (both superseded; PRD §23.21 keeps that history, not repeated
+    // here). rwx step 5 reads the matched tools-map entry and the decision
+    // is COMPUTED from that read; `check()` may then run for an unbounded
+    // time (rate-check I/O, its own audit writes, a human wait) before it's
+    // ready to COMMIT. A concurrent `add()` landing at ANY point in that
+    // window must not let a stale allow ride through, and must not produce
+    // more than one final audit line for this `aid`.
+    //
+    // `_commitDecision` (own doc below) is the ONE place that
+    // compares-and-possibly-downgrades an allow AND writes the single final
+    // audit line, atomically, inside the gate's ordering lock shared with
+    // `add()` — so the compare can never be interleaved with a concurrent
+    // `add()`'s own mutation. This makes the audit log's line order the
+    // TRUE order: a final allow line is always valid against the tools map
+    // as of its position in the log.
+    //
+    // `raceSnapshot` (fresh per loop iteration — never shared instance
+    // state, since `check()` calls run concurrently) is seeded below with
+    // the state at the very top of the iteration, before `_stepEval` runs.
+    // `_stepEval`'s step 5 (if it runs this iteration) OVERWRITES both
+    // fields with a same-tick read — more precise than the default,
+    // because an earlier step (`deferRateCheck`/`spawnRateCheck`) can await
+    // real I/O first. When step 5 does NOT run (an earlier step already
+    // decided, e.g. `flags`/`content`), the top-of-iteration default is
+    // what `_commitDecision` compares against.
     let iterations = 0;
     while (true) {
+      const raceSnapshot = {
+        gen: this._addGeneration,
+        entry: this.cfg.rwx != null ? rwxToolsEntrySnapshot(this.cfg.rwx, action) : undefined,
+      };
       // PRE-EVAL: halt, else the 6-step eval. `_stepEval` always returns a
       // terminal decision, so `??` makes `decision` provably non-null.
-      const decision = this._haltCheck() ?? await this._stepEval(action);
+      const decision = this._haltCheck() ?? await this._stepEval(action, raceSnapshot);
       // bash.classify (harness §7.1) may attach a severity tier; read it via a
       // widened view since not every decision shape carries these optionals.
       const cls = /** @type {{classification?: ("destructive"|"super_destructive"), tier?: (2|3)}} */ (decision);
@@ -634,29 +1029,28 @@ export class Gate {
           }
         : {};
 
-      // Terminal allow/deny → audit and return.
+      // Terminal allow/deny → commit (single lock-protected compare + one
+      // audit line) and return. rwx (§23.5): "the audit line carries the
+      // letter." rwxLetters/rwxLetter/rwxMarker are a closed, tiny alphabet
+      // ("r"/"w"/"x"/"-", "tight"/"loose"/"settled") derived from OPERATOR
+      // config, never caller/reply data — same non-redacted, non-LINE_FIELDS
+      // treatment as `rule`/`severity`/classify's `classification`/`tier`.
+      // Absent for every decision that isn't an rwx one, so a non-rwx
+      // gate's audit line is byte-identical. Applied only when the decision
+      // commits AS GIVEN — a downgrade to `rwx.tightened` carries its own
+      // reason, not these fields (see `_commitDecision`).
       if (decision.outcome === "allow" || decision.outcome === "deny") {
-        // rwx (§23.5): "the audit line carries the letter." rwxLetters/
-        // rwxLetter/rwxMarker are a closed, tiny alphabet ("r"/"w"/"x"/"-",
-        // "tight"/"loose"/"settled") derived from OPERATOR config, never
-        // caller/reply data — same non-redacted, non-LINE_FIELDS treatment
-        // as `rule`/`severity`/classify's `classification`/`tier`. Absent
-        // for every decision that isn't an rwx one, so a non-rwx gate's
-        // audit line is byte-identical.
-        await emit({
-          phase: "gate", action,
-          decision: decision.outcome, severity: decision.severity,
-          rule: decision.rule, reason: decision.reason,
-          ...rwxAuditFields,
-        });
         // Control flow above guarantees outcome is "allow" | "deny"; the cast
         // pins the internal eval result to the public Decision shape.
-        return /** @type {import("./types.js").Decision} */ ({ ...decision, aid });
+        const asDecision = /** @type {import("./types.js").Decision} */ ({ ...decision, aid });
+        return this._commitDecision(asDecision, { action, raceSnapshot, lineFields: rwxAuditFields });
       }
 
-      // askHuman path: emit gate audit, dispatch to humanChannel, apply.
-      // rwx.askOn:"loose" (D103) resolves an rwx match to askHuman too, so
-      // this line carries the same rwx fields as the terminal branch above.
+      // askHuman path: emit gate audit (OUTSIDE the ordering lock — this is
+      // not a final line, and `add()` must never block on a human),
+      // dispatch to humanChannel, apply. rwx.askOn:"loose" (D103) resolves
+      // an rwx match to askHuman too, so this line carries the same rwx
+      // fields as the terminal branch above.
       await emit({
         phase: "gate", action,
         decision: "askHuman", severity: decision.severity,
@@ -689,19 +1083,13 @@ export class Gate {
             `See https://github.com/hamr0/bareguard#wiring-with-humanchannel\n`
           );
         }
-        /** @type {import("./types.js").Decision} */
-        const denial = {
-          outcome: "deny", severity: "halt",
-          rule: decision.rule,
-          reason: `${decision.reason} (no humanChannel registered)`,
-          aid,
-        };
-        await emit({
-          phase: "gate", action,
-          decision: "deny", severity: "halt",
-          rule: denial.rule, reason: denial.reason,
-        });
-        return denial;
+        return this._commitDecision(
+          {
+            outcome: "deny", severity: "halt", rule: decision.rule,
+            reason: `${decision.reason} (no humanChannel registered)`, aid,
+          },
+          { action },
+        );
       }
 
       // event.action is ALWAYS the action being checked (v0.4). For halt
@@ -763,20 +1151,28 @@ export class Gate {
         if (this.humanChannelTimeoutMs != null && this.humanChannelTimeoutMs > 0) {
           const timeoutMs = this.humanChannelTimeoutMs;
           const TIMEOUT = Symbol("humanChannelTimeout");
+          // Deliberately NOT unref'd: the timer firing is the only way this
+          // promise (and therefore check()) can ever resolve when humanChannel
+          // never settles, so it must keep the event loop alive while the
+          // human decision is pending. It is always cleared below once the
+          // race settles (answer, timeout, or throw), so a finished check()
+          // never holds the process open for the remainder of timeoutMs.
           let timer;
           const timeoutPromise = new Promise((resolve) => {
             timer = setTimeout(() => resolve(TIMEOUT), timeoutMs);
-            if (typeof timer.unref === "function") timer.unref();
           });
-          const raced = await Promise.race([channelPromise, timeoutPromise]);
-          clearTimeout(timer);
+          let raced;
+          try {
+            raced = await Promise.race([channelPromise, timeoutPromise]);
+          } finally {
+            clearTimeout(timer);
+          }
           if (raced === TIMEOUT) {
             const reason = `humanChannel timeout after ${this.humanChannelTimeoutMs}ms`;
-            await emit({
-              phase: "approval", action,
-              decision: "deny", reason,
-            });
-            return { outcome: "deny", severity: "halt", rule: decision.rule, reason, aid };
+            return this._commitDecision(
+              { outcome: "deny", severity: "halt", rule: decision.rule, reason, aid },
+              { action, phase: "approval" },
+            );
           }
           response = raced;
         } else {
@@ -784,15 +1180,20 @@ export class Gate {
         }
       }
       catch (err) {
-        await emit({
-          phase: "approval", action,
-          decision: "deny", reason: `humanChannel threw: ${err.message}`,
-        });
-        return { outcome: "deny", severity: "halt", rule: decision.rule,
-                 reason: `humanChannel threw: ${err.message}`, aid };
+        return this._commitDecision(
+          {
+            outcome: "deny", severity: "halt", rule: decision.rule,
+            reason: `humanChannel threw: ${err.message}`, aid,
+          },
+          { action, phase: "approval" },
+        );
       }
 
       const human = response ?? { decision: "deny", reason: "humanChannel returned nothing" };
+      // The raw human response is its OWN audit fact, written unconditionally
+      // and OUTSIDE the lock — it records what the human SAID, not what the
+      // gate finally decided; the branch below still commits the actual
+      // outcome (and, for "allow", still re-validates freshness).
       await emit({
         phase: "approval", action,
         decision: human.decision, reason: human.reason ?? null,
@@ -800,49 +1201,43 @@ export class Gate {
       });
 
       if (human.decision === "allow") {
-        /** @type {import("./types.js").Decision} */
-        const decided = { outcome: "allow", severity: "action", rule: "humanChannel.allow", reason: human.reason ?? null, aid };
-        await emit({
-          phase: "gate", action,
-          decision: "allow", severity: "action",
-          rule: decided.rule, reason: decided.reason,
-        });
-        return decided;
+        return this._commitDecision(
+          { outcome: "allow", severity: "action", rule: "humanChannel.allow", reason: human.reason ?? null, aid },
+          { action, raceSnapshot },
+        );
       }
       if (human.decision === "deny") {
-        /** @type {import("./types.js").Decision} */
-        const decided = {
-          outcome: "deny",
-          severity: decision.severity, // preserve halt vs action source
-          rule: decision.rule,
-          reason: human.reason ?? "human denied",
-          aid,
-        };
-        await emit({
-          phase: "gate", action,
-          decision: "deny", severity: decided.severity,
-          rule: decided.rule, reason: decided.reason,
-        });
-        return decided;
+        return this._commitDecision(
+          {
+            outcome: "deny",
+            severity: decision.severity, // preserve halt vs action source
+            rule: decision.rule,
+            reason: human.reason ?? "human denied",
+            aid,
+          },
+          { action },
+        );
       }
       if (human.decision === "topup") {
         if (decision.severity !== "halt") {
           // topup only meaningful for halt; for ask events, treat as allow.
-          /** @type {import("./types.js").Decision} */
-          const decided = { outcome: "allow", severity: "action", rule: "humanChannel.allow", reason: "topup-on-ask treated as allow", aid };
-          await emit({
-            phase: "gate", action,
-            decision: "allow", severity: "action",
-            rule: decided.rule, reason: decided.reason,
-          });
-          return decided;
+          return this._commitDecision(
+            { outcome: "allow", severity: "action", rule: "humanChannel.allow", reason: "topup-on-ask treated as allow", aid },
+            { action, raceSnapshot },
+          );
         }
         if (typeof human.newCap !== "number" || !isFinite(human.newCap) || human.newCap < 0) {
-          return { outcome: "deny", severity: "halt", rule: decision.rule, reason: "topup with invalid newCap", aid };
+          return this._commitDecision(
+            { outcome: "deny", severity: "halt", rule: decision.rule, reason: "topup with invalid newCap", aid },
+            { action },
+          );
         }
         const dimension = this._haltDimension(decision.rule);
         if (!dimension) {
-          return { outcome: "deny", severity: "halt", rule: decision.rule, reason: "topup not applicable to this rule", aid };
+          return this._commitDecision(
+            { outcome: "deny", severity: "halt", rule: decision.rule, reason: "topup not applicable to this rule", aid },
+            { action },
+          );
         }
         const oldCap = this._haltCap(decision.rule);
         await this.budget.raiseCap(dimension, human.newCap);
@@ -851,23 +1246,36 @@ export class Gate {
           dimension, oldCap, newCap: human.newCap,
         });
         if (++iterations >= MAX_TOPUP_ITERATIONS) {
-          return { outcome: "deny", severity: "halt", rule: decision.rule,
-                   reason: `topup loop exceeded ${MAX_TOPUP_ITERATIONS} iterations`, aid };
+          return this._commitDecision(
+            {
+              outcome: "deny", severity: "halt", rule: decision.rule,
+              reason: `topup loop exceeded ${MAX_TOPUP_ITERATIONS} iterations`, aid,
+            },
+            { action },
+          );
         }
         // re-evaluate gate.check in the next loop iteration
         continue;
       }
       if (human.decision === "terminate") {
         await this.terminate(human.reason ?? "human chose terminate");
-        return { outcome: "deny", severity: "halt", rule: "gate.terminated",
-                 reason: human.reason ?? "human chose terminate", aid };
+        return this._commitDecision(
+          {
+            outcome: "deny", severity: "halt", rule: "gate.terminated",
+            reason: human.reason ?? "human chose terminate", aid,
+          },
+          { action },
+        );
       }
 
       // Unknown decision: defensive deny.
-      return {
-        outcome: "deny", severity: "halt", rule: decision.rule,
-        reason: `humanChannel returned unknown decision: ${human.decision}`, aid,
-      };
+      return this._commitDecision(
+        {
+          outcome: "deny", severity: "halt", rule: decision.rule,
+          reason: `humanChannel returned unknown decision: ${human.decision}`, aid,
+        },
+        { action },
+      );
     }
   }
 
@@ -1045,6 +1453,330 @@ export class Gate {
   }
 
   /**
+   * §23.21 read accessor — a DECOUPLED deep-copy snapshot of this gate's
+   * current `rwx.tools` map. Closes the gap the rwx-e2e bench flagged
+   * (harness-code-mode/rwx-e2e.md, "things that felt wrong" #1): `add()` is
+   * the only *write* path onto the tools map; before this there was no
+   * corresponding *read* path other than reaching into `gate.cfg.rwx.tools`
+   * directly — undocumented internal state, not public surface.
+   *
+   * The copy is a JSON round-trip (the same treatment {@link deepCopyRwx}
+   * gives the whole `rwx` config at construct time, scoped here to just
+   * `tools`), so mutating the returned object — at any depth — can never
+   * affect this gate's live state or any future `check()`/`add()` decision.
+   * Exposes ONLY the tools map: `bash`, `agents`, the agent's own grant, and
+   * every other `cfg` field stay unreachable through this method.
+   * @returns {Object<string, (string|{letter:string, marker:(string|null)})>|null}
+   *   a decoupled deep copy of `rwx.tools`, or `null` when this gate has no
+   *   `rwx` config at all (not in rwx mode) — the documented sentinel for
+   *   "there is no tools map to read."
+   * @fails Never throws. `rwx.tools` is already construct-time-validated as
+   *   JSON-shaped by {@link assertRwxConfig} (via {@link deepCopyRwx}), so the
+   *   round-trip below cannot fail in practice; the catch is defensive only.
+   */
+  rwxTools() {
+    if (this.cfg.rwx == null) return null;
+    const toolsMap = isPlainObject(this.cfg.rwx.tools) ? this.cfg.rwx.tools : {};
+    try {
+      return JSON.parse(JSON.stringify(toolsMap), (k, v) => (k === "__proto__" ? undefined : v));
+    } catch {
+      return {};
+    }
+  }
+
+  /**
+   * §23.21.x READ-ONLY audit replay accessor — the documented way to read
+   * this gate's own audit log back programmatically (e.g. the §23.21 replay
+   * contract: "every allow line traces to the tools map at that log
+   * position"). Returns the SAME data `gate.audit.readAll()` returns today
+   * (every line, in log order, in both file and fileless mode) but as a
+   * DECOUPLED copy: mutating the returned array or any line in it, at any
+   * depth, can never affect this gate's live audit state. This matters most
+   * in fileless mode, where `gate.audit.readAll()` returns the live
+   * in-memory entries THEMSELVES (by reference) — a caller mutating a
+   * returned line there would corrupt the running log; `readAudit()` never
+   * shares a reference.
+   *
+   * This is deliberately narrower than `gate.audit` itself: `Audit` (the
+   * live instance at `gate.audit`) also carries a public `emit()`, so code
+   * holding a `Gate` reference can already write an arbitrary line onto the
+   * log that never went through `check()`/`add()`'s own validation —
+   * `gate.audit.readAll()` hands that back indistinguishably from a real
+   * line. `readAudit()` doesn't change that (it is READ-only, not a
+   * capability check) and doesn't remove or lock down `gate.audit` — code
+   * that already holds a `Gate` reference is trusted the same way `add()`
+   * itself trusts its caller. What `readAudit()` adds is simply a read path
+   * that hands out no write path of its own: the audit log records what the
+   * GATE did, and anything with gate access could always also write to it
+   * directly.
+   * @returns {Promise<object[]>} a decoupled copy of every audit line
+   * @fails Never throws. A line containing something that cannot round-trip
+   *   through JSON (this can only happen in fileless mode — `Audit.emit()`
+   *   in file mode already degrades an unserializable payload before
+   *   persisting, so a file-mode read is always JSON-shaped) falls back to
+   *   {@link safeDeepClone}, a per-line deep, decoupled clone that tolerates
+   *   a BigInt, a function/symbol/`undefined` value, a true cycle, or a
+   *   throwing getter/`toJSON` — NEVER a shared reference into the live
+   *   line and never a live function reference either — so one bad line can
+   *   never sink an otherwise-good read, and mutating what comes back can
+   *   never reach the gate's live audit state either way. `safeDeepClone`
+   *   itself is called inside its own try/catch here too: a pathologically
+   *   deep chain is bounded by {@link MAX_CLONE_DEPTH} internally, but the
+   *   wrapping catch is defensive — a `RangeError` at this top-level call
+   *   site would otherwise escape `lines.map` and this async function.
+   */
+  async readAudit() {
+    if (!this._initialized) await this.init();
+    const lines = await this.audit.readAll();
+    try {
+      return JSON.parse(JSON.stringify(lines), (k, v) => (k === "__proto__" ? undefined : v));
+    } catch {
+      return lines.map((line) => {
+        try {
+          return JSON.parse(JSON.stringify(line), (k, v) => (k === "__proto__" ? undefined : v));
+        } catch {
+          try {
+            return safeDeepClone(line);
+          } catch {
+            return UNREADABLE;
+          }
+        }
+      });
+    }
+  }
+
+  /**
+   * §23.21 — runtime, tighten-only growth of the rwx tools map, for
+   * spec-less sites a harness meets mid-run that no operator committed or
+   * reviewed. Callable from harness code only — the agent only ever sends
+   * actions and never holds a `Gate` reference, so this stays structurally
+   * out of its reach. The committed `bareguard.rwx.json` (or a
+   * construct-time `rwx.tools` map) is never written to at runtime; `add()`
+   * mutates only this gate's own private, construct-time-copied map (see
+   * the constructor's `deepCopyRwx`).
+   *
+   * Validated exactly as at construct time (the real {@link assertRwxConfig}),
+   * but over the BATCH's own entries only — delta validation, not a
+   * whole-map re-check. `assertRwxConfig` has no cross-key rule (every
+   * tools/bash/agents check is a standalone per-entry loop), so this gives
+   * the identical per-key accept/reject answer whole-map validation would,
+   * at a cost independent of the existing map's size.
+   *
+   * Tighten-only on both axes against any key already present (a
+   * hand-written one included): the letter can only rise (`r` < `w` < `x`),
+   * and an entry currently marked `"loose"` can only move to another
+   * `"loose"` entry — never to `"tight"`/`"settled"`, and never to a bare
+   * letter string either, because a bare letter normalizes to
+   * `marker: null` ({@link normalizeEntry}), a state distinct from
+   * `"loose"`. `"tight"` <-> `"settled"` moves are unrestricted (neither
+   * ever asks). Only the tools map is reachable — `bash`, `agents`, and the
+   * agent's own grant are never touched by this method.
+   *
+   * All-or-nothing: nothing lands unless the WHOLE batch passes shape,
+   * tighten-only, and the {@link RWX_TOOLS_CAP} 10,000-key cap (landing
+   * exactly at the cap is fine; only crossing it refuses). Hardened like
+   * every other agent-reachable entry point: `entries` is read via the same
+   * own-props-only, hostile-getter-safe copy `safeAction()` uses gate-wide,
+   * so every value is read exactly once (no TOCTOU between validating a
+   * value and storing it), and a `__proto__`/`constructor`/`prototype` key
+   * is rejected outright rather than silently no-op'd or partially applied.
+   *
+   * Audited on success — one `rwx.added` line per landed key (key, letter,
+   * marker) — and audited loudly on ANY rejection — one `rwx.add_rejected`
+   * line (reason, the batch's attempted keys) BEFORE throwing. This is the
+   * only behavior; there is no silent-reject mode. A gate with no `rwx`
+   * config at all rejects every `add()` (conservative: nothing to tighten
+   * against, so nothing is accepted).
+   * @param {Object<string, (string|{letter:string, marker?:string})>} entries
+   *   1..n tools-map entries, the same shape `rwx.tools` accepts at
+   *   construct time (a bare `"r"`/`"w"`/`"x"`, or `{letter, marker?}`).
+   * @returns {Promise<void>}
+   * @fails Throws (after emitting `rwx.add_rejected`) when: this gate has
+   *   been {@link Gate#terminate}d; it has no `rwx` config; `entries` is not
+   *   a non-empty plain object, or is unreadable; a key is
+   *   `__proto__`/`constructor`/`prototype`; an entry's shape is malformed
+   *   (same rule as construct time); an entry would loosen an existing
+   *   key's letter or move it off marker `"loose"`; or the batch would push
+   *   `rwx.tools` past {@link RWX_TOOLS_CAP} keys. Nothing lands on any
+   *   throw. A budget-halt state does NOT block `add()` — it spends no
+   *   budget itself and nothing in §23.21 makes growing the tools map
+   *   conditional on the cost/token axis.
+   *
+   * **Serialized**, on the SAME gate-wide ordering lock `check()`'s final
+   * commit uses (`_withLock`) — not a separate queue. `add()` reads the live
+   * tools map, then AWAITS (the audit-first writes), then mutates — a
+   * genuine async window between "validate against current state" and "use
+   * that validation." Two concurrent `add()` calls that both entered before
+   * either had mutated would both validate against the SAME stale state:
+   * found by review, this let an `x`-tagged key concurrently "tighten" to
+   * `w` (loosening it, past the tighten-only guard, because the `w` call's
+   * tighten-check read the map before the `x` call had landed) and would
+   * equally have let two batches that each individually fit the 10,000-key
+   * cap jointly cross it. Sharing the lock with `check()`'s final commit
+   * (rather than a separate `add()`-only queue) is what makes the audit
+   * log's line order the TRUE order across BOTH operations (§23.21).
+   */
+  async add(entries) {
+    if (!this._initialized) await this.init();
+    return this._withLock(() => this._addOnce(entries));
+  }
+
+  /**
+   * The actual `gate.add()` logic, run strictly one call at a time by the
+   * `add()` wrapper's queue above — this method itself does no
+   * serialization and must never be called directly (module-internal only;
+   * kept as a regular method, not a private `#` field, purely to stay
+   * consistent with this file's existing style).
+   * @param {Object<string, (string|{letter:string, marker?:string})>} entries
+   * @returns {Promise<void>}
+   */
+  async _addOnce(entries) {
+    const reject = async (message, keys) => {
+      await this.audit.emit({ phase: "rwx.add_rejected", reason: message, keys });
+      throw new Error(message);
+    };
+    // Checked first, same convention as `_haltCheck()` — a terminated gate
+    // accepts nothing more. Checked at EXECUTION time (inside `_addOnce`,
+    // after the serialization queue, not in the `add()` wrapper before it),
+    // so an `add()` that was already WAITING in the queue when `terminate()`
+    // ran is rejected too, not just one called after — "terminated" means
+    // nothing more lands, full stop, regardless of when it was queued.
+    // Deliberately narrow: a budget-halt state (`this.budget.check()`) is
+    // NOT checked here — nothing in §23.21 or the halt design says growing
+    // the tools map should be blocked by an exhausted cost/token cap, and
+    // `add()` spends no budget itself, so it stays allowed unless a clearer
+    // reason to deny it shows up.
+    if (this.terminated) {
+      return reject("gate.add: gate has been terminated — nothing is accepted", attemptedRwxKeys(entries));
+    }
+    if (this.cfg.rwx == null) {
+      return reject("gate.add: this gate has no rwx config — nothing to tighten against, so nothing is accepted", []);
+    }
+
+    let entriesUsable;
+    try { entriesUsable = isPlainObject(entries) && Object.keys(entries).length > 0; }
+    catch { entriesUsable = false; }
+    if (!entriesUsable) {
+      return reject(
+        "gate.add: entries must be a non-empty plain object { key: letter | {letter,marker} }",
+        attemptedRwxKeys(entries),
+      );
+    }
+
+    // Own-props-only snapshot (safeAction's own treatment, gate-wide): reads
+    // every value exactly once (no TOCTOU between validating and storing a
+    // hostile getter's value) and lands on a null-prototype object, so a
+    // JSON-parsed `{"__proto__": "r"}` batch cannot smuggle a prototype
+    // write later when a landed key is copied into `rwx.tools`.
+    let snapshot;
+    try { snapshot = copyOwnSafely(entries); }
+    catch { return reject("gate.add: entries could not be read", []); }
+    for (const dangerous of ["__proto__", "constructor", "prototype"]) {
+      if (Object.prototype.hasOwnProperty.call(snapshot, dangerous)) {
+        return reject(`gate.add: "${dangerous}" is not a usable tools-map key`, Object.keys(snapshot));
+      }
+    }
+    const batchEntries = Object.entries(snapshot);
+
+    try {
+      // 1) Shape — delta validation only: the real construct-time validator,
+      // handed ONLY the batch's own entries (never merged with the
+      // possibly-huge current map).
+      assertRwxConfig({ rwx: { ...this.cfg.rwx, tools: snapshot } });
+
+      const rwx = this.cfg.rwx;
+      const currentTools = isPlainObject(rwx.tools) ? rwx.tools : {};
+
+      // 2) Normalize every batch entry ONCE, before any mutation. Non-null
+      // is guaranteed here: `assertRwxConfig` above already rejects any
+      // entry `normalizeEntry` can't parse, so every `newNorm` below is
+      // real; a defensive guard still throws rather than assume, matching
+      // this file's "fail loud, not silent" posture, and does so BEFORE
+      // step 4's mutation, so a guard that somehow did fire could never
+      // break all-or-nothing.
+      const newNorms = new Map();
+      for (const [key, rawNew] of batchEntries) {
+        const newNorm = normalizeEntry(rawNew);
+        if (!newNorm) throw new Error(`gate.add: rwx.tools.${clipKey(key)} could not be normalized`);
+        newNorms.set(key, newNorm);
+      }
+
+      // 3) Tighten-only, letter AND marker, against any key already present
+      // (a genuinely new key has nothing to tighten against).
+      for (const [key] of batchEntries) {
+        if (!Object.prototype.hasOwnProperty.call(currentTools, key)) continue;
+        const oldNorm = normalizeEntry(currentTools[key]);
+        if (!oldNorm) throw new Error(`gate.add: rwx.tools.${clipKey(key)} (existing entry) could not be normalized`);
+        const newNorm = newNorms.get(key);
+        if (RWX_LETTER_RANK[newNorm.letter] < RWX_LETTER_RANK[oldNorm.letter]) {
+          throw new Error(
+            `gate.add: rwx.tools.${clipKey(key)} would LOOSEN "${oldNorm.letter}" -> "${newNorm.letter}" — add() is tighten-only (r<w<x)`,
+          );
+        }
+        if (oldNorm.marker === "loose" && newNorm.marker !== "loose") {
+          throw new Error(
+            `gate.add: rwx.tools.${clipKey(key)} would move OFF marker "loose" (to ${newNorm.marker === null ? "a bare letter, which has no marker" : `"${newNorm.marker}"`}) — add() may not un-loosen a loose-marked entry`,
+          );
+        }
+      }
+
+      // 4) Size cap — computed from current-count + genuinely-new-key-count,
+      // without ever building the merged map.
+      let newKeyCount = 0;
+      for (const [key] of batchEntries) {
+        if (!Object.prototype.hasOwnProperty.call(currentTools, key)) newKeyCount++;
+      }
+      const projectedSize = Object.keys(currentTools).length + newKeyCount;
+      if (projectedSize > RWX_TOOLS_CAP) {
+        throw new Error(
+          `gate.add: rwx.tools would grow to ${projectedSize} keys, past the cap of ${RWX_TOOLS_CAP} — nothing added`,
+        );
+      }
+
+      // 5) Every check above passed for the WHOLE batch. AUDIT FIRST, MUTATE
+      // AFTER — an audit write failure must PROPAGATE (repo rule), and the
+      // only way to guarantee "every ALLOWED key traces back to a logged
+      // add" is to never let a key become live before its own line is
+      // durably written. Writing every rwx.added line BEFORE touching
+      // `currentTools` means a mid-batch audit-write throw (e.g. the 2nd of
+      // 3 lines) leaves NOTHING landed — the mutation loop below never
+      // runs — at the cost of a residual in the opposite, SAFE direction:
+      // an EARLIER key in the same batch may already have a real
+      // `rwx.added` line on disk describing a key that ultimately never
+      // landed ("logged but not landed"). This is deliberately preferred
+      // over the alternative (mutate first, roll back on audit failure):
+      // rolling back after a partial audit write would leave an
+      // `rwx.added` line for a key that was subsequently reverted — the
+      // exact same residual, PLUS a live rollback path that itself must
+      // never partially fail. Logged-but-not-landed is safe because
+      // `check()`/`rwxCheck` only ever consult the live tools map, never
+      // the audit log — a stray log line can never grant anything; the
+      // rejected alternative, landed-but-not-logged, would be a real,
+      // usable capability with no audit trail explaining it, which is the
+      // one thing "every allowed key traces back to a logged add" forbids.
+      for (const [key] of batchEntries) {
+        const norm = newNorms.get(key);
+        await this.audit.emit({ phase: "rwx.added", key, letter: norm.letter, marker: norm.marker });
+      }
+      // 6) Every rwx.added line landed durably — NOW mutate. No throw point
+      // exists after this line, so all-or-nothing is structural: a batch
+      // that fails any check above, OR whose audit write fails, never
+      // touches `currentTools`. `_addGeneration` bumps in the same
+      // breath as the mutation, so it is always consistent with what
+      // actually landed (never bumped when nothing did).
+      for (const [key, raw] of batchEntries) currentTools[key] = raw;
+      rwx.tools = currentTools;
+      this._addGeneration++; // §23.21 decision 5: check()/add() race fix
+    } catch (err) {
+      await this.audit.emit({
+        phase: "rwx.add_rejected", reason: err.message,
+        keys: batchEntries.map(([k]) => k),
+      });
+      throw err;
+    }
+  }
+
+  /**
    * Terminate the gate: all subsequent checks halt-deny. Idempotent.
    * @param {string} [reason] reason recorded in the terminate audit line
    * @returns {Promise<{ok:true, alreadyTerminated?:boolean}>}
@@ -1115,4 +1847,208 @@ export class Gate {
     if (r) return this.budget.resourceCaps[r] ?? null;
     return null;
   }
+}
+
+/**
+ * A short, non-secret identity string for a `Gate` instance, used only to
+ * name which gate failed in {@link addToGates}'s aggregate error/summary —
+ * never used for anything decision-relevant. Prefers the rwx agent name
+ * (the human-meaningful identity in fleet scenarios); falls back to the
+ * gate's `runId` when rwx isn't configured or the agent name is unreadable.
+ * Never throws.
+ * @param {Gate} gate
+ * @returns {string}
+ */
+function gateIdentity(gate) {
+  try {
+    const agent = gate?.cfg?.rwx?.agent;
+    if (typeof agent === "string" && agent) return agent;
+    return typeof gate?.runId === "string" ? gate.runId : "(unidentified gate)";
+  } catch {
+    return "(unidentified gate)";
+  }
+}
+
+/**
+ * §23.21 fleet-brand check — accepts a real `Gate` instance from THIS copy
+ * of the package (`instanceof Gate` would already pass) AND a `Gate`
+ * instance from a DIFFERENT copy of `bareguard` in the same process (e.g. a
+ * fleet-managing app whose dependency tree installs two versions/copies),
+ * which `instanceof Gate` cannot see across module boundaries even though
+ * it is a genuine, fully-functional gate. Brand-checks
+ * `Symbol.for("bareguard.Gate")` (see `GATE_BRAND` above) — a global-symbol
+ * lookup, so both copies' constructors stamp the SAME symbol — and requires
+ * a callable `add` (the one method `addToGates` actually calls), so a
+ * hostile or accidental object that merely happens to carry the symbol but
+ * has no real gate behind it is still rejected. Never throws; a `null`/
+ * primitive/throwing-getter input reads as "not gate-like."
+ *
+ * Reads `g.add` EXACTLY ONCE and hands the captured function back as the
+ * proof of gate-likeness (`undefined` for "not gate-like", rather than a
+ * bare boolean) so `addToGates` never has to read `g.add` a second time to
+ * invoke it. A getter-backed `add` that answered `typeof g.add === "function"`
+ * on one read and something else — or a DIFFERENT function — on the next
+ * would otherwise let a gate pass validation on one function and run
+ * another; capturing here closes that gap at the source.
+ * @param {*} g
+ * @returns {Function|undefined} the gate's own `add` function, captured
+ *   once, when `g` is gate-like; `undefined` otherwise
+ */
+function captureGateAdd(g) {
+  try {
+    if (g == null || g[GATE_BRAND] !== true) return undefined;
+    const addFn = g.add;
+    return typeof addFn === "function" ? addFn : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * §23.21 fleet helper — apply ONE learned rwx entry batch to N gates in a
+ * single call, instead of a harness fanning `gate.add(entries)` out by hand
+ * (the rwx-e2e bench's own "things that felt wrong" finding #3: one `Gate`
+ * per agent identity means a harness that learns something about a shared
+ * site has to remember to add it to every gate in the fleet itself, with no
+ * built-in way to do that in one call).
+ *
+ * Pure orchestration over the existing `gate.add()` primitive — it makes no
+ * new admission decision of its own, so it is not itself tagged as a
+ * primitive in `primitives.json` (each gate's own `add()` is what decides;
+ * this only fans the SAME already-validated snapshot out to every gate and
+ * collects results).
+ *
+ * **NOT all-or-nothing.** Each gate is fully independent: it gets its own
+ * `add(entries)` call, so it keeps its own lock, tighten-only semantics, cap
+ * enforcement, and audit lines. A gate that rejects (e.g. the batch would
+ * loosen an already-stricter tighten-only entry) simply stays at its
+ * stricter existing state — fail-closed and correct, not a bug to work
+ * around. Every gate is attempted even if an earlier one throws — this never
+ * short-circuits on the first failure.
+ *
+ * `entries` is read EXACTLY ONCE, up front, via the same own-props-only,
+ * hostile-getter-safe copy `gate.add()` itself uses (no TOCTOU where a
+ * mutating getter could hand different gates different values) — the
+ * identical resulting snapshot object is then passed to every gate's own
+ * `add()` call, so no gate ever re-reads the caller's raw `entries`.
+ * Each element of `gates` is accepted when it carries the
+ * `Symbol.for("bareguard.Gate")` brand and a callable `add`, captured
+ * exactly once (see {@link captureGateAdd}) — not by `instanceof Gate`,
+ * which fails for a genuine `Gate` instance constructed from a SECOND copy
+ * of this package in the same process (a real gate, wrongly rejected).
+ * Every element still fails synchronously, before any gate is touched, when it is not
+ * gate-like — a malformed fleet list is a caller bug, and rejecting it
+ * closed attempts nothing, which is safe. Duplicate-instance rejection
+ * (`===` on the array elements) is unaffected — two DIFFERENT gates that
+ * merely share the same rwx `agent` identity are not duplicates and are
+ * both attempted.
+ * @param {Gate[]} gates the fleet — 1..n distinct gate-like objects (see above)
+ * @param {Object<string, (string|{letter:string, marker?:string})>} entries
+ *   the same shape `gate.add()` accepts — read once, snapshotted, and
+ *   applied identically to every gate
+ * @returns {Promise<Array<{index:number, gate:string, ok:true}>>} one entry
+ *   per gate, in `gates` order (with its own array index, since `gate`
+ *   alone does not disambiguate two gates sharing the same identity), when
+ *   EVERY gate's `add()` succeeded
+ * @throws {AggregateError} when `gates` is not a non-empty array of distinct
+ *   gate-like objects, or `entries` is unreadable/malformed (thrown
+ *   synchronously, before any gate is attempted) — or, after every gate has
+ *   been attempted, when one or more rejected. The thrown `AggregateError`'s
+ *   `.errors` holds each failing gate's own thrown `Error` (message intact,
+ *   e.g. a tighten-only violation or "gate has been terminated"); its
+ *   top-level `.message` and its own `.failures` array
+ *   (`{index, gate, message}[]`) both name which gate(s) failed and why —
+ *   `index` disambiguates two failing gates that share the same identity
+ *   string. Its `.results` array carries the FULL per-index outcome for
+ *   every gate in the fleet, success and failure alike, same shape as the
+ *   resolved value on full success (`{index, gate, ok, error?}` —
+ *   `error` is the failing gate's own `Error.message`, present only when
+ *   `ok` is `false`), so a caller can still see which OTHER gates landed
+ *   even when the call as a whole throws. A failed gate's own rwx state is
+ *   left exactly as `add()` itself leaves it on rejection: unchanged.
+ */
+export async function addToGates(gates, entries) {
+  if (!Array.isArray(gates) || gates.length === 0) {
+    throw new AggregateError([], "addToGates: gates must be a non-empty array of Gate instances");
+  }
+  const seen = new Set();
+  // `add` is captured here, ONCE per gate, alongside the brand check —
+  // never re-read later to invoke it (see captureGateAdd's TOCTOU note).
+  const addFns = new Array(gates.length);
+  for (let i = 0; i < gates.length; i++) {
+    const g = gates[i];
+    const addFn = captureGateAdd(g);
+    if (addFn === undefined) {
+      throw new AggregateError([], "addToGates: every element of gates must be a Gate instance");
+    }
+    // Conservative: reject duplicate gate instances outright rather than
+    // silently double-adding to the same gate — a caller passing the same
+    // gate twice is almost certainly a bug (an accidental fleet-building
+    // mistake), and double-adding silently is a far more surprising failure
+    // mode than a loud, synchronous rejection before anything is attempted.
+    if (seen.has(g)) {
+      throw new AggregateError([], "addToGates: gates must not contain the same Gate instance twice");
+    }
+    seen.add(g);
+    addFns[i] = addFn;
+  }
+
+  // Read `entries` EXACTLY ONCE, same idiom as safeAction()/gate.add()'s own
+  // `_addOnce` — a plain-object check, then an own-props-only copy that reads
+  // every value exactly once (no TOCTOU between what one gate sees and what
+  // the next gate sees from a hostile/mutating getter).
+  let entriesUsable;
+  try { entriesUsable = isPlainObject(entries) && Object.keys(entries).length > 0; }
+  catch { entriesUsable = false; }
+  if (!entriesUsable) {
+    throw new AggregateError(
+      [],
+      "addToGates: entries must be a non-empty plain object { key: letter | {letter,marker} }",
+    );
+  }
+  let snapshot;
+  try { snapshot = copyOwnSafely(entries); }
+  catch {
+    throw new AggregateError([], "addToGates: entries could not be read");
+  }
+
+  // Attempt EVERY gate, even if an earlier one throws — no short-circuiting.
+  // The SAME snapshot object (not the caller's raw `entries`) is handed to
+  // every gate's own add(), which does its own full validation/audit/mutate
+  // independently. Invoked via the FUNCTION captured once above (not a fresh
+  // `gate.add` read) so a getter-backed `add` can't swap functions between
+  // validation and invocation; `Reflect.apply` binds it to `gate` as `this`,
+  // identical to a normal `gate.add(snapshot)` call.
+  const results = new Array(gates.length);
+  const failures = [];
+  await Promise.all(gates.map(async (gate, i) => {
+    const identity = gateIdentity(gate);
+    try {
+      await Reflect.apply(addFns[i], gate, [snapshot]);
+      results[i] = { index: i, gate: identity, ok: true };
+    } catch (err) {
+      results[i] = { index: i, gate: identity, ok: false, error: err.message };
+      failures.push({ index: i, gate: identity, message: err.message, error: err });
+    }
+  }));
+
+  if (failures.length) {
+    const message =
+      `addToGates: ${failures.length}/${gates.length} gate(s) rejected: ` +
+      failures.map((f) => `[${f.index}] ${f.gate}: ${f.message}`).join("; ");
+    const agg = /** @type {AggregateError & {failures: Array<{index:number,gate:string,message:string}>, results: Array<{index:number,gate:string,ok:boolean,error?:string}>}} */ (
+      new AggregateError(failures.map((f) => f.error), message)
+    );
+    agg.failures = failures.map((f) => ({ index: f.index, gate: f.gate, message: f.message }));
+    // Full per-index outcome for every gate in the fleet, success and
+    // failure alike — same shape the resolved value has on full success.
+    // Two gates sharing the same rwx `agent` identity are indistinguishable
+    // by `.failures`'/`.errors`' `gate` string alone; `.results[i].index`
+    // (and each `.failures[i].index`) disambiguates them, and `.results`
+    // additionally lets a caller see which OTHER gates in the same batch
+    // landed even though the call as a whole threw.
+    agg.results = results;
+    throw agg;
+  }
+  return results;
 }

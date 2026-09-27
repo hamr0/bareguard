@@ -1,7 +1,7 @@
 # bareguard — Integration Guide
 
 > For AI assistants and developers wiring bareguard into a project.
-> v0.17.0 | Node.js >= 20 | 1 production dep (`proper-lockfile`) | ships TypeScript types | Apache-2.0
+> v0.18.0 | Node.js >= 20 | 1 production dep (`proper-lockfile`) | ships TypeScript types | Apache-2.0
 >
 > Full design spec: [`docs/product/bareguard-prd.md`](docs/product/bareguard-prd.md) — unified PRD.
 
@@ -42,7 +42,7 @@ One entry point:
 | Deny destructive command patterns | `bash.denyPatterns: [/sudo/, /rm\s+-rf/]` |
 | Tier shell commands by severity → map to ceremony | `bash.classify: true` — classifies each command `safe`/`destructive`/`super_destructive` (Linux/macOS/Windows); tiers 2–3 raise the ask with `event.classification` + `event.tier`; the `humanChannel` maps severity → ceremony (PIN, 2-key, auto-deny). Best-effort/defeatable, **not** a sandbox. Tune via `extraDestructive` / `extraSuperDestructive` / `reclassify` |
 | Restrict file paths the agent can read/write | `fs.readScope`, `fs.writeScope`, `fs.deny` |
-| Egress allowlist / private-IP block | `net.allowDomains`, `net.denyPrivateIps: true` |
+| Egress allowlist / private-IP block | `net.allowDomains`, `net.denyPrivateIps: true` — gates any action carrying `url`/`args.url`, not just `type: "fetch"` (see note 15) |
 | Share budget across parent + child processes | `budget.sharedFile: "/path/budget.json"` (uses `proper-lockfile`) |
 | Reconstruct family tree from audit | one file at `$XDG_STATE_HOME/bareguard/<root-run-id>.jsonl`; grep `parent_run_id` |
 | Keep secrets out of the audit log | **Default-on (BG-1):** keys `apiKey`/`api_key`/`authorization` + `Bearer …`/`sk-…` values are blanked on every audit line with no config. Extend with `secrets.keys: ["X-Api-Key", "*_token"]`; add value rules with `secrets.envVars: ["ANTHROPIC_API_KEY"]` / `secrets.patterns: [/sk-[A-Za-z0-9]{40,}/]`; opt out with `secrets.redactKeys: false` |
@@ -538,6 +538,118 @@ for an object-form entry under `askOn:"loose"` (both captured live, see the
 section above). Absent entirely on a non-rwx gate's audit line —
 byte-identical to today.
 
+### Runtime growth for spec-less sites — `gate.add()`, `gate.rwxTools()`, `addToGates()` (§23.21)
+
+For a site the operator never listed and never reviewed, `gate.add(entries)`
+grows a running gate's `rwx.tools` map in memory, mid-run: `await
+gate.add({ key: "r"|"w"|"x" | { letter, marker } })`, the same shapes
+`rwx.tools` accepts at construct time. **Tighten-only, both axes, against any
+key already present** (a hand-written one included): the letter can only
+rise (`r < w < x`); an entry marked `"loose"` can only move to another
+`"loose"` entry, never to `"tight"`/`"settled"`/a bare letter. Only the tools
+map is reachable — `bash`, `agents`, and the grant never move. All-or-nothing
+per batch, capped at 10,000 keys, audited both ways (`rwx.added` /
+`rwx.add_rejected`). The committed `bareguard.rwx.json` file is never
+written to — `add()` mutates only the gate's own private, construct-time
+deep-copied map. Full contract: `src/gate.js`'s own `add()`/`_addOnce` JSDoc,
+PRD §23.21.
+
+**`gate.rwxTools()`** is `add()`'s read counterpart — added this session to
+close a gap the rwx-e2e bench flagged (a harness had no public way to read
+"what does the gate currently believe this key's letter is," only the
+private `gate.cfg.rwx.tools`). Returns a DECOUPLED deep copy of the current
+tools map — mutating the returned object at any depth can never affect the
+gate's live decisions or a future `check()`/`add()` — or `null` when the
+gate has no `rwx` config at all (the documented sentinel for "not in rwx
+mode"). Exposes only the tools map; `bash`/`agents`/the grant are not
+reachable through it.
+
+```js
+const snapshot = gate.rwxTools(); // { search: "r", export: { letter: "w", marker: "loose" } }
+snapshot.export.letter = "x"; // harmless — this is a copy, not the live map
+```
+
+**`gate.readAudit()`** is the documented, READ-ONLY way to read a gate's own
+audit log back programmatically — for a replay/reconciliation reader
+confirming "every allow line traces to the tools map at that log position"
+(the exact contract the rwx-e2e bench's replay exercises). It returns a
+DECOUPLED copy of every line, in both file and fileless mode — mutating the
+returned array or any line in it, at any depth, can never affect the gate's
+live audit state.
+
+This replaces an earlier documentation call (this session) that blessed
+`gate.audit.readAll()` itself as the replay path. That turned out to be a
+real gap, not just a naming one: `gate.audit` is the LIVE `Audit` instance,
+and `Audit` carries a public `emit()` — any caller holding a `Gate`
+reference could already write an arbitrary line straight onto the log (e.g.
+a forged `rwx.added` entry never validated by `add()`), and `readAll()`
+would hand it back indistinguishably from a real one. `readAudit()` does not
+close that write path — `gate.audit` is unchanged, still public, still
+carries `emit()`, and code that already holds a `Gate` reference is trusted
+the same way `add()` itself trusts its caller (the audit log records what
+the GATE did; it was never meant to be tamper-evident against code that
+already has gate access). What `readAudit()` adds is simply a documented
+read path that hands out no write capability of its own — a caller that
+only ever calls `readAudit()` can read the log back but can never forge a
+line through it.
+
+`readAudit()` is a plain instance method, the same documentation shape
+`check()`/`record()`/`add()`/`rwxTools()` already have on the one `Gate`
+primitive rather than each getting a separate `primitives.json` entry.
+`gate.audit.readAll()` and `gate.audit.entries` (fileless mode) still exist
+and still work exactly as before — this is additive, not a removal — but
+they are no longer the DOCUMENTED path; prefer `gate.readAudit()`.
+
+**`addToGates(gates, entries)`** is a top-level export (`import { addToGates
+} from "bareguard"`) that fans one learned entry batch out to a whole fleet
+of gates in a single call — closing a second rwx-e2e finding: one `Gate` per
+agent identity meant a harness had to fan `gate.add()` out to every gate by
+hand, with no built-in "add to every gate for this operator's fleet" call.
+**Not all-or-nothing across gates** — each gate is fully independent (its
+own lock, tighten-only check, cap, audit line via its own `add()`), and
+every gate is attempted even if an earlier one throws. On full success it
+resolves to `[{ index, gate: <identity>, ok: true }, ...]` (`<identity>` is
+the gate's `rwx.agent`, or its `runId` if rwx isn't configured; `index` is
+the gate's position in the `gates` array). If one or more gates rejected, it
+throws a single `AggregateError` whose `.errors` holds each failing gate's
+own thrown `Error`, whose `.message`/`.failures` (`{index, gate,
+message}[]`) name which gate(s) failed and why, and whose `.results`
+carries the FULL per-index outcome for every gate in the fleet — success
+and failure alike, same shape as the resolved value on full success — so a
+caller can see which OTHER gates landed even when the call as a whole
+throws. `index` matters because two DIFFERENT gates can share the same
+identity string (e.g. two gates for the same rwx `agent`, a realistic fleet
+shape) — `gate` alone can't tell them apart, `index` always can. The OTHER
+gates' adds still landed on any rejection; a rejected gate's own state is
+exactly what its own `add()` leaves on rejection (unchanged).
+
+`gates` must be a non-empty array of distinct gate-like objects. Acceptance
+is a BRAND check, not `instanceof Gate`: each element must carry the
+global-registry symbol `Symbol.for("bareguard.Gate")` (stamped,
+non-enumerable, in every `Gate`'s constructor) plus a callable `add`.
+`instanceof Gate` alone would wrongly reject a genuine `Gate` instance
+constructed from a SECOND copy of the `bareguard` package in the same
+process (e.g. two different installs/versions deduped separately by two
+dependencies of a fleet-managing app) — `instanceof` cannot see across
+module-copy boundaries, but `Symbol.for` resolves to the identical symbol
+across them, so a real cross-copy `Gate` is recognized correctly. A
+duplicate gate OBJECT in the array (`===`) is still rejected outright
+(conservative: silently double-adding to the same gate is a more surprising
+failure than a loud, synchronous rejection before anything is attempted),
+and this and every other shape check runs BEFORE any gate is touched.
+`entries` is read exactly once (the same own-props-only,
+hostile-getter-safe copy `add()` itself uses) and the identical resulting
+snapshot is handed to every gate's own `add()` call — no gate ever re-reads
+the caller's raw object. Pure orchestration over the existing `add()`
+primitive (it makes no new admission decision of its own), so it is not
+itself manifested in `primitives.json`.
+
+```js
+import { addToGates } from "bareguard";
+const summary = await addToGates([searcherGate, bookerGate], { "site.search": "r" });
+// summary = [{ index: 0, gate: "searcher", ok: true }, { index: 1, gate: "booker", ok: true }]
+```
+
 ### `budget.resources` accrual by letter (§23.10)
 
 "rw, but at most N writes across the whole run family" is the existing
@@ -562,6 +674,7 @@ import {
   SAFE_DEFAULT_DENY_PATTERNS,     // exposed in case you want to extend
   SAFE_DEFAULT_ASK_PATTERNS,      // exposed in case you want to extend
   routeAnnotation,                // pure Axis-B routing fn (surface × reversible × knob)
+  addToGates,                     // §23.21: fan one gate.add() batch out to a fleet of gates
   globToRegex, matchAny,          // glob helpers (v0.1: `*` only)
 } from "bareguard";
 
@@ -583,6 +696,9 @@ gate.drainAnnotations();                           // SYNC — return + clear bu
 await gate.terminate(reason);                     // sticky terminate
 await gate.raiseCap(dimension, newCap);           // explicit cap raise (separate from humanChannel topup)
 gate.clampRwxLetters(requestedLetters);           // SYNC — rwx mode only (§23.9): attenuate a child's letters, never wider than this gate's own grant
+await gate.add(entries);                          // rwx mode only (§23.21): runtime, tighten-only growth of rwx.tools
+gate.rwxTools();                                  // SYNC — rwx mode only (§23.21): decoupled snapshot of the current rwx.tools map, or null
+await gate.readAudit();                           // documented, read-only, decoupled: read this gate's own audit log back (see §23.21 above)
 await gate.haltContext();                         // deterministic stats over audit log
 ```
 
@@ -675,11 +791,11 @@ These are deliberately NOT in bareguard. Don't look for them — build them or u
 12. **`limits.maxTurns` counts every `gate.record` call, not "LLM rounds".** One LLM record + one tool record per round means 1 round = 2 turns. For a "tool-calling-rounds" budget use **`limits.maxToolRounds: N`** (v0.4.2) — sibling halt counter that ticks only on records where `action.type !== "llm"`. Name your LLM records `type: "llm"` to opt in.
 13. **bash / fs / net primitives accept either flat or nested action shape** (v0.4.1). `{type: "bash", cmd}` and `{type: "bash", args: {cmd | command}}` both work; same for fs (`path`) and net (`url`). Flat wins when both are set. Makes wireGate-style `{type, args, _ctx}` adapters compose without a translation layer.
 14. **fs scope/deny is lexically normalized, not symlink-resolved.** `.`/`..` segments are collapsed before matching, and scopes/deny entries match on path segments (so `/app/data` does NOT cover `/app/data-secrets`) — traversal like `/app/data/../../etc/passwd` can't escape `readScope: ["/app/data"]`. But a symlink *inside* an allowed scope that points outside it is not caught; canonicalize (`fs.realpath`) before the gate if your filesystem has untrusted symlinks.
-15. **`net.denyPrivateIps` is hostname-based, not post-DNS.** It blocks IPv4 private/loopback/link-local (incl. cloud-metadata `169.254.169.254` and `0.0.0.0`), IPv6 loopback/ULA/link-local (brackets stripped), and IPv4-mapped IPv6. It does NOT resolve DNS, so a public hostname that resolves to a private address (DNS rebinding) is not caught — resolve-then-check upstream if that's in your threat model. Pair with `net.allowDomains` for a positive egress allowlist.
+15. **`net.denyPrivateIps` is hostname-based, not post-DNS.** It blocks IPv4 private/loopback/link-local (incl. cloud-metadata `169.254.169.254` and `0.0.0.0`), IPv6 loopback/ULA/link-local (brackets stripped), and IPv4-mapped IPv6. It does NOT resolve DNS, so a public hostname that resolves to a private address (DNS rebinding) is not caught — resolve-then-check upstream if that's in your threat model. Pair with `net.allowDomains` for a positive egress allowlist. **`net` gates on URL PRESENCE, not on `action.type` (fixed 0.18.0; a security fix — see CHANGELOG).** `netCheck` runs on any action carrying `action.url` or `action.args.url` (present, not null/undefined), whatever the action's `type` string is — it is NOT limited to `type === "fetch"`. Through 0.17.0 it was gated on the literal string `action.type === "fetch"`, so rwx web-call shapes like `fetch.get`/`fetch.post` (§23.13 #3), `<vendor>.<operationId>` (§23.12), and a runtime spec-less `<host>.<METHOD> <path>` key (§23.21) all skipped `net` entirely — an allowDomains/denyPrivateIps bypass. **Harness contract:** put the URL you will actually fetch in `url` (or `args.url`); a URL carried in any other field is not checked. A `{type:"fetch"}` with no url anywhere is still a no-op.
 16. **`bash.allow` fails closed on shell metacharacters** (v0.4.5). When `bash.allow` is set, any command containing `;`, `|`, `&`, `$`, `` ` ``, `(`, `)`, `<`, `>`, or a newline is **denied** (rule `bash.allow.shellMeta`) — a prefix allowlist can't bound what runs after a chain/pipe/substitution. This also denies legitimate pipes like `git log | head`. If you need chaining, don't rely on `bash.allow` as the boundary — use `content.denyPatterns` (which scans the whole command) or `bash.denyPatterns`.
 17. **Audit auto-redacts on every line — DEFAULT-ON (BG-1)**, not just when `secrets` is configured. Key-aware redaction (`apiKey`/`api_key`/`authorization` + `Bearer …`/`sk-…`) runs with zero config; `secrets.envVars`/`patterns`/`keys` layer on top; `secrets.redactKeys: false` disables the default-on backstop. The gate redacts `action`, `result`, `reason`, `where`, and `meta` at write time. Eval runs on the *unredacted* action (matching is never weakened) and the redactor is non-mutating (the caller's object is untouched); only the persisted log is masked. Don't pre-redact before `check()`/`record()` — it's redundant and would weaken policy matching.
 18. **rwx's `spawn` gets no automatic letter.** §23.9 rejects tagging every `spawn` call `x` by default (it would make every agent with helpers read as dangerous), but that does NOT exempt `spawn` from deny-by-absence — an untagged `spawn` in rwx mode denies `rwx.unlisted` like any other tool. Add it to `rwx.tools` explicitly.
-19. **`fetch.get`/`fetch.post` in rwx mode is a caller convention, not a bareguard feature.** rwx matches `action.type` literally; a bare `{type:"fetch"}` is NOT covered by `"fetch.get"`/`"fetch.post"` entries — your action-emitting code must set the split type itself (§23.13 decision 3).
+19. **`fetch.get`/`fetch.post` in rwx mode is a caller convention, not a bareguard feature.** rwx matches `action.type` literally; a bare `{type:"fetch"}` is NOT covered by `"fetch.get"`/`"fetch.post"` entries — your action-emitting code must set the split type itself (§23.13 decision 3). Whatever type you use, put the URL in `url`/`args.url` so `net` (item 15) actually gates it.
 20. **`bash.classify` patterns are ReDoS-safe (linear-time)**. The shipped severity corpus avoids catastrophic backtracking — a crafted command string (e.g. `rm -rfrfrf…`) classifies in linear time (1 MB ≈ 16 ms), so a hostile/confused agent can't hang the gate via the classifier. If you add your own `extraDestructive` / `extraSuperDestructive` patterns, keep them linear too: avoid multiple consecutive unbounded quantifiers over the same class (`[a-z]*x[a-z]*y[a-z]*`); prefer non-consuming lookaheads. **Defense-in-depth:** classify runs at the ask step (4), after the deny floor (steps 1–3) — it can only escalate to a human ask, never downgrade a deny. It is best-effort UX tiering, **not** a sandbox.
 
 ## Recipes
