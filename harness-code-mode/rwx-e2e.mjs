@@ -19,15 +19,27 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 
 const RWXMAP_PATH = "/home/hamr/PycharmProjects/rwxmap/src/index.js";
+// §23.21's spec-less-site per-request key builder is not in rwxmap's src/
+// export yet — it lives as a POC, pinned by 19 tests (poc/match/key.test.mjs)
+// and slated to graduate later. POC path — switch to rwxmap's src export
+// when it ships.
+const RWXMAP_KEY_POC_PATH = "/home/hamr/PycharmProjects/rwxmap/poc/match/key.mjs";
 
-let rwxmap;
+let rwxmap, keyPoc;
 try {
   rwxmap = await import(RWXMAP_PATH);
+  keyPoc = await import(RWXMAP_KEY_POC_PATH);
 } catch (err) {
-  console.log(`SKIP: rwxmap not found at ${RWXMAP_PATH} (${err.message})`);
+  console.log(`SKIP: rwxmap (or its poc/match/key.mjs) not found (${err.message})`);
   process.exit(0);
 }
 const { operationsFrom, exportGate, classifyRow } = rwxmap;
+// requestKey(method, url, {mixedIds?}) -> "<host>.<METHOD> <normalized path>"
+// — see poc/match/key.mjs's own header comment for the full normalization
+// rules (lowercased WHATWG hostname incl. punycode IDN, non-default port
+// kept, query+fragment dropped via .pathname, repeated slashes collapsed,
+// trailing slash dropped except "/", id segments -> "{id}").
+const { requestKey } = keyPoc;
 
 const { Gate } = await import("../src/index.js");
 // Not part of the public API (src/index.js does not re-export it) — read
@@ -35,28 +47,40 @@ const { Gate } = await import("../src/index.js");
 // an import, not an edit; src/ is untouched.
 const { rwxCheck } = await import("../src/primitives/rwx.js");
 
-// ---------------------------------------------------------------------------
-// §23.21's spec-less-site normalizer is NOT SHIPPED by rwxmap yet. Stand-in
-// per the PRD's exact spec: key = "<host>.<METHOD> <normalized path>" —
-// drop the query string, and normalize id-shaped path segments: all-digit
-// -> "{id}", a UUID -> "{id}", a long hex string -> "{id}".
-// REPLACE with rwxmap's exported normalizer when it ships.
-// ---------------------------------------------------------------------------
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const LONG_HEX_RE = /^[0-9a-f]{16,}$/i;
-const ALL_DIGIT_RE = /^\d+$/;
-
-function normalizeKeyStandIn(host, method, rawPath) {
-  const [pathOnly] = rawPath.split("?"); // drop query string
-  const segments = pathOnly.split("/").map((seg) => {
-    if (seg === "") return seg;
-    if (ALL_DIGIT_RE.test(seg)) return "{id}";
-    if (UUID_RE.test(seg)) return "{id}";
-    if (LONG_HEX_RE.test(seg)) return "{id}";
-    return seg;
-  });
-  const normalizedPath = segments.join("/");
-  return `${host}.${method.toUpperCase()} ${normalizedPath}`;
+/**
+ * Self-check that this bench's understanding of requestKey's contract
+ * matches what it actually does — a few real calls covering the properties
+ * the coordinator asked to see exercised explicitly: default-port drop,
+ * non-default port kept, host lowercasing, trailing-slash drop, query/
+ * fragment drop, and id-segment normalization. Not a re-test of rwxmap's
+ * own 19 pinned tests (those already cover this far more exhaustively) —
+ * just evidence that THIS bench is calling it the way it actually behaves.
+ * @param {(line:string)=>void} log
+ * @returns {{passCount:number, failCount:number}}
+ */
+function keyFormatSelfCheck(log) {
+  let passCount = 0, failCount = 0;
+  const cases = [
+    ["default https port dropped", "GET", "https://API.Example.com:443/x", "api.example.com.GET /x"],
+    ["default http port dropped", "GET", "http://API.Example.com:80/x", "api.example.com.GET /x"],
+    ["non-default port kept", "GET", "http://127.0.0.1:8080/x", "127.0.0.1:8080.GET /x"],
+    ["host lowercased", "GET", "https://API.EXAMPLE.COM/x", "api.example.com.GET /x"],
+    ["query + fragment dropped", "GET", "https://api.example.com/x?y=1&z=2#frag", "api.example.com.GET /x"],
+    ["repeated slashes collapsed", "GET", "https://api.example.com/x//y", "api.example.com.GET /x/y"],
+    ["trailing slash dropped", "GET", "https://api.example.com/x/", "api.example.com.GET /x"],
+    ["root path stays '/'", "GET", "https://api.example.com/", "api.example.com.GET /"],
+    ["all-digit id -> {id}", "GET", "https://api.example.com/orders/98765", "api.example.com.GET /orders/{id}"],
+    ["UUID id -> {id}", "GET", "https://api.example.com/users/3fa85f64-5717-4562-b3fc-2c963f66afa6", "api.example.com.GET /users/{id}"],
+    ["16+ hex id -> {id}", "GET", "https://api.example.com/objects/1234567890abcdef1234", "api.example.com.GET /objects/{id}"],
+    ["method uppercased", "get", "https://api.example.com/x", "api.example.com.GET /x"],
+  ];
+  for (const [label, method, url, expected] of cases) {
+    const got = requestKey(method, url);
+    const pass = got === expected;
+    if (pass) passCount++; else failCount++;
+    log(`  [keyfmt] ${label}: requestKey(${JSON.stringify(method)}, ${JSON.stringify(url)}) = "${got}" (expected "${expected}") -> ${pass ? "PASS" : "FAIL"}`);
+  }
+  return { passCount, failCount };
 }
 
 // ---------------------------------------------------------------------------
@@ -124,6 +148,11 @@ function makeAirlineServer() {
     if (req.method === "DELETE" && /^\/bookings\/[^/]+$/.test(url.pathname)) {
       return sendJson(res, 204, {});
     }
+    // Not part of the spec — a hand-written committed-config-only route
+    // used for the rwx.askOn:"loose" demonstration (bench steps 13-15).
+    if (req.method === "GET" && url.pathname === "/legacy/fare-lookup") {
+      return sendJson(res, 200, { ok: true });
+    }
     return sendJson(res, 404, { error: "not found" });
   });
 }
@@ -142,6 +171,39 @@ function makeHotelServer() {
     }
     if (req.method === "POST" && url.pathname === "/reservations") {
       return sendJson(res, 201, { id: "res-1" });
+    }
+    return sendJson(res, 404, { error: "not found" });
+  });
+}
+
+// Site C: "flights-rpc" — Google-Flights-shaped RPC endpoint, no spec, POST
+// with an opaque JSON-array body and the operation name only in the PATH
+// (not the body) for the RPC call, and only in the BODY (not the path) for
+// the /graphql call.
+const RPC_SHOPPING_RESULTS_PATH =
+  "/_/FlightsFrontendUi/data/travel.frontend.flights.FlightsFrontendService/GetShoppingResults";
+
+function readBody(req) {
+  return new Promise((resolve) => {
+    let body = "";
+    req.on("data", (c) => { body += c; });
+    req.on("end", () => resolve(body));
+  });
+}
+
+function makeRpcServer() {
+  return http.createServer(async (req, res) => {
+    const url = new URL(req.url, "http://x");
+    if (url.pathname === "/openapi.json") {
+      return sendJson(res, 404, { error: "no spec here" }); // spec-less site
+    }
+    if (req.method === "POST" && url.pathname === RPC_SHOPPING_RESULTS_PATH) {
+      await readBody(req); // opaque JSON array; the harness never inspects it
+      return sendJson(res, 200, { shoppingResults: [] });
+    }
+    if (req.method === "POST" && url.pathname === "/graphql") {
+      await readBody(req); // the operation name lives only in here, not in the path
+      return sendJson(res, 200, { data: {} });
     }
     return sendJson(res, 404, { error: "not found" });
   });
@@ -215,10 +277,13 @@ class Harness {
    *   for a spec'd site (see rwx-e2e.md finding: rwxmap gives no path->
    *   operationId matcher back, so the harness must already know which
    *   operation a URL maps to)
+   * @param {string} [body] raw request body (opaque to the harness/gate —
+   *   never inspected for classification or gating; §23.12's own line:
+   *   bareguard's content patterns never scan a write's payload either)
    */
-  async call(agentName, origin, vendor, method, urlPath, operationId) {
+  async call(agentName, origin, vendor, method, urlPath, operationId, body) {
     const site = await this.ensureSite(origin, vendor);
-    const host = new URL(origin).host;
+    const url = `${origin}${urlPath}`;
     let actionType;
 
     if (site.hasSpec) {
@@ -227,7 +292,9 @@ class Harness {
       // §23.21 step 3: no spec -> classify this one request, add(one).
       const [pathOnly] = urlPath.split("?");
       const verdict = classifyRow({ method, path: pathOnly });
-      actionType = normalizeKeyStandIn(host, method, pathOnly);
+      // POC path — switch to rwxmap's src export when it ships.
+      actionType = requestKey(method, url);
+      this.findings.push({ kind: "classifyRow", vendor, method, path: pathOnly, verdict });
       const gate = this.gates[agentName];
       try {
         await gate.add({ [actionType]: verdict.class });
@@ -237,7 +304,6 @@ class Harness {
       }
     }
 
-    const url = `${origin}${urlPath}`;
     const action = { type: actionType, url, agent: agentName };
     const gate = this.gates[agentName];
     const decision = await gate.check(action);
@@ -245,7 +311,12 @@ class Harness {
     let fetched = null;
     if (decision.outcome === "allow") {
       try {
-        const r = await fetch(url, { method });
+        const fetchOpts = { method };
+        if (body !== undefined) {
+          fetchOpts.body = body;
+          fetchOpts.headers = { "content-type": "application/json" };
+        }
+        const r = await fetch(url, fetchOpts);
         fetched = r.status;
       } catch (err) {
         fetched = `fetch-error:${err.message}`;
@@ -261,24 +332,43 @@ class Harness {
 // temp file.
 // ---------------------------------------------------------------------------
 
-function scriptedHumanChannel(log) {
+// `humanCallCounts`: Map<actionType, number> of how many times the channel
+// was actually invoked for that type — how steps 13-15 prove "humanChannel
+// is actually called" (or, for step 15, that it is NOT called) rather than
+// just asserting the eventual decision.
+function scriptedHumanChannel(log, humanCallCounts) {
   return async (event) => {
-    log(`  [human] asked: ${event.rule} on ${event.action.type} (${event.reason})`);
-    return { decision: "allow", reason: "scripted human allow (loose marker, per bench script)" };
+    const type = event.action.type;
+    humanCallCounts.set(type, (humanCallCounts.get(type) ?? 0) + 1);
+    log(`  [human] asked: ${event.rule} on ${type} (${event.reason})`);
+    if (type === "airline.legacyFareLookupDeny") {
+      return { decision: "deny", reason: "scripted human DENY (bench step 14)" };
+    }
+    return { decision: "allow", reason: "scripted human ALLOW (bench script default)" };
   };
 }
 
 // The COMMITTED starter file's tools section (hand-authored by "the
-// operator", never written to at runtime). Deliberately includes ONE
-// hand-written entry stricter than what rwxmap would emit for a similarly-
-// named operation, purely to exercise gate.add()'s tighten-only rejection
-// (§23.21 step 9 of this bench) — it does not correspond to any live
-// endpoint in this scenario, so it cannot interfere with the spec batch add.
+// operator", never written to at runtime).
 const COMMITTED_TOOLS = {
+  // Deliberately stricter than what rwxmap would emit for a similarly-named
+  // operation, purely to exercise gate.add()'s tighten-only rejection
+  // (bench step 9) — it does not correspond to any live endpoint in this
+  // scenario, so it cannot interfere with the spec batch add.
   "airline.testDeprecatedRead": "w", // hand-tightened above rwxmap's own "r" for this made-up op
+
+  // HAND-WRITTEN loose entries (labeled): no row rwxmap actually emitted in
+  // this bench ever came out marker:"loose" (see rwx-e2e.md — the spec's 4
+  // ops and site C's 2 ops all landed "settled" or "tight"). These three
+  // exist purely to exercise rwx.askOn:"loose" for real, per the
+  // coordinator's follow-up ask — they are synthetic operator config, not
+  // an rwxmap export.
+  "airline.legacyFareLookupAllow": { letter: "r", marker: "loose" }, // searcher holds "r" -> asks -> scripted allow
+  "airline.legacyFareLookupDeny": { letter: "r", marker: "loose" },  // searcher holds "r" -> asks -> scripted deny
+  "airline.legacyFareBooking": { letter: "w", marker: "loose" },     // searcher LACKS "w" -> denies without ever asking
 };
 
-async function buildGates(auditPath, log) {
+async function buildGates(auditPath, log, humanCallCounts) {
   const baseRwx = {
     agents: { searcher: "r--", booker: "rw-" },
     tools: { ...COMMITTED_TOOLS },
@@ -294,7 +384,7 @@ async function buildGates(auditPath, log) {
     // deployment fetching real internet hosts would leave denyPrivateIps on.
     denyPrivateIps: false,
   };
-  const humanChannel = scriptedHumanChannel(log);
+  const humanChannel = scriptedHumanChannel(log, humanCallCounts);
 
   const searcher = new Gate({
     rwx: { ...baseRwx, agent: "searcher" },
@@ -326,10 +416,13 @@ async function runScenario(runLabel) {
 
   const airlineServer = makeAirlineServer();
   const hotelServer = makeHotelServer();
+  const rpcServer = makeRpcServer();
   const airlinePort = await listen(airlineServer);
   const hotelPort = await listen(hotelServer);
+  const rpcPort = await listen(rpcServer);
   const airlineOrigin = `http://127.0.0.1:${airlinePort}`;
   const hotelOrigin = `http://127.0.0.1:${hotelPort}`;
+  const rpcOrigin = `http://127.0.0.1:${rpcPort}`;
 
   const auditPath = path.join(
     os.tmpdir(),
@@ -337,9 +430,15 @@ async function runScenario(runLabel) {
   );
   try { await fsp.rm(auditPath, { force: true }); } catch {}
 
-  const { searcher, booker } = await buildGates(auditPath, log);
+  const humanCallCounts = new Map();
+  const { searcher, booker } = await buildGates(auditPath, log, humanCallCounts);
   const gates = { searcher, booker };
   const harness = new Harness(gates, log);
+
+  // --- Key-format self-check (requestKey, the POC's own contract) --------
+  const keyfmt = keyFormatSelfCheck(log);
+  passCount += keyfmt.passCount;
+  failCount += keyfmt.failCount;
 
   function record(step, agent, actionType, url, expected, got, pass) {
     rows.push({ step, agent, actionType, url, expected, got, pass });
@@ -421,7 +520,64 @@ async function runScenario(runLabel) {
     record(9, "searcher", "airline.testDeprecatedRead", "(no live request — config-only test)", "throw + stays \"w\"", `${rejected ? "threw: " + rejected : "did NOT throw"}; entry now=${JSON.stringify(searcher.cfg.rwx.tools["airline.testDeprecatedRead"])}`, pass);
   }
 
-  // --- Step 10: concurrency — 20 per-request adds+checks at once across
+  // --- Step 11: searcher POST site-C RPC path -> allow, real 200 fetch ----
+  // Google-Flights-shaped: no spec, opaque JSON-array body, the operation
+  // name lives only in the path's trailing segment ("GetShoppingResults").
+  {
+    const r = await harness.call(
+      "searcher", rpcOrigin, "flights-rpc", "POST",
+      RPC_SHOPPING_RESULTS_PATH, undefined, JSON.stringify([["c", "abc123"]]),
+    );
+    const pass = r.decision.outcome === "allow" && r.fetched === 200;
+    record(11, "searcher", r.action.type, r.action.url, "allow + 200", `${r.decision.outcome}/${r.decision.rule} + ${r.fetched}`, pass);
+  }
+
+  // --- Step 12: searcher POST /graphql -> denied (operation only in body,
+  //     path alone floors x by design) -------------------------------------
+  {
+    const r = await harness.call(
+      "searcher", rpcOrigin, "flights-rpc", "POST",
+      "/graphql", undefined, JSON.stringify({ query: "query GetShoppingResults { flights { id } }" }),
+    );
+    const pass = r.decision.outcome === "deny";
+    record(12, "searcher", r.action.type, r.action.url, "deny", `${r.decision.outcome}/${r.decision.rule}`, pass);
+  }
+
+  // --- Step 13: rwx.askOn:"loose" for real — searcher holds the letter,
+  //     humanChannel is actually invoked, human says allow -> allow --------
+  {
+    const action = { type: "airline.legacyFareLookupAllow", url: `${airlineOrigin}/legacy/fare-lookup`, agent: "searcher" };
+    const decision = await searcher.check(action);
+    let fetched = null;
+    if (decision.outcome === "allow") {
+      const r = await fetch(action.url);
+      fetched = r.status;
+    }
+    const asked = (humanCallCounts.get(action.type) ?? 0) >= 1;
+    const pass = decision.outcome === "allow" && decision.rule === "humanChannel.allow" && asked && fetched === 200;
+    record(13, "searcher", action.type, action.url, "ask -> human allow -> allow", `${decision.outcome}/${decision.rule} asked=${asked} fetched=${fetched}`, pass);
+  }
+
+  // --- Step 14: same, human says deny -> deny ------------------------------
+  {
+    const action = { type: "airline.legacyFareLookupDeny", url: `${airlineOrigin}/legacy/fare-lookup`, agent: "searcher" };
+    const decision = await searcher.check(action);
+    const asked = (humanCallCounts.get(action.type) ?? 0) >= 1;
+    const pass = decision.outcome === "deny" && asked;
+    record(14, "searcher", action.type, action.url, "ask -> human deny -> deny", `${decision.outcome}/${decision.rule} asked=${asked}`, pass);
+  }
+
+  // --- Step 15: loose entry at a letter the agent lacks -> deny WITHOUT
+  //     ever asking (letter check runs before askOn) -----------------------
+  {
+    const action = { type: "airline.legacyFareBooking", url: `${airlineOrigin}/legacy/fare-lookup`, agent: "searcher" };
+    const decision = await searcher.check(action);
+    const asked = humanCallCounts.has(action.type);
+    const pass = decision.outcome === "deny" && decision.rule === "rwx.denied" && !asked;
+    record(15, "searcher", action.type, action.url, "deny, never asked", `${decision.outcome}/${decision.rule} asked=${asked}`, pass);
+  }
+
+  // --- Step 16: concurrency — 20 per-request adds+checks at once across
   //     both sites --------------------------------------------------------
   {
     const concurrentCalls = [];
@@ -438,7 +594,7 @@ async function runScenario(runLabel) {
     const anyThrew = results.some((r) => r.status === "rejected");
     const pass = allAllowed && !anyThrew;
     record(
-      10, "searcher", "(20 concurrent hotel GETs)", hotelOrigin,
+      16, "searcher", "(20 concurrent hotel GETs)", hotelOrigin,
       "all 20 allow, none throw",
       `allAllowed=${allAllowed} anyThrew=${anyThrew} (${results.length} settled)`,
       pass,
@@ -462,6 +618,7 @@ async function runScenario(runLabel) {
 
   await new Promise((resolve) => airlineServer.close(resolve));
   await new Promise((resolve) => hotelServer.close(resolve));
+  await new Promise((resolve) => rpcServer.close(resolve));
 
   return { rows, passCount, failCount, auditPath, findings: harness.findings, logLines };
 }
@@ -487,12 +644,15 @@ async function replayAudit(auditPath, log) {
     "terminal-allow", "terminal-deny", "human-allow", "human-deny",
     "halt-deny", "topup-allow", "rwx.tightened",
   ]);
-  // The audit line's own `phase`/`rule` naming varies by exit path; a line
-  // counts as a "final gate line" for this replay if it carries an `aid`
-  // and an `outcome` of allow/deny (i.e. it's a check() commit line, not an
-  // ask-emit, an rwx.added, or an rwx.add_rejected line).
+  // A "gate" phase line with decision allow/deny is the terminal commit —
+  // but askOn:"loose" ALSO logs an earlier "gate" phase line for the SAME
+  // aid with decision:"askHuman" (the ask-emit, outside the lock, per
+  // gate.js), and a separate "approval" phase line recording the human's
+  // own raw reply. Confirmed by reading the real JSONL (see rwx-e2e.md):
+  // only phase==="gate" with decision allow/deny is the one final line.
   function isFinalCheckLine(entry) {
-    return typeof entry.aid === "string" && (entry.decision === "allow" || entry.decision === "deny");
+    return typeof entry.aid === "string" && entry.phase === "gate" &&
+      (entry.decision === "allow" || entry.decision === "deny");
   }
 
   for (const entry of lines) {
@@ -563,18 +723,11 @@ function allowedByNet(url) {
 // ---------------------------------------------------------------------------
 
 async function main() {
-  console.log("--- rwxmap normalizeKeyStandIn self-check (not part of the numbered scenario) ---");
-  console.log("  ", normalizeKeyStandIn("127.0.0.1:9999", "GET", "/rooms?city=paris"));
-  console.log("  ", normalizeKeyStandIn("127.0.0.1:9999", "GET", "/rooms/42"));
-  console.log("  ", normalizeKeyStandIn("127.0.0.1:9999", "GET", "/rooms/3fa85f64-5717-4562-b3fc-2c963f66afa6"));
-  console.log("  ", normalizeKeyStandIn("127.0.0.1:9999", "GET", "/rooms/deadbeefcafebabe1234"));
-  console.log("");
-
   const result = await runScenario("run1");
   console.log("");
   console.log(`=== run1 totals: PASS=${result.passCount} FAIL=${result.failCount} ===`);
 
-  console.log("\n--- rwxmap exportGate output (airline) ---");
+  console.log("\n--- rwxmap real output (exportGate for airline, classifyRow for spec-less sites) ---");
   for (const f of result.findings) {
     console.log(JSON.stringify(f, null, 2));
   }
@@ -591,4 +744,4 @@ if (isMain) {
   await main();
 }
 
-export { runScenario, normalizeKeyStandIn, COMMITTED_TOOLS };
+export { runScenario, requestKey, COMMITTED_TOOLS };
