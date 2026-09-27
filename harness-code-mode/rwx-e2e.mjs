@@ -45,9 +45,13 @@ const { requestKey } = keyPoc;
 // closing this bench's own findings #1/#3) replace the two internal-reach-ins
 // this bench used to do: `gate.cfg.rwx.tools` direct reads (step 9) and a
 // hand-rolled fan-out loop over both gates' `add()` calls (ensureSite below).
-// `gate.audit.readAll()` (used by the replay below) stays as-is: it was
-// always public and reachable, just undocumented as stable surface (finding
-// #2) — now documented in README.md/bareguard.context.md, no code change.
+// The replay below now goes through `gate.readAudit()` — a later debrief
+// finding on this bench's OWN #2 fix: `gate.audit.readAll()`/`gate.audit`
+// (the live `Audit` instance, with a public `emit()`) is internal plumbing,
+// not the documented replay path — this bench used to read the audit FILE
+// directly by path instead, which worked but bypassed the gate entirely
+// (and wouldn't work at all in fileless mode). `readAudit()` is the
+// documented, read-only, decoupled accessor; it returns the same data.
 const { Gate, addToGates } = await import("../src/index.js");
 // rwxCheck is still not part of the public API (src/index.js does not
 // re-export it) — read directly from the primitive module for the replay's
@@ -627,8 +631,8 @@ async function runScenario(runLabel) {
     );
   }
 
-  // --- Finale: replay the audit file --------------------------------------
-  const replay = await replayAudit(auditPath, log);
+  // --- Finale: replay the audit log ----------------------------------------
+  const replay = await replayAudit(searcher, log);
   passCount += replay.passCount;
   failCount += replay.failCount;
 
@@ -645,11 +649,14 @@ async function runScenario(runLabel) {
  * Assert every FINAL gate allow line is allowed by rwxCheck(action, map) at
  * that point in the log, exactly one final line per aid, and every allowed
  * key traces to the committed file or a logged rwx.added line.
+ * @param {import("../src/gate.js").Gate} gate any gate sharing the audit
+ *   file with the run being replayed (searcher and booker both write to the
+ *   same `auditPath` in this bench, so either's `readAudit()` sees the
+ *   whole log)
  */
-async function replayAudit(auditPath, log) {
+async function replayAudit(gate, log) {
   let passCount = 0, failCount = 0;
-  const buf = await fsp.readFile(auditPath, "utf8");
-  const lines = buf.split("\n").filter(Boolean).map((l) => JSON.parse(l));
+  const lines = await gate.readAudit();
 
   const toolsMap = { ...COMMITTED_TOOLS };
   const addedKeys = new Set(Object.keys(COMMITTED_TOOLS));
