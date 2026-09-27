@@ -1470,6 +1470,22 @@ export class Gate {
    *   a decoupled deep copy of `rwx.tools`, or `null` when this gate has no
    *   `rwx` config at all (not in rwx mode) — the documented sentinel for
    *   "there is no tools map to read."
+   * @name Gate#rwxTools
+   * @when Reach for this to read back this gate's own rwx tools map — e.g.
+   *   before calling `add()`, to check what's already granted, or to log or
+   *   inspect current state. Mutating what comes back never affects the
+   *   live gate; call `add()` to actually change anything.
+   * @category rwx
+   * @signature gate.rwxTools() => Object<string, string|{letter:string, marker:(string|null)}>|null
+   * @example
+   * import { Gate } from "bareguard";
+   * const gate = new Gate({
+   *   audit: { path: null },
+   *   rwx: { agent: "fixer", agents: { fixer: "rwx" }, tools: { read: "r", write: "w" } },
+   *   humanChannel: async () => ({ decision: "deny" }),
+   * });
+   * await gate.init();
+   * gate.rwxTools(); // { read: "r", write: "w" } — a decoupled copy
    * @fails Never throws. `rwx.tools` is already construct-time-validated as
    *   JSON-shaped by {@link assertRwxConfig} (via {@link deepCopyRwx}), so the
    *   round-trip below cannot fail in practice; the catch is defensive only.
@@ -1510,6 +1526,24 @@ export class Gate {
    * GATE did, and anything with gate access could always also write to it
    * directly.
    * @returns {Promise<object[]>} a decoupled copy of every audit line
+   * @name Gate#readAudit
+   * @when Reach for this to read this gate's own audit log back
+   *   programmatically — e.g. to verify what a run actually did, replay it,
+   *   or feed it to a dashboard — without risking a live in-memory line
+   *   (fileless mode) being mutated out from under a still-running gate.
+   * @category audit
+   * @signature gate.readAudit() => Promise<object[]>
+   * @example
+   * import { Gate } from "bareguard";
+   * const gate = new Gate({
+   *   audit: { path: null },
+   *   tools: { allowlist: ["read"] },
+   *   humanChannel: async () => ({ decision: "deny" }),
+   * });
+   * await gate.init();
+   * await gate.check({ type: "read", args: {} });
+   * const lines = await gate.readAudit();
+   * lines.length > 0; // true
    * @fails Never throws. A line containing something that cannot round-trip
    *   through JSON (this can only happen in fileless mode — `Audit.emit()`
    *   in file mode already degrades an unserializable payload before
@@ -1591,6 +1625,26 @@ export class Gate {
    *   1..n tools-map entries, the same shape `rwx.tools` accepts at
    *   construct time (a bare `"r"`/`"w"`/`"x"`, or `{letter, marker?}`).
    * @returns {Promise<void>}
+   * @name Gate#add
+   * @when Reach for this at RUNTIME when your harness meets a spec-less site
+   *   mid-run and needs to grow THIS gate's own rwx tools map on the fly
+   *   (tighten-only) — never for anything an operator should review and
+   *   commit up front; that belongs in the construct-time `rwx.tools` config
+   *   or `bareguard.rwx.json` instead. For a whole fleet of gates at once,
+   *   use `addToGates()`.
+   * @category rwx
+   * @signature gate.add(entries) => Promise<void>
+   * @example
+   * import { Gate } from "bareguard";
+   * const gate = new Gate({
+   *   audit: { path: null },
+   *   rwx: { agent: "fixer", agents: { fixer: "rwx" }, tools: { read: "r" } },
+   *   humanChannel: async () => ({ decision: "deny" }),
+   * });
+   * await gate.init();
+   * await gate.add({ deploy: "x" }); // new key, mid-run — tighten-only from here
+   * const decision = await gate.check({ type: "deploy", args: {} });
+   * decision.outcome; // "allow"
    * @fails Throws (after emitting `rwx.add_rejected`) when: this gate has
    *   been {@link Gate#terminate}d; it has no `rwx` config; `entries` is not
    *   a non-empty plain object, or is unreadable; a key is
@@ -1913,10 +1967,13 @@ function captureGateAdd(g) {
  * built-in way to do that in one call).
  *
  * Pure orchestration over the existing `gate.add()` primitive — it makes no
- * new admission decision of its own, so it is not itself tagged as a
- * primitive in `primitives.json` (each gate's own `add()` is what decides;
- * this only fans the SAME already-validated snapshot out to every gate and
- * collects results).
+ * new admission decision of its own (each gate's own `add()` is what
+ * decides; this only fans the SAME already-validated snapshot out to every
+ * gate and collects results). It IS tagged as its own primitive in
+ * `primitives.json` regardless: the menu is read by the AI that BUILDS a
+ * harness, not by the running agent (which never holds a `Gate` reference
+ * at all), so a harness-only fleet call like this one is exactly the kind of
+ * verb that builder is reaching for.
  *
  * **NOT all-or-nothing.** Each gate is fully independent: it gets its own
  * `add(entries)` call, so it keeps its own lock, tighten-only semantics, cap
@@ -1942,6 +1999,30 @@ function captureGateAdd(g) {
  * (`===` on the array elements) is unaffected — two DIFFERENT gates that
  * merely share the same rwx `agent` identity are not duplicates and are
  * both attempted.
+ * @when Reach for this when a harness manages a FLEET of gates (one per
+ *   agent identity) and needs to apply one learned rwx entry batch to all of
+ *   them at once, instead of calling each gate's own `add()` by hand and
+ *   remembering to keep them in sync. For a single gate, call `gate.add()`
+ *   directly instead.
+ * @category rwx
+ * @fails Throws an `AggregateError` synchronously, before any gate is
+ *   touched, when `gates` is not a non-empty array of distinct gate-like
+ *   objects or `entries` is unreadable/malformed; throws an `AggregateError`
+ *   after every gate has been attempted when one or more rejected (its
+ *   `.results` carries every gate's outcome, success and failure alike, and
+ *   `.failures` names just the failing ones). NOT all-or-nothing: every gate
+ *   keeps its own tighten-only state, so one gate's rejection never affects
+ *   the others.
+ * @example
+ * import { Gate, addToGates } from "bareguard";
+ * const gates = ["searcher", "booker"].map((agent) => new Gate({
+ *   audit: { path: null },
+ *   rwx: { agent, agents: { searcher: "r--", booker: "rw-" }, tools: {} },
+ *   humanChannel: async () => ({ decision: "deny" }),
+ * }));
+ * await Promise.all(gates.map((g) => g.init()));
+ * const results = await addToGates(gates, { search: "r" });
+ * results.every((r) => r.ok); // true — both gates now admit "search"
  * @param {Gate[]} gates the fleet — 1..n distinct gate-like objects (see above)
  * @param {Object<string, (string|{letter:string, marker?:string})>} entries
  *   the same shape `gate.add()` accepts — read once, snapshotted, and

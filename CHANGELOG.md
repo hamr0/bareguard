@@ -3,6 +3,18 @@
 All notable changes to bareguard are documented here. Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [SemVer](https://semver.org/).
 
 
+## [0.18.1] - 2026-09-27
+
+### Added
+
+- **`primitives.json` now lists three of `Gate`'s own methods (`Gate#add`, `Gate#rwxTools`, `Gate#readAudit`) plus `addToGates()`, growing the manifest 13 → 17 entries.** These are harness-only rwx/audit verbs (runtime tighten-only growth of the rwx tools map, a read accessor for the current tools map, a decoupled audit replay accessor, and the fleet fan-out helper) that were previously exported but never tagged as primitives, or (for `addToGates`) previously excluded as "pure orchestration." The manifest is read by the AI that **builds** a harness, not the running agent — which never holds a `Gate` reference either way — so these belong on the menu even though the agent itself never calls them. `BudgetUnavailableError` stays excluded (a bare error class, not a capability to reach for).
+
+  The generator (`scripts/gen-primitives.mjs`) only ever tagged top-level function/class/const exports; it now also picks up `@when` on `Gate`'s class methods, naming them via an explicit `@name Class#method` override — a bare method name is ambiguous across classes and isn't itself resolvable through the existing barrel-lookup, which would otherwise resolve the import line to the enclosing class. Additive only: all 13 existing entries are unchanged. `test/primitives-completeness.test.js` gained a manifest-completeness assertion pinning the four new entries by name, since a `Gate` method is never a top-level export and the existing export-vs-manifest check can't catch one going missing on its own — falsified in a worktree by dropping `Gate#add`'s `@when` tag and rebuilding, confirmed the assertion goes red before being fixed.
+
+### Changed
+
+- **README reorganized around one pitch: one gate between your agent and the world, scoped ONE of two mutually exclusive ways.** Rewritten around the owner-decided framing — `tools.allowlist` (+ `bash`/`fs`/`net`) for a single agent, or rwx letters for a fleet, reviewed by scanning for `x` — with a new "rwx and rwxmap" section (rwxmap [WIP] labels OpenAPI operations r/w/x as a starting point with tight/loose review markers; a harness feeds them to `gate.add()`/`addToGates()` — bareguard never imports it), a table explaining what `r`, `w`, and `x` each mean with examples of how a ceiling reads, and a "Before and after: Axis A and Axis B" section replacing the axis jargon with plain words (both allowlist and rwx are Axis A; Axis B is an opt-in add-on to either). The primitives-menu example's count/category list now matches the 17-entry manifest above. Two deep links to `bareguard.context.md` were fixed (em-dash slugs corrected to a double hyphen).
+
 ## [0.18.0] - 2026-09-27
 
 ### Fixed

@@ -38,13 +38,6 @@ const EXCLUDED = new Set([
   // It belongs inside the `fails` line of whatever throws it, not beside the
   // primitives as a thing to reach for. (Same policy bare-agent uses.)
   "BudgetUnavailableError",
-  // Pure orchestration over the existing gate.add() primitive (§23.21) — it
-  // makes no new admission decision of its own (each gate's own add() still
-  // decides everything), so it does not carry its own @when the way Gate's
-  // constructor does. Same policy as Gate's other convenience methods
-  // (check/record/run/add itself), which are documented as part of the one
-  // Gate primitive rather than separately manifested.
-  "addToGates",
 ]);
 
 async function allExports() {
@@ -127,6 +120,25 @@ test("exclusion allow-list has no stale entries", async () => {
     stale,
     [],
     `EXCLUDED entries now manifested or no longer exported — remove them:\n  ${stale.join("\n  ")}`,
+  );
+});
+
+// Gate METHODS (`add`/`rwxTools`/`readAudit`) are never themselves a
+// top-level package export, so no export-completeness check above would
+// ever catch one going missing — `Gate` alone satisfies those. This is the
+// one place that pins them (and the fleet-level `addToGates`) by name, so
+// dropping a method's `@when` tag (which silently drops it from a freshly
+// generated manifest — the generator has no other way to know it should
+// exist) fails HERE instead of shipping unnoticed. Falsified 2026-09-27: a
+// worktree with `Gate#add`'s `@name` override removed, rebuilt with
+// `npm run build:primitives`, made this assertion fail as expected.
+test("manifest includes the Gate-method and fleet rwx primitives", () => {
+  const required = ["Gate#add", "Gate#rwxTools", "Gate#readAudit", "addToGates"];
+  const missing = required.filter((name) => !manifested.has(name));
+  assert.deepEqual(
+    missing,
+    [],
+    `primitives.json is missing: ${missing.join(", ")} — did a @when/@name tag get dropped?`,
   );
 });
 

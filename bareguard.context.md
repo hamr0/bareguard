@@ -13,11 +13,15 @@ thirteen primitives (bash, fs, net, budget, content, flags, secrets, audit,
 limits, tools, defer-rate, spawn-rate, approval). Single audit log per
 agent family. One `humanChannel` callback for all human escalations.
 
-**rwx (PRD §23)** is not a fourteenth primitive — `primitives.json`/
-`check:primitives` still count 13, because a primitive is any export whose
-JSDoc carries `@when`, and nothing in `src/primitives/rwx.js` is exported
-publicly or tagged `@when`. rwx is `Gate` **config wiring**: a second,
-mutually exclusive mode for the step-5 slot `tools.allowlist` occupies today.
+**rwx (PRD §23)** is not a fourteenth primitive — nothing in
+`src/primitives/rwx.js` is exported publicly or tagged `@when`. rwx is
+`Gate` **config wiring**: a second, mutually exclusive mode for the step-5
+slot `tools.allowlist` occupies today. `primitives.json`/`check:primitives`
+count 17 entries as of 0.18.1: the 13 domain primitives above, plus
+`addToGates()` and three of `Gate`'s own methods (`Gate#add`,
+`Gate#rwxTools`, `Gate#readAudit`) — harness-only rwx/audit verbs, tagged
+because the manifest is read by the AI **building** a harness, not the
+running agent (which never holds a `Gate` reference either way).
 See [rwx mode](#rwx-mode-operator-tagged-capability-letters-23) below.
 
 ```
@@ -593,9 +597,11 @@ read path that hands out no write capability of its own — a caller that
 only ever calls `readAudit()` can read the log back but can never forge a
 line through it.
 
-`readAudit()` is a plain instance method, the same documentation shape
-`check()`/`record()`/`add()`/`rwxTools()` already have on the one `Gate`
-primitive rather than each getting a separate `primitives.json` entry.
+`readAudit()` is a plain instance method on `Gate`. As of 0.18.1 it, `add()`,
+and `rwxTools()` each get their own `primitives.json` entry (`Gate#readAudit`
+/ `Gate#add` / `Gate#rwxTools`) — `check()`/`record()` remain documented as
+part of the one `Gate` primitive, since they're the universal Axis-A path
+every caller uses, not a harness-only rwx/audit verb.
 `gate.audit.readAll()` and `gate.audit.entries` (fileless mode) still exist
 and still work exactly as before — this is additive, not a removal — but
 they are no longer the DOCUMENTED path; prefer `gate.readAudit()`.
@@ -641,8 +647,12 @@ and this and every other shape check runs BEFORE any gate is touched.
 hostile-getter-safe copy `add()` itself uses) and the identical resulting
 snapshot is handed to every gate's own `add()` call — no gate ever re-reads
 the caller's raw object. Pure orchestration over the existing `add()`
-primitive (it makes no new admission decision of its own), so it is not
-itself manifested in `primitives.json`.
+primitive (it makes no new admission decision of its own) — but it IS its
+own `primitives.json` entry as of 0.18.1, alongside `Gate#add`,
+`Gate#rwxTools`, and `Gate#readAudit`: the manifest is read by the AI that
+BUILDS a harness, not the running agent (which never holds a `Gate`
+reference either way), and a harness-only fleet call is exactly the verb
+that builder reaches for.
 
 ```js
 import { addToGates } from "bareguard";
