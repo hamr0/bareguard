@@ -104,7 +104,7 @@ const gate = new Gate({
 });
 ```
 
-An unlisted tool, command, or agent is **denied, never asked** (`rwx.unlisted`) — the fix is to add a row, not widen a letter. A starter file ships at [`bareguard.rwx.json`](bareguard.rwx.json). For a spec-less site met mid-run, `gate.add(entries)` tightens the running gate's own tools map (tighten-only); `addToGates(gates, entries)` fans one batch out to a fleet. Full contract: [`bareguard.context.md`](bareguard.context.md#runtime-growth-for-spec-less-sites-gateadd-gaterwxtools-addtogates-2321).
+An unlisted tool, command, or agent is **denied, never asked** (`rwx.unlisted`) — the fix is to add a row, not widen a letter. A starter file ships at [`bareguard.rwx.json`](bareguard.rwx.json). For a spec-less site met mid-run, `gate.add(entries)` tightens the running gate's own tools map (tighten-only); `addToGates(gates, entries)` fans one batch out to a fleet. Full contract: [`bareguard.context.md`](bareguard.context.md#runtime-growth-for-spec-less-sites--gateadd-gaterwxtools-addtogates-2321).
 
 Hand-labeling a fleet's tools doesn't scale — **[rwxmap](https://github.com/hamr0/rwxmap)** [WIP] labels every OpenAPI operation r/w/x as a mechanical starting point, marking rows it's unsure of (`tight`/`loose`) for a human to review. Its exporter (`exportGate`) writes those labels straight into a bareguard `rwx` config, and `askOn: "loose"` routes an unreviewed row to a human instead of allowing it silently; a site met mid-run goes through `gate.add()`/`addToGates()` instead — bareguard never imports rwxmap. rwxmap's labels are suggestions, not verdicts: it never refuses, it just labels. Unlike a bare MCP hint that nothing enforces, here the gate enforces every row, and the review markers say which ones still need a human.
 
@@ -118,7 +118,7 @@ await gate.annotate({ surface: true, verdict: "broke", where: "you said under �
 const facts = gate.drainAnnotations(); // feed them back to the agent, or read them off the audit line
 ```
 
-Reversibility is read from the **gated action's type** via `axisB: { reversible: [...] }` — never from the fact, the agent, or the model. Full contract: [`bareguard.context.md`](bareguard.context.md#recipe-11-axis-b-surface-a-return-time-judge-fact-on-the-next-approval).
+Reversibility is read from the **gated action's type** via `axisB: { reversible: [...] }` — never from the fact, the agent, or the model. Full contract: [`bareguard.context.md`](bareguard.context.md#recipe-11-axis-b--surface-a-return-time-judge-fact-on-the-next-approval).
 
 ## The bare ecosystem
 
