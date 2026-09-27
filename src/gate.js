@@ -22,6 +22,20 @@ import { spawnRateCheck } from "./primitives/spawn-rate.js";
 
 const MAX_TOPUP_ITERATIONS = 5;
 
+// §23.21 fleet-brand — a GLOBAL-REGISTRY symbol (`Symbol.for`, not `Symbol()`)
+// so it resolves to the IDENTICAL symbol across separate copies of this
+// package in the same process (e.g. two different versions/installs of
+// `bareguard` deduped differently by two dependencies of a fleet-managing
+// app). `addToGates` brand-checks against this instead of `instanceof Gate`,
+// because `instanceof` fails across module copies even for a genuine `Gate`
+// instance from a second `bareguard` install — that second, equally-real
+// Gate would otherwise be rejected outright and NO gate in the batch would
+// be attempted (addToGates validates every element before touching any
+// gate). Set once, in the constructor, as a non-enumerable own property so
+// it never shows up in a `for...in`/`Object.keys`/JSON-serialization of a
+// Gate instance.
+const GATE_BRAND = Symbol.for("bareguard.Gate");
+
 function structuredError(decision, action) {
   return {
     error: {
@@ -490,6 +504,12 @@ export class Gate {
    * if (decision.outcome === "allow") await gate.record(action, { costUsd: 0.01 });
    */
   constructor(config = {}) {
+    // §23.21 fleet-brand (see GATE_BRAND above): non-enumerable so it is
+    // invisible to for...in/Object.keys/JSON.stringify — purely an internal
+    // marker `addToGates` (and any future cross-copy helper) can check for.
+    Object.defineProperty(this, GATE_BRAND, {
+      value: true, enumerable: false, configurable: false, writable: false,
+    });
     assertArrayShapedConfig(config);
     assertRwxConfig(config); // §23.2: rwx is a second mode, mutually exclusive with tools.allowlist/bash.allow
     // §23.21: the gate copies `rwx` at construct time, deep and decoupled —
@@ -523,18 +543,23 @@ export class Gate {
       // the backstop is explicitly disabled with no other secrets config.
       redact: makeRedactor(config.secrets),
     });
-    // `gate.audit` (an `Audit` instance) and `gate.audit.readAll()` are the
-    // blessed, documented public path for a caller that needs to read its
-    // own audit log back programmatically — e.g. the §23.21 replay contract
-    // ("every allow line traces to the tools map at that log position"),
-    // which cannot be satisfied any other way in fileless mode. This was a
-    // real documentation gap the rwx-e2e bench flagged (harness-code-mode/
-    // rwx-e2e.md, "things that felt wrong" #2): the property was always
-    // public and reachable, just never stated as stable surface anywhere.
-    // `Audit` itself is deliberately NOT a top-level `bareguard` export (and
-    // `readAll` carries no `@when` primitives.json tag) — it is a plain
-    // instance method, the same documentation shape `check()`/`record()`/
-    // `add()` already have on this class, not a standalone primitive. See
+    // `gate.audit` is the LIVE `Audit` instance this gate records to — kept
+    // as a plain, pre-existing public property (unchanged, not renamed) for
+    // backward compatibility, but it is internal plumbing, NOT the
+    // documented replay path: `Audit` carries a public `emit()`, so any
+    // caller holding a `Gate` reference could always write a line straight
+    // onto `gate.audit` that never went through `check()`/`add()`'s own
+    // validation — `gate.audit.readAll()` would then hand that forged line
+    // back indistinguishably from a real one. The documented, read-only path
+    // for a caller that needs to read its own audit log back programmatically
+    // — e.g. the §23.21 replay contract ("every allow line traces to the
+    // tools map at that log position") — is {@link Gate#readAudit}, which
+    // returns a DECOUPLED copy and offers no write method of its own. This
+    // does not make `gate.audit` any less reachable than before, and does
+    // not stop code that already holds a `Gate` reference from writing to it
+    // directly (the same trust boundary `add()` itself sits behind — the
+    // audit log records what the GATE did; code with gate access is
+    // trusted); `readAudit()` simply hands out no write path. See
     // README.md's rwx section and bareguard.context.md for the full contract.
     const sharedFile = config.budget?.sharedFile ?? process.env.BAREGUARD_BUDGET_FILE ?? null;
     this.budget = new Budget({ ...config.budget, sharedFile });
@@ -1383,6 +1408,55 @@ export class Gate {
   }
 
   /**
+   * §23.21.x READ-ONLY audit replay accessor — the documented way to read
+   * this gate's own audit log back programmatically (e.g. the §23.21 replay
+   * contract: "every allow line traces to the tools map at that log
+   * position"). Returns the SAME data `gate.audit.readAll()` returns today
+   * (every line, in log order, in both file and fileless mode) but as a
+   * DECOUPLED copy: mutating the returned array or any line in it, at any
+   * depth, can never affect this gate's live audit state. This matters most
+   * in fileless mode, where `gate.audit.readAll()` returns the live
+   * in-memory entries THEMSELVES (by reference) — a caller mutating a
+   * returned line there would corrupt the running log; `readAudit()` never
+   * shares a reference.
+   *
+   * This is deliberately narrower than `gate.audit` itself: `Audit` (the
+   * live instance at `gate.audit`) also carries a public `emit()`, so code
+   * holding a `Gate` reference can already write an arbitrary line onto the
+   * log that never went through `check()`/`add()`'s own validation —
+   * `gate.audit.readAll()` hands that back indistinguishably from a real
+   * line. `readAudit()` doesn't change that (it is READ-only, not a
+   * capability check) and doesn't remove or lock down `gate.audit` — code
+   * that already holds a `Gate` reference is trusted the same way `add()`
+   * itself trusts its caller. What `readAudit()` adds is simply a read path
+   * that hands out no write path of its own: the audit log records what the
+   * GATE did, and anything with gate access could always also write to it
+   * directly.
+   * @returns {Promise<object[]>} a decoupled copy of every audit line
+   * @fails Never throws in practice. A line containing something that
+   *   cannot round-trip through JSON (this can only happen in fileless
+   *   mode — `Audit.emit()` in file mode already degrades an unserializable
+   *   payload before persisting, so a file-mode read is always JSON-shaped)
+   *   falls back to a per-line best-effort shallow copy, so one bad line
+   *   can never sink an otherwise-good read.
+   */
+  async readAudit() {
+    if (!this._initialized) await this.init();
+    const lines = await this.audit.readAll();
+    try {
+      return JSON.parse(JSON.stringify(lines), (k, v) => (k === "__proto__" ? undefined : v));
+    } catch {
+      return lines.map((line) => {
+        try {
+          return JSON.parse(JSON.stringify(line), (k, v) => (k === "__proto__" ? undefined : v));
+        } catch {
+          return { ...line }; // best-effort shallow copy; still decoupled at the top level
+        }
+      });
+    }
+  }
+
+  /**
    * §23.21 — runtime, tighten-only growth of the rwx tools map, for
    * spec-less sites a harness meets mid-run that no operator committed or
    * reviewed. Callable from harness code only — the agent only ever sends
@@ -1707,6 +1781,30 @@ function gateIdentity(gate) {
 }
 
 /**
+ * §23.21 fleet-brand check — accepts a real `Gate` instance from THIS copy
+ * of the package (`instanceof Gate` would already pass) AND a `Gate`
+ * instance from a DIFFERENT copy of `bareguard` in the same process (e.g. a
+ * fleet-managing app whose dependency tree installs two versions/copies),
+ * which `instanceof Gate` cannot see across module boundaries even though
+ * it is a genuine, fully-functional gate. Brand-checks
+ * `Symbol.for("bareguard.Gate")` (see `GATE_BRAND` above) — a global-symbol
+ * lookup, so both copies' constructors stamp the SAME symbol — and requires
+ * a callable `add` (the one method `addToGates` actually calls), so a
+ * hostile or accidental object that merely happens to carry the symbol but
+ * has no real gate behind it is still rejected. Never throws; a `null`/
+ * primitive/throwing-getter input reads as "not gate-like."
+ * @param {*} g
+ * @returns {boolean}
+ */
+function isGateLike(g) {
+  try {
+    return g != null && g[GATE_BRAND] === true && typeof g.add === "function";
+  } catch {
+    return false;
+  }
+}
+
+/**
  * §23.21 fleet helper — apply ONE learned rwx entry batch to N gates in a
  * single call, instead of a harness fanning `gate.add(entries)` out by hand
  * (the rwx-e2e bench's own "things that felt wrong" finding #3: one `Gate`
@@ -1733,22 +1831,41 @@ function gateIdentity(gate) {
  * mutating getter could hand different gates different values) — the
  * identical resulting snapshot object is then passed to every gate's own
  * `add()` call, so no gate ever re-reads the caller's raw `entries`.
- * @param {Gate[]} gates the fleet — 1..n distinct `Gate` instances
+ * Each element of `gates` is accepted when it carries the
+ * `Symbol.for("bareguard.Gate")` brand and a callable `add` (see
+ * {@link isGateLike}) — not by `instanceof Gate`, which fails for a
+ * genuine `Gate` instance constructed from a SECOND copy of this package in
+ * the same process (a real gate, wrongly rejected). Every element still
+ * fails synchronously, before any gate is touched, when it is not
+ * gate-like — a malformed fleet list is a caller bug, and rejecting it
+ * closed attempts nothing, which is safe. Duplicate-instance rejection
+ * (`===` on the array elements) is unaffected — two DIFFERENT gates that
+ * merely share the same rwx `agent` identity are not duplicates and are
+ * both attempted.
+ * @param {Gate[]} gates the fleet — 1..n distinct gate-like objects (see above)
  * @param {Object<string, (string|{letter:string, marker?:string})>} entries
  *   the same shape `gate.add()` accepts — read once, snapshotted, and
  *   applied identically to every gate
- * @returns {Promise<Array<{gate:string, ok:true}>>} one entry per gate, in
- *   `gates` order, when EVERY gate's `add()` succeeded
+ * @returns {Promise<Array<{index:number, gate:string, ok:true}>>} one entry
+ *   per gate, in `gates` order (with its own array index, since `gate`
+ *   alone does not disambiguate two gates sharing the same identity), when
+ *   EVERY gate's `add()` succeeded
  * @throws {AggregateError} when `gates` is not a non-empty array of distinct
- *   `Gate` instances, or `entries` is unreadable/malformed (thrown
+ *   gate-like objects, or `entries` is unreadable/malformed (thrown
  *   synchronously, before any gate is attempted) — or, after every gate has
  *   been attempted, when one or more rejected. The thrown `AggregateError`'s
  *   `.errors` holds each failing gate's own thrown `Error` (message intact,
  *   e.g. a tighten-only violation or "gate has been terminated"); its
  *   top-level `.message` and its own `.failures` array
- *   (`{gate, message}[]`) both name which gate(s) failed and why. A failed
- *   gate's own rwx state is left exactly as `add()` itself leaves it on
- *   rejection: unchanged.
+ *   (`{index, gate, message}[]`) both name which gate(s) failed and why —
+ *   `index` disambiguates two failing gates that share the same identity
+ *   string. Its `.results` array carries the FULL per-index outcome for
+ *   every gate in the fleet, success and failure alike, same shape as the
+ *   resolved value on full success (`{index, gate, ok, error?}` —
+ *   `error` is the failing gate's own `Error.message`, present only when
+ *   `ok` is `false`), so a caller can still see which OTHER gates landed
+ *   even when the call as a whole throws. A failed gate's own rwx state is
+ *   left exactly as `add()` itself leaves it on rejection: unchanged.
  */
 export async function addToGates(gates, entries) {
   if (!Array.isArray(gates) || gates.length === 0) {
@@ -1756,7 +1873,7 @@ export async function addToGates(gates, entries) {
   }
   const seen = new Set();
   for (const g of gates) {
-    if (!(g instanceof Gate)) {
+    if (!isGateLike(g)) {
       throw new AggregateError([], "addToGates: every element of gates must be a Gate instance");
     }
     // Conservative: reject duplicate gate instances outright rather than
@@ -1799,21 +1916,29 @@ export async function addToGates(gates, entries) {
     const identity = gateIdentity(gate);
     try {
       await gate.add(snapshot);
-      results[i] = { gate: identity, ok: true };
+      results[i] = { index: i, gate: identity, ok: true };
     } catch (err) {
-      results[i] = { gate: identity, ok: false, error: err.message };
-      failures.push({ gate: identity, message: err.message, error: err });
+      results[i] = { index: i, gate: identity, ok: false, error: err.message };
+      failures.push({ index: i, gate: identity, message: err.message, error: err });
     }
   }));
 
   if (failures.length) {
     const message =
       `addToGates: ${failures.length}/${gates.length} gate(s) rejected: ` +
-      failures.map((f) => `${f.gate}: ${f.message}`).join("; ");
-    const agg = /** @type {AggregateError & {failures: Array<{gate:string,message:string}>}} */ (
+      failures.map((f) => `[${f.index}] ${f.gate}: ${f.message}`).join("; ");
+    const agg = /** @type {AggregateError & {failures: Array<{index:number,gate:string,message:string}>, results: Array<{index:number,gate:string,ok:boolean,error?:string}>}} */ (
       new AggregateError(failures.map((f) => f.error), message)
     );
-    agg.failures = failures.map((f) => ({ gate: f.gate, message: f.message }));
+    agg.failures = failures.map((f) => ({ index: f.index, gate: f.gate, message: f.message }));
+    // Full per-index outcome for every gate in the fleet, success and
+    // failure alike — same shape the resolved value has on full success.
+    // Two gates sharing the same rwx `agent` identity are indistinguishable
+    // by `.failures`'/`.errors`' `gate` string alone; `.results[i].index`
+    // (and each `.failures[i].index`) disambiguates them, and `.results`
+    // additionally lets a caller see which OTHER gates in the same batch
+    // landed even though the call as a whole threw.
+    agg.results = results;
     throw agg;
   }
   return results;
