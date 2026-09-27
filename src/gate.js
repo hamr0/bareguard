@@ -89,6 +89,52 @@ function copyOwnSafely(src) {
   return out;
 }
 
+/**
+ * Deep, decoupled, never-throwing clone used only as {@link Gate#readAudit}'s
+ * last-resort per-line fallback — reached when a whole-array/whole-line JSON
+ * round-trip fails, which in fileless mode is the ONLY way an unserializable
+ * value (a BigInt, a circular reference, a throwing getter/`toJSON`) can
+ * reach a caller here: `Audit.emit()` pushes the caller's raw `action`/
+ * `result` object straight into `this.entries` with no degrade step (that
+ * degrade only runs in FILE mode's `emit()`), so a live in-memory line can
+ * hold exactly those values. A plain `JSON.parse(JSON.stringify(...))`
+ * throws on all three; the previous fallback, `{ ...line }`, "recovered" by
+ * handing back the SAME nested `action`/`result` OBJECT the live log holds —
+ * a caller mutating that "copy" was mutating the live audit line, breaking
+ * the README/bareguard.context.md promise that mutating a `readAudit()` line
+ * "can never affect the gate's live audit state."
+ *
+ * Walks own-enumerable keys by hand — it never invokes a hostile `toJSON`,
+ * because it never calls `JSON.stringify` on the untrusted value — one key
+ * at a time inside its own try/catch, so a single throwing getter can only
+ * sink that one field rather than the whole line (same posture as
+ * {@link copyOwnSafely}). A `BigInt` is rendered to its string form (JSON
+ * has no BigInt literal). A repeated object reference (a cycle, or two
+ * fields sharing one sub-object) is cut at the SECOND visit and replaced
+ * with a marker, via a `seen` WeakSet threaded through the recursion.
+ * `__proto__` is dropped as an own key at every depth — the same treatment
+ * {@link boundMeta}/{@link deepCopyRwx} give reply-derived/operator-authored
+ * data respectively.
+ * @param {*} v value to clone
+ * @param {WeakSet<object>} [seen] cycle guard; callers omit it
+ * @returns {*} a fully decoupled clone; never throws
+ */
+function safeDeepClone(v, seen = new WeakSet()) {
+  if (v === null || typeof v !== "object") {
+    return typeof v === "bigint" ? v.toString() : v;
+  }
+  if (seen.has(v)) return "[Circular]";
+  seen.add(v);
+  let keys;
+  try { keys = Object.keys(v); } catch { return UNREADABLE; }
+  const out = Array.isArray(v) ? [] : {};
+  for (const k of keys) {
+    if (k === "__proto__") continue;
+    try { out[k] = safeDeepClone(v[k], seen); } catch { out[k] = UNREADABLE; }
+  }
+  return out;
+}
+
 function safeAction(action) {
   if (action == null || typeof action !== "object") return action;
   // `Object.keys` itself can throw on a revoked Proxy — there is no readable
@@ -1437,8 +1483,11 @@ export class Gate {
    *   cannot round-trip through JSON (this can only happen in fileless
    *   mode — `Audit.emit()` in file mode already degrades an unserializable
    *   payload before persisting, so a file-mode read is always JSON-shaped)
-   *   falls back to a per-line best-effort shallow copy, so one bad line
-   *   can never sink an otherwise-good read.
+   *   falls back to {@link safeDeepClone}, a per-line deep, decoupled clone
+   *   that tolerates a BigInt, a circular reference, or a throwing getter/
+   *   `toJSON` — NEVER a shared reference into the live line — so one bad
+   *   line can never sink an otherwise-good read, and mutating what comes
+   *   back can never reach the gate's live audit state either way.
    */
   async readAudit() {
     if (!this._initialized) await this.init();
@@ -1450,7 +1499,7 @@ export class Gate {
         try {
           return JSON.parse(JSON.stringify(line), (k, v) => (k === "__proto__" ? undefined : v));
         } catch {
-          return { ...line }; // best-effort shallow copy; still decoupled at the top level
+          return safeDeepClone(line);
         }
       });
     }

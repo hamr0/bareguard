@@ -149,6 +149,95 @@ test("readAudit: two successive calls return independent copies", async () => {
 
 // ─── readAudit() is read-only: it carries no write surface of its own ─────
 
+// ─── the debrief finding: a fileless line holding an unserializable action ─
+
+test("readAudit: a fileless line whose action holds a BigInt is decoupled, not a shallow copy of the live reference", async () => {
+  // `gate.check()` on an action with a BigInt field denies at
+  // content.unserializable (serializeForMatch can't serialize it), but the
+  // in-memory fileless audit log still holds the RAW action object,
+  // BigInt and all — this is the one shape `Audit.emit()` never degrades
+  // (degrade only runs in file mode). readAudit()'s whole-array/whole-line
+  // JSON round-trip throws on that BigInt, so it falls to the per-line
+  // fallback — the exact path this test exercises.
+  const gate = gateFor();
+  await gate.init();
+  const decision = await gate.check({ type: "noop", amount: 10n, args: {} });
+  assert.equal(decision.outcome, "deny");
+  assert.equal(decision.rule, "content.unserializable");
+
+  const lines = await gate.readAudit();
+  const denyLine = lines.find((l) => l.rule === "content.unserializable");
+  assert.ok(denyLine, "the deny line must be present in the read-back log");
+  assert.equal(denyLine.action.amount, "10", "the BigInt must survive as its string form, not sink the whole line");
+
+  // The load-bearing property: mutating the returned line's nested action
+  // must NEVER reach the live in-memory log — the previous `{ ...line }`
+  // fallback was a SHALLOW copy whose `.action` was the very object still
+  // sitting in `gate.audit.entries`.
+  const liveLines = await gate.audit.readAll();
+  const liveDenyLine = liveLines.find((l) => l.rule === "content.unserializable");
+  assert.notEqual(denyLine.action, liveDenyLine.action, "readAudit() must never hand back a live reference");
+
+  denyLine.action.type = "MUTATED";
+  denyLine.action.newField = "planted";
+
+  const again = await gate.readAudit();
+  const againDenyLine = again.find((l) => l.rule === "content.unserializable");
+  assert.equal(againDenyLine.action.type, "noop", "mutating the returned copy must not affect a later readAudit() call");
+  assert.equal(againDenyLine.action.newField, undefined, "a planted field must not leak into the live log");
+
+  const liveAgain = await gate.audit.readAll();
+  const liveAgainDenyLine = liveAgain.find((l) => l.rule === "content.unserializable");
+  assert.equal(liveAgainDenyLine.action.type, "noop", "gate.audit's own live state must be untouched by the mutation");
+});
+
+test("readAudit: a fileless line whose action holds a circular reference is decoupled and cut, not shared or thrown", async () => {
+  // Secrets redaction is DEFAULT-ON, and its key-aware walk (src/primitives/
+  // secrets.js `walkKeys`) unconditionally cycle-detects and already fully
+  // decouples a circular action via a `JSON.parse` round-trip before it ever
+  // reaches the audit line — so a circular action can't reach THIS bug's
+  // repro path under default config. Disabling secrets redaction entirely
+  // (`redactKeys:false`, no explicit keys/patterns/envVars — `makeRedactor()`
+  // then returns `null`, `Audit.emit()`'s whole `LINE_FIELDS` loop is
+  // skipped) is what makes the raw, still-circular action reach the
+  // in-memory fileless entry untouched, exactly like the BigInt case above.
+  const gate = new Gate({
+    audit: { path: null },
+    secrets: { redactKeys: false },
+    rwx: {
+      agent: "fixer",
+      agents: { fixer: "rw-" },
+      tools: { read: "r", write: "w" },
+    },
+    humanChannel: async () => ({ decision: "deny" }),
+  });
+  await gate.init();
+  const circular = { type: "noop", args: {} };
+  circular.self = circular;
+  const decision = await gate.check(circular);
+  assert.equal(decision.outcome, "deny");
+  assert.equal(decision.rule, "content.unserializable");
+
+  const lines = await gate.readAudit();
+  const denyLine = lines.find((l) => l.rule === "content.unserializable");
+  assert.ok(denyLine, "the deny line must be present in the read-back log");
+  // `safeAction()`'s own top-level copy means the live action's `self` chain
+  // is `line.action` (the safeAction copy) -> `circular` (the caller's
+  // original object) -> itself; the cycle is cut one level in, at the point
+  // where the SAME object would be visited twice.
+  assert.equal(denyLine.action.self.self, "[Circular]", "the cycle must be cut with a marker, not crash the read");
+
+  const liveLines = await gate.audit.readAll();
+  const liveDenyLine = liveLines.find((l) => l.rule === "content.unserializable");
+  assert.notEqual(denyLine.action, liveDenyLine.action, "readAudit() must never hand back a live reference");
+  assert.notEqual(denyLine.action.self, liveDenyLine.action.self, "the nested circular sub-object must also be decoupled, not shared");
+
+  denyLine.action.type = "MUTATED";
+  const liveAgain = await gate.audit.readAll();
+  const liveAgainDenyLine = liveAgain.find((l) => l.rule === "content.unserializable");
+  assert.equal(liveAgainDenyLine.action.type, "noop", "the live log must be untouched by the mutation");
+});
+
 test("readAudit: is a plain method with no emit-like write surface hanging off it", async () => {
   const gate = gateFor();
   await gate.init();
