@@ -26,11 +26,14 @@
 
 ## What it is
 
-One chokepoint between your agent and the world. Every action the agent takes — a shell command, a file write, a network call, a spend — passes through one `Gate` and comes back **allow**, **deny**, or **ask a human**. You get a hard floor under a probabilistic agent, and a single audit log of everything it tried.
+**One gate, two ways to scope it.** Every action your agent takes — a shell command, a file write, a network call, a spend — passes through one `Gate` and comes back **allow**, **deny**, or **ask a human**. One audit log of everything it tried, and hard caps (spend, tokens, turns) that halt with a human in the loop instead of silently.
 
-That floor is **Axis A** of a floor + harness model: you can't make a probabilistic agent deterministic, so you fence where the dice can do damage. **Axis B** (opt-in) is the complement — it reconciles what came *back* against what you asked for. Both are shown below.
+You scope that gate **one of two mutually exclusive ways**:
 
-Small on purpose: one `Gate`, three call sites (`redact` · `check` · `record`), thirteen primitives you can each read in a sitting. Embed it like the rest of the [bare suite](#the-bare-ecosystem) — no daemon, no SaaS, no telemetry.
+- **`tools.allowlist`** (+ `bash`/`fs`/`net`) — a closed allowlist naming exactly what's reachable. Simplest, built for one agent.
+- **`rwx` letters** — tag every tool `r` (read), `w` (write, undoable), or `x` (can't-be-undone), borrowed straight from Unix `chmod`. Built for a *fleet* of agents: a human reviews by scanning for `x` instead of reading N separate allowlists. See [rwx + rwxmap](#rwx-and-rwxmap) below.
+
+Both are **Axis A** — gate the action before it runs. **Axis B** (opt-in, either mode) reconciles what came back after. See [Before/after](#before-after-axis-a-and-axis-b).
 
 **What it isn't** — bareguard owns one layer and is honest about the rest. It's not a content filter (toxicity / PII / schema → `guardrails-ai`), not a sandbox (containment → Docker / gVisor), and not auth (who the actor *is* → upstream; per-principal policy rides `action._ctx`). It decides the action; it never runs it.
 
@@ -44,9 +47,12 @@ Requires Node.js >= 20. One production dep: `proper-lockfile`. Ships with TypeSc
 
 ## Quick start
 
+Pick ONE of `tools.allowlist` or `rwx` — never both on the same gate.
+
 ```js
 import { Gate } from "bareguard";
 
+// allowlist mode — simplest, one agent
 const gate = new Gate({
   tools:  { allowlist: ["bash", "read", "write", "fetch"] },
   bash:   { allow: ["git", "ls"], denyPatterns: [/sudo/, /rm\s+-rf/] },
@@ -70,6 +76,8 @@ if (decision.outcome === "allow") {
 // via humanChannel and gives you a terminal allow/deny.
 ```
 
+`rwx` mode replaces the `tools`/`bash`/`fs`/`net` block above with one `rwx: {...}` config — see [rwx + rwxmap](#rwx-and-rwxmap).
+
 ## For AI agents — the menu
 
 Building tool-calling automation with bareguard? Read **`primitives.json`** first. It's a compact, machine-readable menu of every verb — the fast path to *using* bareguard without reading the docs: load it, pick a verb, call it. Each entry carries `when` to reach for it, its `import`, `signature`, `fails`, and a runnable `example`:
@@ -84,52 +92,28 @@ Building tool-calling automation with bareguard? Read **`primitives.json`** firs
   "fails": "…",
   "example": "…"
 }
-// 13 entries across: gate · classify · matching · content · secrets · audit · axis-b
+// 17 entries across: gate · classify · matching · content · secrets · audit · axis-b · rwx
 ```
 
 Browse it on unpkg (`unpkg.com/bareguard/primitives.json`) before you install, import it (`import menu from 'bareguard/primitives.json' with { type: 'json' }`), or point a tool at it. Generated from the source, so it never drifts.
 
 **Then go deeper:** `bareguard.context.md` (the complete contract — every option, eval order, and the full API) and the rest of this README for the recipes.
 
-## The trio in one loop
-
-The [Core](#the-bare-ecosystem) is three modules: **bareagent** drives the think→act loop, **litectx** supplies ranked context, and **bareguard** gates every action between them. A loop looks like:
-
-```js
-const ctx      = await memory.recall(goal);    // litectx   → ranked context
-const action   = await agent.next(goal, ctx);  // bareagent → a proposed action
-const decision = await gate.check(action);     // bareguard → allow / deny / ask-a-human
-if (decision.outcome === "allow") await run(action);
-```
-
-And it gates on *meaning*, not text: when the agent writes a memory, litectx emits the fact's **source** and bareguard's `flags` primitive decides on that field directly — `flags: { provenance: { web: "ask" }, injectionRisk: { high: "deny" } }` — no brittle regex over a serialized blob.
-
-**Wiring it into a real agent?** Hand your AI assistant the integration guide and describe what you want:
-
-```
-Read bareguard.context.md from node_modules/bareguard/bareguard.context.md,
-then wire a Gate into my agent. Here's my setup: <describe loop, tools, budget>.
-```
-
-That file has the `humanChannel` patterns, shared-budget-across-processes setup, eval order, audit format, and 10 wiring recipes.
-
 ## The primitives
 
-Thirteen small files, each readable in a sitting. The gate runs them in a fixed order (**deny → ask → scope → default**, first match wins) and they compose into harness bundles: tighten-only capability presets an agent picks at runtime, never load-bearing for safety — pick the wrong one and the floor still holds. (In *code-mode*, the agent writes a code body over a typed tool menu and the gate stays in the parent process; the agent never holds a raw tool.)
+Small files, each readable in a sitting. The gate runs them in a fixed order (**deny → ask → scope → default**, first match wins).
 
-- **Scope what runs** — `tools` is a closed allowlist (deny-by-default); `bash` / `fs` / `net` bound which commands, paths, and domains are even reachable. `net` gates on **any action carrying a `url`/`args.url` field**, not on `action.type === "fetch"` — put the URL you'll actually fetch in one of those fields, whatever the action's type.
-- **Tier what's dangerous** — `bash.classify` ranks a command **safe → destructive → super-destructive** across Linux / macOS / Windows and routes the severity to your human channel; `content` ships safe defaults (`rm -rf /`, `DROP TABLE` denied outright; destructive verbs ask).
-- **Bound what accumulates** — `budget` caps spend, tokens, *or any countable resource*, and `limits` caps turns / children / depth — both **halt with a human in the loop**, not silently, and the cap is shared across processes.
-- **Gate on meaning, not text** — `flags` reads a structured field's value (a memory engine's `provenance` / `injectionRisk`) straight off the action, no regex; the same channel can also confirm before *every* call of a tool.
-- **Prove what happened** — `secrets` auto-redacts every audit line **by default** (API keys / `Bearer …` tokens never hit disk, even with no config), and one `audit` JSONL joins each request to its outcome and its approval, even when two actions look identical.
+- **Scope what runs** — `bash` / `fs` / `net` bound which commands, paths, and domains are reachable. `net` gates on **any action carrying a `url`/`args.url` field**, not on `action.type === "fetch"`.
+- **Tier what's dangerous** — `bash.classify` ranks a command **safe → destructive → super-destructive**; `content` denies `rm -rf /` / `DROP TABLE` outright.
+- **Bound what accumulates** — `budget` caps spend, tokens, or any countable resource; `limits` caps turns / children / depth — both **halt with a human in the loop**, shared across processes.
+- **Gate on meaning, not text** — `flags` reads a structured field's value (e.g. a memory engine's `provenance`) straight off the action, no regex.
+- **Prove what happened** — `secrets` auto-redacts every audit line **by default**; one `audit` JSONL joins each request to its outcome and its approval.
 
-Full per-primitive reference lives in the **[Usage Guide](docs/product/usage-guide.md)** and **[Integration Guide](bareguard.context.md)** — not here.
+Full per-primitive reference lives in the **[Usage Guide](docs/product/usage-guide.md)** and **[Integration Guide](bareguard.context.md)**. Tested across Linux + macOS + Windows × Node 20 + 22.
 
-Tested across **Linux + macOS + Windows × Node 20 + 22**: real-subprocess shared-budget contention, halt cascades, single-file audit atomicity, and family-tree stitching across a 3-deep spawn tree.
+## rwx and rwxmap
 
-## rwx — capability letters for agent fleets (v0.17.0)
-
-A second, **mutually exclusive** mode of control beside `tools.allowlist`/`bash.allow` — for when you're running a *fleet*, not one agent. Tag every tool and bash command once with a letter (`r` read, `w` write-and-undoable, `x` cannot-be-undone), give each agent a three-letter ceiling, and a human reviews the fleet by scanning for `x` instead of reading per-agent allowlists:
+Tag every tool and bash command once with a letter (`r` read, `w` write-and-undoable, `x` cannot-be-undone), give each agent a three-letter ceiling, and a human reviews the fleet by scanning for `x` instead of reading per-agent allowlists:
 
 ```js
 const gate = new Gate({
@@ -142,47 +126,47 @@ const gate = new Gate({
 });
 ```
 
-An unlisted tool, command, or agent is **denied, never asked** (`rwx.unlisted`) — the fix is to add a row, not to widen a letter. A starter file ships at [`bareguard.rwx.json`](bareguard.rwx.json): copy it, edit the `agents` map for your fleet, and pass the parsed object in — bareguard never loads the file itself. The committed file is never written to at runtime; for spec-less sites a harness can call `await gate.add({ key: "r" | { letter, marker } })` mid-run to tighten the gate's own in-memory tools map — new keys, or an existing key's letter/marker moving stricter only, all-or-nothing, capped at 10,000 entries, audited either way (`rwx.added` / `rwx.add_rejected`).
+An unlisted tool, command, or agent is **denied, never asked** (`rwx.unlisted`) — the fix is to add a row, not widen a letter. A starter file ships at [`bareguard.rwx.json`](bareguard.rwx.json): copy it, edit the `agents` map, pass the parsed object in. For a spec-less site met mid-run, `gate.add(entries)` tightens the running gate's own tools map (tighten-only); `addToGates(gates, entries)` fans one batch out to a whole fleet at once. Full contract: [`bareguard.context.md`](bareguard.context.md#runtime-growth-for-spec-less-sites-gateadd-gaterwxtools-addtogates-2321).
 
-Three companions to `add()`, all §23.21:
+Hand-labeling a fleet's tools doesn't scale — **[rwxmap](https://github.com/hamr0/rwxmap)** (`npm install rwxmap`, v0.4.0) maps r/w/x onto any API automatically, even one with no MCP annotations at all, straight from its OpenAPI spec. Your harness feeds its output to `gate.add()`/`addToGates()` — bareguard never imports rwxmap; the harness is the glue. This is measured, not "first ever": MCP's `readOnlyHint`/`destructiveHint` are self-declared by the tool author and advisory; rwxmap derives letters for *any* API from its spec, and your gate — not the tool author — is what actually enforces them.
 
-- **`gate.rwxTools()`** — the read side of `add()`'s write. Returns a decoupled deep copy of the gate's current `rwx.tools` map (mutate it freely — it can never affect the gate's live decisions), or `null` when the gate has no `rwx` config at all. Only the tools map is exposed; `bash`/`agents`/the grant stay unreachable through it.
-- **`gate.readAudit()`** — the documented, read-only way to read a gate's own audit log back programmatically (works in both file and fileless mode), for a replay/reconciliation reader that needs to confirm "every allow line traces to the tools map at that log position." Returns a decoupled copy — mutating it can never affect the gate's live audit state. `gate.audit` (the live `Audit` instance) is still a public, pre-existing property, but it's internal plumbing, not this contract: it carries a public `emit()`, so code holding a `Gate` reference could always write a line that never went through `check()`/`add()`'s own validation — the audit log records what the gate did, and code with gate access is trusted, the same boundary `add()` itself sits behind. `readAudit()` simply hands out no write path of its own.
-- **`addToGates(gates, entries)`** — fan one learned entry batch out to a whole fleet of gates in one call, instead of looping `gate.add()` by hand. **Not all-or-nothing**: every gate gets its own independent `add()` call (own lock, tighten-only, cap, audit line), and every gate is attempted even if an earlier one throws. On full success it resolves to a per-gate summary (`[{ index, gate, ok: true }, ...]`); if any gate rejected, it throws one `AggregateError` naming every failing gate (`.errors` holds each gate's thrown `Error`; `.failures` is `{index, gate, message}[]`; `.results` carries the full per-index outcome for every gate, success and failure alike) — `index` disambiguates two gates that happen to share the same identity string, and the other gates' adds still land. `gates` must be a non-empty array of distinct gate-like objects — accepted by carrying the `Symbol.for("bareguard.Gate")` brand plus a callable `add`, not by `instanceof Gate` (which would wrongly reject a genuine `Gate` from a second copy of this package); a duplicate instance is still rejected, conservatively. `entries` is read exactly once and the identical snapshot is handed to every gate.
+## Before/after: Axis A and Axis B
 
-Full spec (eval-order slot, bash quoting rules, delegation clamp, audit fields, count caps, `gate.add()`/`gate.rwxTools()`/`addToGates()`): **[`bareguard.context.md`](bareguard.context.md#rwx-mode-operator-tagged-capability-letters-23)**, PRD [§23](docs/product/bareguard-prd.md).
-
-## Axis B — reconcile the return (facts, never spin)
-
-Axis A (everything above) gates what the agent is about to *do*. **Axis B** is the complement: after a result comes back, it carries a **fact** about whether that result *honored* the request, so a human approval shows independent facts instead of the agent's own summary. It's a detector, never an enforcer — it annotates an Axis-A stop, it never blocks alone.
-
-The line bareguard holds is **facts, not judgments**. A *fact* is something you computed deterministically — a membership test, a number comparison (`booking €400 > your €300 cap`; `this memory is agent-authored, you asked for human-only`). bareguard carries facts; it **never runs an LLM and never decides**. A soft "this feels off-topic" is a *non-fact* — a judgment — and stays on your side of the line, because a model's guess must never auto-pass or auto-block an action.
+**Before:** gate the action (**Axis A** — everything above; both allowlist and rwx are Axis A). **After:** check the result (**Axis B**, opt-in add-on to either). Axis B carries a **fact** about whether a result *honored* the request — a detector, never an enforcer; it annotates an Axis-A stop, never blocks alone. bareguard never runs an LLM and never judges: you compute the fact.
 
 ```js
 // you compute the fact (a deterministic check); bareguard buffers it and rides the next ask
 await gate.annotate({ surface: true, verdict: "broke", where: "you said under €300; the booking is €400" });
-await gate.check({ type: "book", needsReview: "yes" }); // the fact surfaces as event.annotations
-const facts = gate.drainAnnotations();                  // and/or feed them back to the agent
+const facts = gate.drainAnnotations(); // feed them back to the agent, or read them off the audit line
 ```
 
-You declare undoable action types via `axisB: { reversible: [...] }`; reversibility is read from the **gated action's type**, never the fact, the agent, or the model. The knob (`strict` default | `relaxed`) is pure noise control on the reversible path, never safety.
+Reversibility (which action types Axis B treats as undoable) is read from the **gated action's type** via `axisB: { reversible: [...] }` — never from the fact, the agent, or the model. Full contract: [`bareguard.context.md`](bareguard.context.md#recipe-11-axis-b-surface-a-return-time-judge-fact-on-the-next-approval).
 
 ## The bare ecosystem
 
-Local-first, composable agent infrastructure. Same API patterns throughout —
-mix and match, each module works standalone.
+Local-first, composable agent infrastructure. Same API patterns throughout — mix and match, each module works standalone.
 
-**Core** — the brain, the gate, the memory.
+**Core** — the brain, the gate, the memory. A loop looks like:
+
+```js
+const ctx      = await memory.recall(goal);    // litectx   → ranked context
+const action   = await agent.next(goal, ctx);  // bareagent → a proposed action
+const decision = await gate.check(action);     // bareguard → allow / deny / ask-a-human
+if (decision.outcome === "allow") await run(action);
+```
 
 - **[bareagent](https://npmjs.com/package/bare-agent)** — the think→act→observe loop. *Goal in → coordinated actions out.* Replaces LangChain, CrewAI, AutoGen.
 - **[bareguard](https://npmjs.com/package/bareguard)** — the single gate every action passes through. *Action in → allow / deny / ask-a-human out.* Replaces hand-rolled allowlists and scattered policy code.
 - **[litectx](https://npmjs.com/package/litectx)** — tree-sitter code + memory graph with activation decay, plus lightweight context engineering (write · select · compress · isolate). *Query in → ranked context out.*
+- **[rwxmap](https://github.com/hamr0/rwxmap)** — maps any OpenAPI operation to r/w/x, even a site with no MCP annotations. *API spec in → per-operation letter out.* Feeds bareguard's `rwx` mode.
 
 **Optional reach** — give the agent hands.
 
 - **[barebrowse](https://npmjs.com/package/barebrowse)** — a real browser for agents. *URL in → pruned snapshot out.* Replaces Playwright, Selenium, Puppeteer.
 - **[baremobile](https://npmjs.com/package/baremobile)** — Android + iOS device control. *Screen in → pruned snapshot out.* Replaces Appium, Espresso, XCUITest.
 - **[beeperbox](https://github.com/hamr0/beeperbox)** — 50+ messaging networks via one MCP server (headless Beeper Desktop in Docker). *Chat in → unified message stream out.* Replaces Twilio, per-platform bot APIs.
+
+**Wiring it into a real agent?** Hand your AI assistant `bareguard.context.md` (from `node_modules/bareguard/`) and describe your setup — it has the `humanChannel` patterns, shared-budget-across-processes setup, eval order, audit format, and 10+ wiring recipes.
 
 ## License
 
