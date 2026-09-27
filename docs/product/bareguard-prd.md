@@ -1544,7 +1544,47 @@ bareguard itself never runs `classifyRow` or sees a spec — this property lives
 harness/rwxmap side of the boundary (§23.20); it is recorded here only so the same "GET floors
 to r" leak already accepted for the committed-file case is not mistaken for something new.
 
-**On ship:** `gate.add`, the `rwx.added` phase, the `rwx.add_rejected` phase, the `rwx.tightened`
-deny rule, and the 10,000-entry size cap all join the 1.0 SemVer surface (§23.17). Built this
-session on `main`'s `feat/rwx-add` branch; not yet released as a version bump (release is a
-separate decision, per this project's own standing rule).
+**Two follow-ons (hamr, 2026-09-27), surfaced by the rwx-e2e bench's own "things that felt
+wrong" findings against the shipped `add()` (harness-code-mode/rwx-e2e.md):**
+
+- **`gate.rwxTools()` — the read side of `add()`'s write** (bench finding #1: `add()` was the
+  only *write* path onto `rwx.tools`, with no corresponding *read* path other than reaching
+  into the private `gate.cfg.rwx.tools`). Returns a DECOUPLED deep copy of the gate's current
+  `rwx.tools` map — mutating the returned object, at any depth, can never affect the gate's
+  live decisions or a future `check()`/`add()` — or `null` when the gate has no `rwx` config
+  at all (the sentinel for "not in rwx mode"). Exposes only the tools map; `bash`, `agents`,
+  and the agent's own grant stay unreachable through it. Not a `@when`-tagged, separately
+  manifested primitive — same documentation treatment `check()`/`record()`/`add()` already
+  have as plain methods on the one `Gate` primitive.
+- **`addToGates(gates, entries)` — fan one learned batch out to a fleet in one call** (bench
+  finding #3: one `Gate` per agent identity meant a harness that learns something about a
+  shared site has to fan `gate.add()` out to every gate in the fleet by hand, with no built-in
+  "add to every gate for this operator's fleet" call). **Not all-or-nothing across gates** —
+  each gate gets its own fully independent `add()` call (own lock, tighten-only check, cap,
+  audit line); every gate is attempted even if an earlier one throws, and a gate that rejects
+  simply stays at its own stricter existing state (fail-closed, correct — not a bug). On full
+  success, resolves to a per-gate summary; if one or more gates rejected, throws ONE
+  `AggregateError` naming every failing gate (`.errors`/`.message`/`.failures`) — the other
+  gates' adds still land. `gates` must be a non-empty array of DISTINCT `Gate` instances (a
+  duplicate is rejected outright, conservatively); `entries` is read EXACTLY ONCE (the same
+  own-props-only, hostile-getter-safe copy `add()` itself uses) and the identical snapshot is
+  handed to every gate — no gate re-reads the caller's raw object. Pure orchestration over the
+  existing `add()` primitive (no new admission decision of its own), so it is exported but not
+  itself manifested in `primitives.json`.
+
+The bench's separate finding #2 (`gate.audit.readAll()` "not part of the exported public API
+... reachable only via `gate.audit`, ... not documented as a stable surface") turned out to be
+a documentation gap, not a missing capability: `gate.audit` is, and always was, a public
+instance property, and `Audit`/`readAll` were never candidates for a `primitives.json` entry
+either way (they are a class instance method, the same shape `check()`/`record()`/`add()`
+already have — methods don't get individual `@when` tags in this codebase; only `Gate`'s
+constructor does, for the whole class). Closed by documenting `gate.audit.readAll()` — and
+`gate.audit.entries` for fileless mode — as the blessed path for a caller needing to read its
+own audit log back programmatically (the exact need behind the §23.21 replay contract). No
+code changed for this one.
+
+**On ship:** `gate.add`, `gate.rwxTools`, `addToGates`, the `rwx.added` phase, the
+`rwx.add_rejected` phase, the `rwx.tightened` deny rule, and the 10,000-entry size cap all join
+the 1.0 SemVer surface (§23.17). Built this session on `main`'s `feat/rwx-add` branch; not yet
+released as a version bump (release is a separate decision, per this project's own standing
+rule).

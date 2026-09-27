@@ -538,6 +538,82 @@ for an object-form entry under `askOn:"loose"` (both captured live, see the
 section above). Absent entirely on a non-rwx gate's audit line —
 byte-identical to today.
 
+### Runtime growth for spec-less sites — `gate.add()`, `gate.rwxTools()`, `addToGates()` (§23.21)
+
+For a site the operator never listed and never reviewed, `gate.add(entries)`
+grows a running gate's `rwx.tools` map in memory, mid-run: `await
+gate.add({ key: "r"|"w"|"x" | { letter, marker } })`, the same shapes
+`rwx.tools` accepts at construct time. **Tighten-only, both axes, against any
+key already present** (a hand-written one included): the letter can only
+rise (`r < w < x`); an entry marked `"loose"` can only move to another
+`"loose"` entry, never to `"tight"`/`"settled"`/a bare letter. Only the tools
+map is reachable — `bash`, `agents`, and the grant never move. All-or-nothing
+per batch, capped at 10,000 keys, audited both ways (`rwx.added` /
+`rwx.add_rejected`). The committed `bareguard.rwx.json` file is never
+written to — `add()` mutates only the gate's own private, construct-time
+deep-copied map. Full contract: `src/gate.js`'s own `add()`/`_addOnce` JSDoc,
+PRD §23.21.
+
+**`gate.rwxTools()`** is `add()`'s read counterpart — added this session to
+close a gap the rwx-e2e bench flagged (a harness had no public way to read
+"what does the gate currently believe this key's letter is," only the
+private `gate.cfg.rwx.tools`). Returns a DECOUPLED deep copy of the current
+tools map — mutating the returned object at any depth can never affect the
+gate's live decisions or a future `check()`/`add()` — or `null` when the
+gate has no `rwx` config at all (the documented sentinel for "not in rwx
+mode"). Exposes only the tools map; `bash`/`agents`/the grant are not
+reachable through it.
+
+```js
+const snapshot = gate.rwxTools(); // { search: "r", export: { letter: "w", marker: "loose" } }
+snapshot.export.letter = "x"; // harmless — this is a copy, not the live map
+```
+
+**`gate.audit.readAll()`** is the blessed way to read a gate's own audit log
+back programmatically — for a replay/reconciliation reader confirming
+"every allow line traces to the tools map at that log position" (the exact
+contract the rwx-e2e bench's replay exercises). This was always reachable
+(`gate.audit` is a public instance property) but never documented as stable
+surface until now — no code changed; `Audit` still isn't a top-level
+`bareguard` export, and `readAll` isn't a manifested primitive, the same
+documentation shape `check()`/`record()`/`add()` already have as methods on
+the one `Gate` primitive rather than each getting a separate entry. In
+fileless mode (`audit: {path: null}`), read `gate.audit.entries` directly
+instead — `readAll()` still works there too (returns a shallow copy of the
+same array).
+
+**`addToGates(gates, entries)`** is a top-level export (`import { addToGates
+} from "bareguard"`) that fans one learned entry batch out to a whole fleet
+of gates in a single call — closing a second rwx-e2e finding: one `Gate` per
+agent identity meant a harness had to fan `gate.add()` out to every gate by
+hand, with no built-in "add to every gate for this operator's fleet" call.
+**Not all-or-nothing across gates** — each gate is fully independent (its
+own lock, tighten-only check, cap, audit line via its own `add()`), and
+every gate is attempted even if an earlier one throws. On full success it
+resolves to `[{ gate: <identity>, ok: true }, ...]` (`<identity>` is the
+gate's `rwx.agent`, or its `runId` if rwx isn't configured). If one or more
+gates rejected, it throws a single `AggregateError` whose `.errors` holds
+each failing gate's own thrown `Error` and whose `.message`/`.failures`
+(`{gate, message}[]`) name which gate(s) failed and why — the OTHER gates'
+adds still landed; a rejected gate's own state is exactly what its own
+`add()` leaves on rejection (unchanged). `gates` must be a non-empty array
+of distinct `Gate` instances — a duplicate gate object in the array is
+rejected outright (conservative: silently double-adding to the same gate is
+a more surprising failure than a loud, synchronous rejection before
+anything is attempted), and this and every other shape check runs BEFORE
+any gate is touched. `entries` is read exactly once (the same
+own-props-only, hostile-getter-safe copy `add()` itself uses) and the
+identical resulting snapshot is handed to every gate's own `add()` call — no
+gate ever re-reads the caller's raw object. Pure orchestration over the
+existing `add()` primitive (it makes no new admission decision of its own),
+so it is not itself manifested in `primitives.json`.
+
+```js
+import { addToGates } from "bareguard";
+const summary = await addToGates([searcherGate, bookerGate], { "site.search": "r" });
+// summary = [{ gate: "searcher", ok: true }, { gate: "booker", ok: true }]
+```
+
 ### `budget.resources` accrual by letter (§23.10)
 
 "rw, but at most N writes across the whole run family" is the existing
@@ -562,6 +638,7 @@ import {
   SAFE_DEFAULT_DENY_PATTERNS,     // exposed in case you want to extend
   SAFE_DEFAULT_ASK_PATTERNS,      // exposed in case you want to extend
   routeAnnotation,                // pure Axis-B routing fn (surface × reversible × knob)
+  addToGates,                     // §23.21: fan one gate.add() batch out to a fleet of gates
   globToRegex, matchAny,          // glob helpers (v0.1: `*` only)
 } from "bareguard";
 
@@ -583,6 +660,9 @@ gate.drainAnnotations();                           // SYNC — return + clear bu
 await gate.terminate(reason);                     // sticky terminate
 await gate.raiseCap(dimension, newCap);           // explicit cap raise (separate from humanChannel topup)
 gate.clampRwxLetters(requestedLetters);           // SYNC — rwx mode only (§23.9): attenuate a child's letters, never wider than this gate's own grant
+await gate.add(entries);                          // rwx mode only (§23.21): runtime, tighten-only growth of rwx.tools
+gate.rwxTools();                                  // SYNC — rwx mode only (§23.21): decoupled snapshot of the current rwx.tools map, or null
+await gate.audit.readAll();                       // public, documented: read this gate's own audit log back (see §23.21 above)
 await gate.haltContext();                         // deterministic stats over audit log
 ```
 
