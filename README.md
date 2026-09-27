@@ -29,7 +29,7 @@
 You scope that gate **one of two mutually exclusive ways**:
 
 - **`tools.allowlist`** (+ `bash`/`fs`/`net`) — a closed allowlist naming exactly what's reachable. Simplest, built for one agent.
-- **`rwx` letters** — tag every tool `r` (read), `w` (write, undoable), or `x` (can't-be-undone), borrowed straight from Unix `chmod`. Built for a *fleet* of agents: a human reviews by scanning for `x` instead of reading N separate allowlists. See [rwx + rwxmap](#rwx-and-rwxmap) below.
+- **`rwx` letters** — tag every tool `r` (read — changes nothing), `w` (write — can be set back), or `x` (execute — can't be undone), borrowed straight from Unix `chmod`. Built for a *fleet* of agents: a human reviews by scanning for `x` instead of reading N separate allowlists. See [rwx + rwxmap](#rwx-and-rwxmap) below.
 
 Both are **Axis A** — gate the action before it runs. **Axis B** (opt-in, either mode) reconciles what came back after — see [Before and after](#before-and-after-axis-a-and-axis-b).
 
@@ -83,7 +83,15 @@ Full per-primitive reference lives in the **[Usage Guide](docs/product/usage-gui
 
 ## rwx and rwxmap
 
-Tag every tool and bash command once with a letter (`r` read, `w` write-and-undoable, `x` cannot-be-undone), give each agent a three-letter ceiling, and a human reviews the fleet by scanning for `x` instead of reading per-agent allowlists:
+Borrowed from Unix file permissions (`chmod`). Tag every tool and bash command once with **one** letter:
+
+| Letter | Means | Examples |
+|---|---|---|
+| `r` — read | Looks, changes nothing | `read`, `git status`, a search, an HTTP GET |
+| `w` — write | Changes something, but a later write can set it back | `write` a file, `git commit`, update a record |
+| `x` — execute | Cannot be undone — **unsure? tag it `x`** | `deploy`, `git push`, send an email, make a payment |
+
+Then give each agent a three-letter ceiling, read like `chmod`: a dash means "not allowed". `"r--"` = read only, `"rw-"` = read + write, `"rwx"` = everything. An agent can run a tool only if its ceiling holds that tool's letter. A human reviews the whole fleet by scanning for `x` instead of reading per-agent allowlists:
 
 ```js
 const gate = new Gate({
