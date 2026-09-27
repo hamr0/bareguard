@@ -38,6 +38,13 @@ const EXCLUDED = new Set([
   // It belongs inside the `fails` line of whatever throws it, not beside the
   // primitives as a thing to reach for. (Same policy bare-agent uses.)
   "BudgetUnavailableError",
+  // Pure orchestration over the existing gate.add() primitive (§23.21) — it
+  // makes no new admission decision of its own (each gate's own add() still
+  // decides everything), so it does not carry its own @when the way Gate's
+  // constructor does. Same policy as Gate's other convenience methods
+  // (check/record/run/add itself), which are documented as part of the one
+  // Gate primitive rather than separately manifested.
+  "addToGates",
 ]);
 
 async function allExports() {

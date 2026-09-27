@@ -523,7 +523,19 @@ export class Gate {
       // the backstop is explicitly disabled with no other secrets config.
       redact: makeRedactor(config.secrets),
     });
-
+    // `gate.audit` (an `Audit` instance) and `gate.audit.readAll()` are the
+    // blessed, documented public path for a caller that needs to read its
+    // own audit log back programmatically — e.g. the §23.21 replay contract
+    // ("every allow line traces to the tools map at that log position"),
+    // which cannot be satisfied any other way in fileless mode. This was a
+    // real documentation gap the rwx-e2e bench flagged (harness-code-mode/
+    // rwx-e2e.md, "things that felt wrong" #2): the property was always
+    // public and reachable, just never stated as stable surface anywhere.
+    // `Audit` itself is deliberately NOT a top-level `bareguard` export (and
+    // `readAll` carries no `@when` primitives.json tag) — it is a plain
+    // instance method, the same documentation shape `check()`/`record()`/
+    // `add()` already have on this class, not a standalone primitive. See
+    // README.md's rwx section and bareguard.context.md for the full contract.
     const sharedFile = config.budget?.sharedFile ?? process.env.BAREGUARD_BUDGET_FILE ?? null;
     this.budget = new Budget({ ...config.budget, sharedFile });
     this.limits = new Limits({ ...config.limits, startingDepth: this.spawnDepth });
@@ -1339,6 +1351,38 @@ export class Gate {
   }
 
   /**
+   * §23.21 read accessor — a DECOUPLED deep-copy snapshot of this gate's
+   * current `rwx.tools` map. Closes the gap the rwx-e2e bench flagged
+   * (harness-code-mode/rwx-e2e.md, "things that felt wrong" #1): `add()` is
+   * the only *write* path onto the tools map; before this there was no
+   * corresponding *read* path other than reaching into `gate.cfg.rwx.tools`
+   * directly — undocumented internal state, not public surface.
+   *
+   * The copy is a JSON round-trip (the same treatment {@link deepCopyRwx}
+   * gives the whole `rwx` config at construct time, scoped here to just
+   * `tools`), so mutating the returned object — at any depth — can never
+   * affect this gate's live state or any future `check()`/`add()` decision.
+   * Exposes ONLY the tools map: `bash`, `agents`, the agent's own grant, and
+   * every other `cfg` field stay unreachable through this method.
+   * @returns {Object<string, (string|{letter:string, marker:(string|null)})>|null}
+   *   a decoupled deep copy of `rwx.tools`, or `null` when this gate has no
+   *   `rwx` config at all (not in rwx mode) — the documented sentinel for
+   *   "there is no tools map to read."
+   * @fails Never throws. `rwx.tools` is already construct-time-validated as
+   *   JSON-shaped by {@link assertRwxConfig} (via {@link deepCopyRwx}), so the
+   *   round-trip below cannot fail in practice; the catch is defensive only.
+   */
+  rwxTools() {
+    if (this.cfg.rwx == null) return null;
+    const toolsMap = isPlainObject(this.cfg.rwx.tools) ? this.cfg.rwx.tools : {};
+    try {
+      return JSON.parse(JSON.stringify(toolsMap), (k, v) => (k === "__proto__" ? undefined : v));
+    } catch {
+      return {};
+    }
+  }
+
+  /**
    * §23.21 — runtime, tighten-only growth of the rwx tools map, for
    * spec-less sites a harness meets mid-run that no operator committed or
    * reviewed. Callable from harness code only — the agent only ever sends
@@ -1640,4 +1684,137 @@ export class Gate {
     if (r) return this.budget.resourceCaps[r] ?? null;
     return null;
   }
+}
+
+/**
+ * A short, non-secret identity string for a `Gate` instance, used only to
+ * name which gate failed in {@link addToGates}'s aggregate error/summary —
+ * never used for anything decision-relevant. Prefers the rwx agent name
+ * (the human-meaningful identity in fleet scenarios); falls back to the
+ * gate's `runId` when rwx isn't configured or the agent name is unreadable.
+ * Never throws.
+ * @param {Gate} gate
+ * @returns {string}
+ */
+function gateIdentity(gate) {
+  try {
+    const agent = gate?.cfg?.rwx?.agent;
+    if (typeof agent === "string" && agent) return agent;
+    return typeof gate?.runId === "string" ? gate.runId : "(unidentified gate)";
+  } catch {
+    return "(unidentified gate)";
+  }
+}
+
+/**
+ * §23.21 fleet helper — apply ONE learned rwx entry batch to N gates in a
+ * single call, instead of a harness fanning `gate.add(entries)` out by hand
+ * (the rwx-e2e bench's own "things that felt wrong" finding #3: one `Gate`
+ * per agent identity means a harness that learns something about a shared
+ * site has to remember to add it to every gate in the fleet itself, with no
+ * built-in way to do that in one call).
+ *
+ * Pure orchestration over the existing `gate.add()` primitive — it makes no
+ * new admission decision of its own, so it is not itself tagged as a
+ * primitive in `primitives.json` (each gate's own `add()` is what decides;
+ * this only fans the SAME already-validated snapshot out to every gate and
+ * collects results).
+ *
+ * **NOT all-or-nothing.** Each gate is fully independent: it gets its own
+ * `add(entries)` call, so it keeps its own lock, tighten-only semantics, cap
+ * enforcement, and audit lines. A gate that rejects (e.g. the batch would
+ * loosen an already-stricter tighten-only entry) simply stays at its
+ * stricter existing state — fail-closed and correct, not a bug to work
+ * around. Every gate is attempted even if an earlier one throws — this never
+ * short-circuits on the first failure.
+ *
+ * `entries` is read EXACTLY ONCE, up front, via the same own-props-only,
+ * hostile-getter-safe copy `gate.add()` itself uses (no TOCTOU where a
+ * mutating getter could hand different gates different values) — the
+ * identical resulting snapshot object is then passed to every gate's own
+ * `add()` call, so no gate ever re-reads the caller's raw `entries`.
+ * @param {Gate[]} gates the fleet — 1..n distinct `Gate` instances
+ * @param {Object<string, (string|{letter:string, marker?:string})>} entries
+ *   the same shape `gate.add()` accepts — read once, snapshotted, and
+ *   applied identically to every gate
+ * @returns {Promise<Array<{gate:string, ok:true}>>} one entry per gate, in
+ *   `gates` order, when EVERY gate's `add()` succeeded
+ * @throws {AggregateError} when `gates` is not a non-empty array of distinct
+ *   `Gate` instances, or `entries` is unreadable/malformed (thrown
+ *   synchronously, before any gate is attempted) — or, after every gate has
+ *   been attempted, when one or more rejected. The thrown `AggregateError`'s
+ *   `.errors` holds each failing gate's own thrown `Error` (message intact,
+ *   e.g. a tighten-only violation or "gate has been terminated"); its
+ *   top-level `.message` and its own `.failures` array
+ *   (`{gate, message}[]`) both name which gate(s) failed and why. A failed
+ *   gate's own rwx state is left exactly as `add()` itself leaves it on
+ *   rejection: unchanged.
+ */
+export async function addToGates(gates, entries) {
+  if (!Array.isArray(gates) || gates.length === 0) {
+    throw new AggregateError([], "addToGates: gates must be a non-empty array of Gate instances");
+  }
+  const seen = new Set();
+  for (const g of gates) {
+    if (!(g instanceof Gate)) {
+      throw new AggregateError([], "addToGates: every element of gates must be a Gate instance");
+    }
+    // Conservative: reject duplicate gate instances outright rather than
+    // silently double-adding to the same gate — a caller passing the same
+    // gate twice is almost certainly a bug (an accidental fleet-building
+    // mistake), and double-adding silently is a far more surprising failure
+    // mode than a loud, synchronous rejection before anything is attempted.
+    if (seen.has(g)) {
+      throw new AggregateError([], "addToGates: gates must not contain the same Gate instance twice");
+    }
+    seen.add(g);
+  }
+
+  // Read `entries` EXACTLY ONCE, same idiom as safeAction()/gate.add()'s own
+  // `_addOnce` — a plain-object check, then an own-props-only copy that reads
+  // every value exactly once (no TOCTOU between what one gate sees and what
+  // the next gate sees from a hostile/mutating getter).
+  let entriesUsable;
+  try { entriesUsable = isPlainObject(entries) && Object.keys(entries).length > 0; }
+  catch { entriesUsable = false; }
+  if (!entriesUsable) {
+    throw new AggregateError(
+      [],
+      "addToGates: entries must be a non-empty plain object { key: letter | {letter,marker} }",
+    );
+  }
+  let snapshot;
+  try { snapshot = copyOwnSafely(entries); }
+  catch {
+    throw new AggregateError([], "addToGates: entries could not be read");
+  }
+
+  // Attempt EVERY gate, even if an earlier one throws — no short-circuiting.
+  // The SAME snapshot object (not the caller's raw `entries`) is handed to
+  // every gate's own add(), which does its own full validation/audit/mutate
+  // independently.
+  const results = new Array(gates.length);
+  const failures = [];
+  await Promise.all(gates.map(async (gate, i) => {
+    const identity = gateIdentity(gate);
+    try {
+      await gate.add(snapshot);
+      results[i] = { gate: identity, ok: true };
+    } catch (err) {
+      results[i] = { gate: identity, ok: false, error: err.message };
+      failures.push({ gate: identity, message: err.message, error: err });
+    }
+  }));
+
+  if (failures.length) {
+    const message =
+      `addToGates: ${failures.length}/${gates.length} gate(s) rejected: ` +
+      failures.map((f) => `${f.gate}: ${f.message}`).join("; ");
+    const agg = /** @type {AggregateError & {failures: Array<{gate:string,message:string}>}} */ (
+      new AggregateError(failures.map((f) => f.error), message)
+    );
+    agg.failures = failures.map((f) => ({ gate: f.gate, message: f.message }));
+    throw agg;
+  }
+  return results;
 }
