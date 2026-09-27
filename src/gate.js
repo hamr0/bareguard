@@ -108,31 +108,62 @@ function copyOwnSafely(src) {
  * because it never calls `JSON.stringify` on the untrusted value — one key
  * at a time inside its own try/catch, so a single throwing getter can only
  * sink that one field rather than the whole line (same posture as
- * {@link copyOwnSafely}). A `BigInt` is rendered to its string form (JSON
- * has no BigInt literal). A repeated object reference (a cycle, or two
- * fields sharing one sub-object) is cut at the SECOND visit and replaced
- * with a marker, via a `seen` WeakSet threaded through the recursion.
- * `__proto__` is dropped as an own key at every depth — the same treatment
- * {@link boundMeta}/{@link deepCopyRwx} give reply-derived/operator-authored
- * data respectively.
+ * {@link copyOwnSafely}). It reproduces `JSON.stringify`'s own semantics for
+ * everything else, so the fallback's output is the SAME shape the JSON fast
+ * path would have produced had it not thrown: a `BigInt` is rendered to its
+ * string form (JSON has no BigInt literal); a function, `Symbol`, or
+ * `undefined` value is OMITTED as an object property and rendered as `null`
+ * inside an array — never passed through by reference, so the clone can
+ * never hand a caller something that would let `JSON.stringify` on the
+ * returned line invoke caller code. Only a TRUE cycle — an object that is
+ * its own ancestor on the current recursion path — is cut and replaced with
+ * `"[Circular]"`; an object referenced twice in non-ancestor positions (e.g.
+ * two fields sharing one sub-object) is cloned independently both times, via
+ * an `ancestors` set that's added-to before recursing into a value and
+ * removed from (in a `finally`, so a throw can't leave it stale) once that
+ * value's subtree is done. A chain nested past {@link MAX_CLONE_DEPTH} is cut
+ * and replaced with `"[MaxDepthExceeded]"` rather than risk a stack-
+ * overflowing `RangeError` escaping the recursion. `__proto__` is dropped as
+ * an own key at every depth — the same treatment {@link boundMeta}/
+ * {@link deepCopyRwx} give reply-derived/operator-authored data respectively.
  * @param {*} v value to clone
- * @param {WeakSet<object>} [seen] cycle guard; callers omit it
+ * @param {Set<object>} [ancestors] the current recursion path; callers omit it
+ * @param {number} [depth] current recursion depth; callers omit it
  * @returns {*} a fully decoupled clone; never throws
  */
-function safeDeepClone(v, seen = new WeakSet()) {
+const MAX_CLONE_DEPTH = 2000;
+function safeDeepClone(v, ancestors = new Set(), depth = 0) {
   if (v === null || typeof v !== "object") {
-    return typeof v === "bigint" ? v.toString() : v;
+    if (typeof v === "bigint") return v.toString();
+    // JSON semantics: a function/symbol/undefined VALUE has no JSON form.
+    // The caller (object-key vs array-index loop below) decides whether
+    // that means "omit the key" or "null in this slot".
+    if (typeof v === "function" || typeof v === "symbol" || typeof v === "undefined") return undefined;
+    return v;
   }
-  if (seen.has(v)) return "[Circular]";
-  seen.add(v);
-  let keys;
-  try { keys = Object.keys(v); } catch { return UNREADABLE; }
-  const out = Array.isArray(v) ? [] : {};
-  for (const k of keys) {
-    if (k === "__proto__") continue;
-    try { out[k] = safeDeepClone(v[k], seen); } catch { out[k] = UNREADABLE; }
+  if (depth > MAX_CLONE_DEPTH) return "[MaxDepthExceeded]";
+  if (ancestors.has(v)) return "[Circular]";
+  ancestors.add(v);
+  try {
+    let keys;
+    try { keys = Object.keys(v); } catch { return UNREADABLE; }
+    let isArr;
+    try { isArr = Array.isArray(v); } catch { isArr = false; }
+    const out = isArr ? [] : {};
+    for (const k of keys) {
+      if (k === "__proto__") continue;
+      let cloned;
+      try { cloned = safeDeepClone(v[k], ancestors, depth + 1); } catch { cloned = UNREADABLE; }
+      if (isArr) {
+        out[k] = cloned === undefined ? null : cloned;
+      } else if (cloned !== undefined) {
+        out[k] = cloned;
+      }
+    }
+    return out;
+  } finally {
+    ancestors.delete(v);
   }
-  return out;
 }
 
 function safeAction(action) {
@@ -1479,15 +1510,20 @@ export class Gate {
    * GATE did, and anything with gate access could always also write to it
    * directly.
    * @returns {Promise<object[]>} a decoupled copy of every audit line
-   * @fails Never throws in practice. A line containing something that
-   *   cannot round-trip through JSON (this can only happen in fileless
-   *   mode — `Audit.emit()` in file mode already degrades an unserializable
-   *   payload before persisting, so a file-mode read is always JSON-shaped)
-   *   falls back to {@link safeDeepClone}, a per-line deep, decoupled clone
-   *   that tolerates a BigInt, a circular reference, or a throwing getter/
-   *   `toJSON` — NEVER a shared reference into the live line — so one bad
-   *   line can never sink an otherwise-good read, and mutating what comes
-   *   back can never reach the gate's live audit state either way.
+   * @fails Never throws. A line containing something that cannot round-trip
+   *   through JSON (this can only happen in fileless mode — `Audit.emit()`
+   *   in file mode already degrades an unserializable payload before
+   *   persisting, so a file-mode read is always JSON-shaped) falls back to
+   *   {@link safeDeepClone}, a per-line deep, decoupled clone that tolerates
+   *   a BigInt, a function/symbol/`undefined` value, a true cycle, or a
+   *   throwing getter/`toJSON` — NEVER a shared reference into the live
+   *   line and never a live function reference either — so one bad line can
+   *   never sink an otherwise-good read, and mutating what comes back can
+   *   never reach the gate's live audit state either way. `safeDeepClone`
+   *   itself is called inside its own try/catch here too: a pathologically
+   *   deep chain is bounded by {@link MAX_CLONE_DEPTH} internally, but the
+   *   wrapping catch is defensive — a `RangeError` at this top-level call
+   *   site would otherwise escape `lines.map` and this async function.
    */
   async readAudit() {
     if (!this._initialized) await this.init();
@@ -1499,7 +1535,11 @@ export class Gate {
         try {
           return JSON.parse(JSON.stringify(line), (k, v) => (k === "__proto__" ? undefined : v));
         } catch {
-          return safeDeepClone(line);
+          try {
+            return safeDeepClone(line);
+          } catch {
+            return UNREADABLE;
+          }
         }
       });
     }

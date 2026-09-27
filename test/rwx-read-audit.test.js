@@ -238,6 +238,111 @@ test("readAudit: a fileless line whose action holds a circular reference is deco
   assert.equal(liveAgainDenyLine.action.type, "noop", "the live log must be untouched by the mutation");
 });
 
+test("readAudit: a fileless line whose action holds a throwing toJSON never leaks the function, and the result is JSON-safe", async () => {
+  // A throwing `toJSON` is what forces BOTH the whole-array AND the
+  // per-line JSON round-trips to fail, landing on safeDeepClone. The old
+  // `{ ...line }`-descendant fallback (before ancestor-path cycle tracking
+  // and JSON-value semantics were added) walked own keys but still handed
+  // back the live `toJSON` FUNCTION by reference — so `JSON.stringify()` on
+  // the returned line would invoke it and throw the caller's own error.
+  const gate = new Gate({
+    audit: { path: null },
+    secrets: { redactKeys: false },
+    rwx: { agent: "fixer", agents: { fixer: "rw-" }, tools: { read: "r", write: "w" } },
+    humanChannel: async () => ({ decision: "deny" }),
+  });
+  await gate.init();
+  const decision = await gate.check({
+    type: "noop",
+    big: 5n,
+    h: { real: "v", toJSON() { throw new Error("boom"); } },
+    args: {},
+  });
+  assert.equal(decision.outcome, "deny");
+
+  const lines = await gate.readAudit();
+  const L = lines.find((l) => l.action && "big" in l.action);
+  assert.ok(L, "the deny line must be present in the read-back log");
+  assert.equal(typeof L.action.h.toJSON, "undefined", "the toJSON FUNCTION must never survive into the clone");
+  assert.equal(L.action.h.real, "v", "sibling fields must survive untouched");
+  assert.doesNotThrow(() => JSON.stringify(L), "the returned line must never re-invoke a caller's toJSON");
+
+  // A function inside an ARRAY becomes null (JSON semantics), not omitted
+  // and not passed through by reference.
+  const gate2 = new Gate({
+    audit: { path: null },
+    secrets: { redactKeys: false },
+    rwx: { agent: "fixer", agents: { fixer: "rw-" }, tools: { read: "r" } },
+    humanChannel: async () => ({ decision: "deny" }),
+  });
+  await gate2.init();
+  await gate2.check({ type: "noop", big: 5n, arr: [1, function bad() {}, 3], args: {} });
+  const lines2 = await gate2.readAudit();
+  const L2 = lines2.find((l) => l.action && "big" in l.action);
+  assert.deepEqual(L2.action.arr, [1, null, 3], "a function element must become null, JSON.stringify style");
+});
+
+test("readAudit: two fields sharing one non-circular sub-object are cloned independently, not cut as a cycle", async () => {
+  const gate = new Gate({
+    audit: { path: null },
+    secrets: { redactKeys: false },
+    rwx: { agent: "fixer", agents: { fixer: "rw-" }, tools: { read: "r" } },
+    humanChannel: async () => ({ decision: "deny" }),
+  });
+  await gate.init();
+  const shared = { nested: { x: 1 } };
+  await gate.check({ type: "noop", big: 5n, a: shared, b: shared, args: {} });
+
+  const lines = await gate.readAudit();
+  const L = lines.find((l) => l.action && "big" in l.action);
+  assert.notEqual(L.action.a, "[Circular]", "a DAG (non-ancestor repeat) must not be treated as a cycle");
+  assert.notEqual(L.action.b, "[Circular]");
+  assert.deepEqual(L.action.a, shared, "the copy must be a faithful, independent clone");
+  assert.deepEqual(L.action.b, shared);
+  assert.notEqual(L.action.a, L.action.b, "the two fields must be cloned as SEPARATE objects, not the same reference");
+  assert.notEqual(L.action.a, shared, "neither copy may be the live original");
+  assert.notEqual(L.action.b, shared);
+});
+
+test("readAudit: a true self-cycle still becomes the [Circular] marker", async () => {
+  const gate = new Gate({
+    audit: { path: null },
+    secrets: { redactKeys: false },
+    rwx: { agent: "fixer", agents: { fixer: "rw-" }, tools: { read: "r" } },
+    humanChannel: async () => ({ decision: "deny" }),
+  });
+  await gate.init();
+  const c = { type: "noop", big: 5n, args: {} };
+  c.self = c;
+  await gate.check(c);
+
+  const lines = await gate.readAudit();
+  const L = lines.find((l) => l.action && "big" in l.action);
+  assert.equal(L.action.self.self, "[Circular]", "a genuine ancestor cycle must still be cut with the marker");
+});
+
+test("readAudit: a very deep chain resolves without throwing", async () => {
+  const gate = new Gate({
+    audit: { path: null },
+    secrets: { redactKeys: false },
+    rwx: { agent: "fixer", agents: { fixer: "rw-" }, tools: { read: "r" } },
+    humanChannel: async () => ({ decision: "deny" }),
+  });
+  await gate.init();
+  let deep = {};
+  let cur = deep;
+  for (let i = 0; i < 100000; i++) {
+    cur.next = {};
+    cur = cur.next;
+  }
+  await gate.check({ type: "noop", big: 5n, deep, args: {} });
+
+  await assert.doesNotReject(async () => {
+    const lines = await gate.readAudit();
+    assert.ok(lines.length >= 1);
+  }, "readAudit() must never throw, even on a chain deep enough to overflow the stack");
+});
+
 test("readAudit: is a plain method with no emit-like write surface hanging off it", async () => {
   const gate = gateFor();
   await gate.init();
