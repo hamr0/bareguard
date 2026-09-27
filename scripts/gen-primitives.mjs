@@ -79,6 +79,21 @@ function symbolAfter(src, afterIdx) {
   // object of patterns, a frozen table) is a VALUE. Rendering a value as
   // `NAME()` would invent an API that does not exist, so it gets its own kind.
   if (cst) return { name: cst[1], kind: /^(?:async\s+)?(?:function\b|\(|[A-Za-z0-9_$]+\s*=>)/.test(cst[2]) ? 'function' : 'value' };
+  // A CLASS METHOD (e.g. `async add(entries) {` inside `export class Gate`).
+  // The bare method name (`add`) is ambiguous across classes, so a method's
+  // @when block MUST also carry an explicit `@name Gate#add`-style override —
+  // enforced the same way as any other missing-@name case would be, by the
+  // `imports.get(name)` lookup below failing for a name no barrel exports.
+  const meth = tail.match(/^\s*(?:static\s+)?(?:async\s+)?(?:\*\s*)?([A-Za-z0-9_$]+)\s*\(/);
+  if (meth && !['if', 'for', 'while', 'switch', 'catch', 'return'].includes(meth[1])) {
+    // The enclosing class carries the EXPORT — a method itself is never
+    // separately exported — so imports/`instanceof`-style usage resolve
+    // through it. Last REAL class declaration (anchored to line-start, so
+    // prose like "(same class as ...)" inside an unrelated comment can never
+    // match) before this point in the file.
+    const cm = [...src.slice(0, afterIdx).matchAll(/^\s*(?:export\s+)?class\s+([A-Za-z0-9_$]+)/gm)].pop();
+    return { name: meth[1], kind: 'method', cls: cm ? cm[1] : null };
+  }
   return null;
 }
 // A JSDoc type is written for tsc, which resolves relative paths from the
@@ -155,15 +170,22 @@ for (const rel of jsFiles) {
     const sym = symbolAfter(src, m.index + m[0].length);
     if (!sym) { problems.push(`${f}: @when block has no resolvable symbol`); continue; }
     const p = parseBlock(m[0]);
-    const name = p.primName || sym.name; // @name overrides an aliased export
+    if (sym.kind === 'method' && !p.primName) {
+      problems.push(`${sym.cls || '?'}.${sym.name}: a class-method @when block needs an explicit @name override (e.g. "@name ${sym.cls || 'Class'}#${sym.name}") — the bare method name is ambiguous across classes`);
+      continue;
+    }
+    const name = p.primName || sym.name; // @name overrides an aliased export, or names a method
     for (const req of ['when', 'fails', 'example']) if (!p[req]) problems.push(`${name}: missing @${req}`);
-    const spec = imports.get(name);
-    if (!spec) problems.push(`${name}: not found in any exports barrel (is it exported?)`);
+    // A method is never itself exported — its ENCLOSING CLASS is what a
+    // caller imports; the method is reached off an instance (`gate.add(...)`).
+    const specKey = sym.kind === 'method' ? sym.cls : name;
+    const spec = imports.get(specKey);
+    if (!spec) problems.push(`${name}: not found in any exports barrel (is ${specKey} exported?)`);
     out.push({
       name,
       category: p.category || inferCategory(rel),
       when: p.when,
-      import: `import { ${name} } from '${spec || pkg.name}'`,
+      import: `import { ${specKey} } from '${spec || pkg.name}'`,
       signature: signature({ ...sym, name }, p),
       fails: p.fails,
       example: p.example,

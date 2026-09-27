@@ -2,6 +2,15 @@
   "package": "bareguard",
   "primitives": [
     {
+      "name": "addToGates",
+      "category": "rwx",
+      "when": "Reach for this when a harness manages a FLEET of gates (one per",
+      "import": "import { addToGates } from 'bareguard'",
+      "signature": "addToGates(gates: Gate[], entries: Object<string, (string|{letter:string, marker?:string})>) => Promise<Array<{index:number, gate:string, ok:true}>>",
+      "fails": "Throws an `AggregateError` synchronously, before any gate is",
+      "example": "import { Gate, addToGates } from \"bareguard\";\nconst gates = [\"searcher\", \"booker\"].map((agent) => new Gate({\n  audit: { path: null },\n  rwx: { agent, agents: { searcher: \"r--\", booker: \"rw-\" }, tools: {} },\n  humanChannel: async () => ({ decision: \"deny\" }),\n}));\nawait Promise.all(gates.map((g) => g.init()));\nconst results = await addToGates(gates, { search: \"r\" });\nresults.every((r) => r.ok); // true — both gates now admit \"search\""
+    },
+    {
       "name": "classifyCommand",
       "category": "classify",
       "when": "Reach for this to tier a shell command's blast radius BEFORE running it — e.g. to pick how much ceremony your human channel demands. Use it standalone when you want the tiering without a Gate; inside a Gate, set `bash: { classify: true }` instead and the gate calls it for you.",
@@ -36,6 +45,33 @@
       "signature": "new Gate(config?: GateConfig)",
       "fails": "Throws at CONSTRUCTION on malformed config — a section that is not a plain object, or an array-shaped key (`tools.allowlist`, `bash.denyPatterns`, …) that is not an array. A config typo fails CLOSED rather than silently gating nothing. After construction a policy stop is a returned `outcome`, never a throw; `check()` resolves to a terminal allow/deny and never returns `askHuman` (it resolves that internally through `humanChannel`).",
       "example": "import { Gate } from \"bareguard\";\nconst gate = new Gate({\n  tools:  { allowlist: [\"bash\", \"read\"] },\n  bash:   { allow: [\"git\", \"ls\"] },\n  budget: { maxCostUsd: 5.00 },\n  humanChannel: async (event) => ({ decision: \"allow\" }),\n});\nawait gate.init();\nconst action = { type: \"bash\", args: { command: \"git status\" } };\nconst decision = await gate.check(action);\nif (decision.outcome === \"allow\") await gate.record(action, { costUsd: 0.01 });"
+    },
+    {
+      "name": "Gate#add",
+      "category": "rwx",
+      "when": "Reach for this at RUNTIME when your harness meets a spec-less site",
+      "import": "import { Gate } from 'bareguard'",
+      "signature": "gate.add(entries) => Promise<void>",
+      "fails": "Throws (after emitting `rwx.add_rejected`) when: this gate has",
+      "example": "import { Gate } from \"bareguard\";\nconst gate = new Gate({\n  audit: { path: null },\n  rwx: { agent: \"fixer\", agents: { fixer: \"rwx\" }, tools: { read: \"r\" } },\n  humanChannel: async () => ({ decision: \"deny\" }),\n});\nawait gate.init();\nawait gate.add({ deploy: \"x\" }); // new key, mid-run — tighten-only from here\nconst decision = await gate.check({ type: \"deploy\", args: {} });\ndecision.outcome; // \"allow\""
+    },
+    {
+      "name": "Gate#readAudit",
+      "category": "audit",
+      "when": "Reach for this to read this gate's own audit log back",
+      "import": "import { Gate } from 'bareguard'",
+      "signature": "gate.readAudit() => Promise<object[]>",
+      "fails": "Never throws. A line containing something that cannot round-trip",
+      "example": "import { Gate } from \"bareguard\";\nconst gate = new Gate({\n  audit: { path: null },\n  tools: { allowlist: [\"read\"] },\n  humanChannel: async () => ({ decision: \"deny\" }),\n});\nawait gate.init();\nawait gate.check({ type: \"read\", args: {} });\nconst lines = await gate.readAudit();\nlines.length > 0; // true"
+    },
+    {
+      "name": "Gate#rwxTools",
+      "category": "rwx",
+      "when": "Reach for this to read back this gate's own rwx tools map — e.g.",
+      "import": "import { Gate } from 'bareguard'",
+      "signature": "gate.rwxTools() => Object<string, string|{letter:string, marker:(string|null)}>|null",
+      "fails": "Never throws. `rwx.tools` is already construct-time-validated as",
+      "example": "import { Gate } from \"bareguard\";\nconst gate = new Gate({\n  audit: { path: null },\n  rwx: { agent: \"fixer\", agents: { fixer: \"rwx\" }, tools: { read: \"r\", write: \"w\" } },\n  humanChannel: async () => ({ decision: \"deny\" }),\n});\nawait gate.init();\ngate.rwxTools(); // { read: \"r\", write: \"w\" } — a decoupled copy"
     },
     {
       "name": "globToRegex",

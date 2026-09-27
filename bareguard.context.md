@@ -13,11 +13,15 @@ thirteen primitives (bash, fs, net, budget, content, flags, secrets, audit,
 limits, tools, defer-rate, spawn-rate, approval). Single audit log per
 agent family. One `humanChannel` callback for all human escalations.
 
-**rwx (PRD §23)** is not a fourteenth primitive — `primitives.json`/
-`check:primitives` still count 13, because a primitive is any export whose
-JSDoc carries `@when`, and nothing in `src/primitives/rwx.js` is exported
-publicly or tagged `@when`. rwx is `Gate` **config wiring**: a second,
-mutually exclusive mode for the step-5 slot `tools.allowlist` occupies today.
+**rwx (PRD §23)** is not a fourteenth primitive — nothing in
+`src/primitives/rwx.js` is exported publicly or tagged `@when`. rwx is
+`Gate` **config wiring**: a second, mutually exclusive mode for the step-5
+slot `tools.allowlist` occupies today. `primitives.json`/`check:primitives`
+count 17 entries as of 0.19.0: the 13 domain primitives above, plus
+`addToGates()` and three of `Gate`'s own methods (`Gate#add`,
+`Gate#rwxTools`, `Gate#readAudit`) — harness-only rwx/audit verbs, tagged
+because the manifest is read by the AI **building** a harness, not the
+running agent (which never holds a `Gate` reference either way).
 See [rwx mode](#rwx-mode-operator-tagged-capability-letters-23) below.
 
 ```
