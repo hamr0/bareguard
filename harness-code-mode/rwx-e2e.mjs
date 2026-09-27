@@ -41,10 +41,17 @@ const { operationsFrom, exportGate, classifyRow } = rwxmap;
 // trailing slash dropped except "/", id segments -> "{id}").
 const { requestKey } = keyPoc;
 
-const { Gate } = await import("../src/index.js");
-// Not part of the public API (src/index.js does not re-export it) — read
-// directly from the primitive module for the replay's own re-check. This is
-// an import, not an edit; src/ is untouched.
+// `gate.rwxTools()` and `addToGates()` (both PRD §23.21, added this session,
+// closing this bench's own findings #1/#3) replace the two internal-reach-ins
+// this bench used to do: `gate.cfg.rwx.tools` direct reads (step 9) and a
+// hand-rolled fan-out loop over both gates' `add()` calls (ensureSite below).
+// `gate.audit.readAll()` (used by the replay below) stays as-is: it was
+// always public and reachable, just undocumented as stable surface (finding
+// #2) — now documented in README.md/bareguard.context.md, no code change.
+const { Gate, addToGates } = await import("../src/index.js");
+// rwxCheck is still not part of the public API (src/index.js does not
+// re-export it) — read directly from the primitive module for the replay's
+// own re-check. This is an import, not an edit; src/ is untouched.
 const { rwxCheck } = await import("../src/primitives/rwx.js");
 
 /**
@@ -244,17 +251,22 @@ class Harness {
         collisions,
       });
       // §23.21 step 2: spec found -> classify every operation -> add(all).
-      // Applied to BOTH agents' gates: the tools map is a shared fact about
-      // the site, independent of which agent later acts on it — only the
-      // agent's own letters (per-gate, rwx.agent) decide what that agent
-      // may then do with the same entry.
-      for (const [name, gate] of Object.entries(this.gates)) {
-        try {
-          await gate.add(tools);
-          this.log(`  [add] ${name} gate: added ${Object.keys(tools).length} ${vendor} keys from spec`);
-        } catch (err) {
-          this.log(`  [add] ${name} gate: REJECTED batch for ${vendor} spec: ${err.message}`);
-        }
+      // Applied to BOTH agents' gates in ONE call via addToGates() — the
+      // tools map is a shared fact about the site, independent of which
+      // agent later acts on it — only the agent's own letters (per-gate,
+      // rwx.agent) decide what that agent may then do with the same entry.
+      // This replaces this bench's own former hand-rolled fan-out loop
+      // (findings.md #3): each gate is still fully independent (its own
+      // lock/tighten-only/cap/audit), addToGates() just makes the "add to
+      // every gate in the fleet" call a single call instead of a manual loop.
+      try {
+        const summary = await addToGates(Object.values(this.gates), tools);
+        this.log(`  [add] fleet: added ${Object.keys(tools).length} ${vendor} keys from spec to ${summary.length} gate(s)`);
+      } catch (err) {
+        // addToGates is NOT all-or-nothing: this only throws when at least
+        // one gate rejected, and err.failures names exactly which — the
+        // OTHER gates in the fleet still landed their own copy of the batch.
+        this.log(`  [add] fleet: ${err.message}`);
       }
       const entry = { hasSpec: true, vendor };
       this.siteCache.set(origin, entry);
@@ -515,9 +527,13 @@ async function runScenario(runLabel) {
     } catch (err) {
       rejected = err.message;
     }
-    const stillStrict = searcher.cfg.rwx.tools["airline.testDeprecatedRead"] === "w";
+    // gate.rwxTools() (new this session, §23.21) replaces this bench's former
+    // direct read of `searcher.cfg.rwx.tools` — a decoupled snapshot of the
+    // live map via the public accessor, instead of internal `cfg` state.
+    const toolsNow = searcher.rwxTools();
+    const stillStrict = toolsNow["airline.testDeprecatedRead"] === "w";
     const pass = rejected != null && stillStrict;
-    record(9, "searcher", "airline.testDeprecatedRead", "(no live request — config-only test)", "throw + stays \"w\"", `${rejected ? "threw: " + rejected : "did NOT throw"}; entry now=${JSON.stringify(searcher.cfg.rwx.tools["airline.testDeprecatedRead"])}`, pass);
+    record(9, "searcher", "airline.testDeprecatedRead", "(no live request — config-only test)", "throw + stays \"w\"", `${rejected ? "threw: " + rejected : "did NOT throw"}; entry now=${JSON.stringify(toolsNow["airline.testDeprecatedRead"])}`, pass);
   }
 
   // --- Step 11: searcher POST site-C RPC path -> allow, real 200 fetch ----
