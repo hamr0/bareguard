@@ -1573,18 +1573,49 @@ wrong" findings against the shipped `add()` (harness-code-mode/rwx-e2e.md):**
   itself manifested in `primitives.json`.
 
 The bench's separate finding #2 (`gate.audit.readAll()` "not part of the exported public API
-... reachable only via `gate.audit`, ... not documented as a stable surface") turned out to be
-a documentation gap, not a missing capability: `gate.audit` is, and always was, a public
-instance property, and `Audit`/`readAll` were never candidates for a `primitives.json` entry
-either way (they are a class instance method, the same shape `check()`/`record()`/`add()`
-already have — methods don't get individual `@when` tags in this codebase; only `Gate`'s
-constructor does, for the whole class). Closed by documenting `gate.audit.readAll()` — and
-`gate.audit.entries` for fileless mode — as the blessed path for a caller needing to read its
-own audit log back programmatically (the exact need behind the §23.21 replay contract). No
-code changed for this one.
+... reachable only via `gate.audit`, ... not documented as a stable surface") was FIRST closed,
+in the same session, as a documentation-only fix: `gate.audit` is, and always was, a public
+instance property, so the fix was to document `gate.audit.readAll()` — and `gate.audit.entries`
+for fileless mode — as the blessed replay path. A later debrief on THIS project's own fix found
+that framing incomplete, not wrong about reachability: `gate.audit` is the LIVE `Audit`
+instance, and `Audit` carries a public `emit()` — any caller holding a `Gate` reference could
+already write an arbitrary line straight onto the log (e.g. a forged `rwx.added` entry that
+never went through `add()`'s own tighten-only validation), and `readAll()` would hand that line
+back indistinguishably from a real one. Blessing `gate.audit.readAll()` as THE replay path
+therefore blessed a path that could return forged data.
 
-**On ship:** `gate.add`, `gate.rwxTools`, `addToGates`, the `rwx.added` phase, the
-`rwx.add_rejected` phase, the `rwx.tightened` deny rule, and the 10,000-entry size cap all join
-the 1.0 SemVer surface (§23.17). Built this session on `main`'s `feat/rwx-add` branch; not yet
-released as a version bump (release is a separate decision, per this project's own standing
+Closed by adding **`gate.readAudit()`** — a plain instance method (the same documentation shape
+`check()`/`record()`/`add()`/`rwxTools()` already have; not a separate `primitives.json` entry)
+that returns a DECOUPLED copy of every audit line, in both file and fileless mode. This does
+NOT close the write path — `gate.audit` is unchanged, still public, still carries `emit()`, and
+code that already holds a `Gate` reference remains trusted the same way `add()` itself trusts
+its caller (the audit log records what the GATE did; it was never meant to be tamper-evident
+against code that already has gate access, only against a caller with no such access).
+`readAudit()` simply hands out no write capability of its own, so a caller that only ever calls
+it can read the log back but can never forge a line through it. `gate.audit.readAll()`
+continues to work exactly as before (additive, not a removal) but is no longer the DOCUMENTED
+path; `readAudit()` is.
+
+A related fix in the same debrief, to `addToGates` itself: it previously accepted a gate only
+via `instanceof Gate`, which fails for a genuine `Gate` instance constructed from a SECOND copy
+of `bareguard` in the same process (e.g. two dependencies of a fleet-managing app each pulling
+their own install) — wrongly rejecting a real gate, and since `addToGates` validates every
+element before touching any of them, that one unrecognized gate silently starved the WHOLE
+fleet, not just itself. Fixed by branding `Gate` with the global-registry symbol
+`Symbol.for("bareguard.Gate")` (stamped non-enumerable in the constructor) and accepting any
+object carrying that brand plus a callable `add` — `Symbol.for` resolves to the identical
+symbol across separate module copies, which is exactly the property `instanceof` lacks.
+Duplicate-instance rejection (`===`) is unaffected.
+
+A third fix, also `addToGates`: two DIFFERENT gates sharing the same rwx `agent` identity (a
+realistic fleet shape) produced a `.failures`/`.errors` report that could not tell them apart,
+and a failing call discarded every gate's individual outcome. Fixed by adding `index` (the
+gate's position in the `gates` array) to every success result and every `.failures` entry, and
+by attaching the FULL per-index `results` array — success and failure alike, same shape as the
+resolved value on full success — to the thrown `AggregateError` as `.results`.
+
+**On ship:** `gate.add`, `gate.rwxTools`, `gate.readAudit`, `addToGates`, the `rwx.added` phase,
+the `rwx.add_rejected` phase, the `rwx.tightened` deny rule, and the 10,000-entry size cap all
+join the 1.0 SemVer surface (§23.17). Built this session on `main`'s `feat/rwx-add` branch; not
+yet released as a version bump (release is a separate decision, per this project's own standing
 rule).
