@@ -612,7 +612,7 @@ test("add/check race: an UNRELATED-key add() queued during the terminal allow's 
   assert.equal(gate.cfg.rwx.tools.unrelated, "w", "the unrelated add() still lands, just after this check()'s commit");
 });
 
-test("add/check race: awaiting add() from INSIDE a locked commit's own audit sink deadlocks by design (documented, not detected/thrown — escalated, see PRD §23.21)", async () => {
+test("add/check race: awaiting add() from INSIDE a locked commit's own audit sink deadlocks by design (not detected/thrown — escalated, not yet documented in the PRD)", async () => {
   // add() acquires the SAME lock check()'s final commit is holding while it
   // writes its one audit line. If a caller's audit sink awaits add() from
   // inside that very write, add() can never acquire the lock (it's waiting

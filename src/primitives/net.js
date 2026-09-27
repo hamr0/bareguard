@@ -97,7 +97,6 @@ export function netCheck(action, cfg = {}) {
   if (typeof url !== "string") {
     return { outcome: "deny", severity: "action", rule: "net.invalidUrl", reason: `url is not a string (type ${typeof url})` };
   }
-  if (typeof url !== "string") return null;
 
   let host;
   try { host = new URL(url).hostname; }
