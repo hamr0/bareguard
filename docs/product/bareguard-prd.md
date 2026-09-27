@@ -1257,7 +1257,7 @@ release is a new minor, **0.17.0**. Once shipped, the `rwx` config keys, the
 and the audit letter all **join the 1.0 SemVer surface** (Future features / SemVer-surface
 list) alongside the rest of §19's list. Downstream: **bareagent** must pass the agent's
 **name** and the clamped letters to its children on spawn (§23.9, §23.11) — this is a bareagent
-change, not a new bareagent primitive. Planned 0.18.0 additions to this surface — `gate.add`,
+change, not a new bareagent primitive. Shipped-in-0.18.0 additions to this surface — `gate.add`,
 the `rwx.added`/`rwx.add_rejected` phases, the `rwx.tightened` deny rule, and the 10,000-entry
 size cap — are tracked separately in §23.21.
 
