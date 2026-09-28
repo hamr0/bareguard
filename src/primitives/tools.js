@@ -4,11 +4,14 @@
 //   - tools.allowlist       — step 5 (scope check); set+match allow, set+miss deny
 
 import { matchAny } from "../glob.js";
+import { resolveIdentity, resolveDenyKeys } from "./tool-identity.js";
+import { findInvalidIndex } from "./config-validate.js";
 
 /**
  * Step-1 deny: action type matches a glob in the denylist.
  * @param {object} action action being evaluated
  * @param {string} action.type tool/action type name
+ * @param {string} [action.tool] optional tool identity, distinct from `type`; a deny matches if EITHER `type` OR `tool` is on the list (adding `tool` never loosens a deny)
  * @param {object} [cfg] tools config
  * @param {string[]} [cfg.denylist] glob patterns of denied tool types
  * @returns {{outcome:string,severity:string,rule:string,reason:string}|null} deny decision, or null if no match
@@ -29,8 +32,23 @@ export function toolsDenylistCheck(action, cfg = {}) {
     };
   }
   if (list.length === 0) return null;
-  if (matchAny(action.type, list)) {
-    return { outcome: "deny", severity: "action", rule: "tools.denylist", reason: `${action.type} on denylist` };
+  // A direct call with raw config can carry a bad element (construct time
+  // would have thrown) — fail closed rather than let `matchAny` crash mid-check.
+  const badIdx = findInvalidIndex(list, "string");
+  if (badIdx !== -1) {
+    return {
+      outcome: "deny", severity: "action", rule: "tools.denylist.invalid",
+      reason: `tools.denylist[${badIdx}] is not a string (type ${typeof list[badIdx]})`,
+    };
+  }
+  // `tool` present alongside `type` widens the deny surface — matches if
+  // EITHER key hits (never loosens an existing deny).
+  const dk = resolveDenyKeys(action);
+  if (!dk.ok) return dk.decision;
+  for (const key of dk.keys) {
+    if (matchAny(key, list)) {
+      return { outcome: "deny", severity: "action", rule: "tools.denylist", reason: `${key} on denylist` };
+    }
   }
   return null;
 }
@@ -62,27 +80,39 @@ export function toolsDenyArgsCheck(action, cfg = {}) {
       reason: `tools.denyArgPatterns is not an object (type ${Array.isArray(map) ? "array" : typeof map})`,
     };
   }
-  const patterns = map[action.type];
-  if (patterns === undefined || patterns === null) return null;
-  // Present but unusable: cfg is held by reference, so a caller can swap the
-  // value out after the constructor validated it. A deny rule the gate cannot
-  // evaluate must fail CLOSED, not vanish and not throw out of check().
-  if (!Array.isArray(patterns)) {
-    return {
-      outcome: "deny", severity: "action", rule: "tools.denyArgPatterns.invalid",
-      reason: `tools.denyArgPatterns.${action.type} is not an array (type ${typeof patterns})`,
-    };
-  }
-  if (patterns.length === 0) return null;
+  // Apply patterns keyed under BOTH `type` and `tool` (union) — deny surface
+  // only ever widens when `tool` is added, same polarity as the denylist above.
+  const dk = resolveDenyKeys(action);
+  if (!dk.ok) return dk.decision;
   let argStr;
   try { argStr = JSON.stringify(action); }
   catch { return null; }
-  for (const re of patterns) {
-    if (re.test(argStr)) {
+  for (const key of dk.keys) {
+    const patterns = map[key];
+    if (patterns === undefined || patterns === null) continue;
+    // Present but unusable: cfg is held by reference, so a caller can swap the
+    // value out after the constructor validated it. A deny rule the gate cannot
+    // evaluate must fail CLOSED, not vanish and not throw out of check().
+    if (!Array.isArray(patterns)) {
       return {
-        outcome: "deny", severity: "action", rule: "tools.denyArgPatterns",
-        reason: `${action.type} args match ${re}`,
+        outcome: "deny", severity: "action", rule: "tools.denyArgPatterns.invalid",
+        reason: `tools.denyArgPatterns.${key} is not an array (type ${typeof patterns})`,
       };
+    }
+    const badIdx = findInvalidIndex(patterns, "regexp");
+    if (badIdx !== -1) {
+      return {
+        outcome: "deny", severity: "action", rule: "tools.denyArgPatterns.invalid",
+        reason: `tools.denyArgPatterns.${key}[${badIdx}] is not a RegExp (type ${typeof patterns[badIdx]})`,
+      };
+    }
+    for (const re of patterns) {
+      if (re.test(argStr)) {
+        return {
+          outcome: "deny", severity: "action", rule: "tools.denyArgPatterns",
+          reason: `${key} args match ${re}`,
+        };
+      }
     }
   }
   return null;
@@ -115,11 +145,22 @@ export function toolsAllowlistCheck(action, cfg = {}) {
       reason: `tools.allowlist is not an array (type ${typeof list})`,
     };
   }
-  if (matchAny(action.type, list)) {
+  const badIdx = findInvalidIndex(list, "string");
+  if (badIdx !== -1) {
+    return {
+      outcome: "deny", severity: "action", rule: "tools.allowlist.invalid",
+      reason: `tools.allowlist[${badIdx}] is not a string (type ${typeof list[badIdx]})`,
+    };
+  }
+  // Identity = action.tool ?? action.type (single key — the ALLOW side
+  // narrows, so it uses the specific identity, not a union).
+  const id = resolveIdentity(action);
+  if (!id.ok) return id.decision;
+  if (matchAny(id.identity, list)) {
     return { outcome: "allow", severity: "action", rule: "tools.allowlist", reason: null };
   }
   return {
     outcome: "deny", severity: "action", rule: "tools.allowlist.exclusive",
-    reason: `${action.type} not in allowlist`,
+    reason: `${id.identity} not in allowlist`,
   };
 }

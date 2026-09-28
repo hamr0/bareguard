@@ -24,7 +24,10 @@ async function gateWith(t, cfg) {
 // ---------------------------------------------------------------------------
 
 test("fs.deny — a trailing-slash entry still denies the directory node itself", async (t) => {
-  const gate = await gateWith(t, { fs: { deny: ["/etc/secret/"] } });
+  // CHANGED (0.19.0): fs is deny-by-default — readScope added so the
+  // "sibling must NOT be denied" assertion reaches "allow" instead of
+  // `fs.readScope.unset` (unrelated to what this test is checking).
+  const gate = await gateWith(t, { fs: { deny: ["/etc/secret/"], readScope: ["/etc"] } });
 
   // the directory node itself (the fail-open case) must be denied
   assert.equal((await gate.check({ type: "read", path: "/etc/secret" })).outcome, "deny");

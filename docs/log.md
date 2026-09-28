@@ -9,3 +9,7 @@
 ## [2026-09-21] archive | docs/product/bareguard-prd.md -> docs/archive/bareguard-prd.md, 17 link(s) rewritten
 ## [2026-09-21] index-flat | 14 row(s) (12 product, 1 logs, 1 archive)
 ## [2026-09-26] index-flat | 14 row(s) (12 product, 1 logs, 1 archive)
+## [2026-09-28] index-flat | 14 row(s) (12 product, 1 logs, 1 archive)
+## [2026-09-28] reorg | discover only — 9 of 14 row(s) await the classification interview
+## [2026-09-28] index-flat | 14 row(s) (12 product, 1 logs, 1 archive)
+## [2026-09-28] apply-reorg | moved 0, skipped 0, 0 oversized split candidate(s), 0 link(s) rewritten, 0 sync failure(s), 0 empty dir(s) removed, CLAUDE.md updated: true

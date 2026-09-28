@@ -139,15 +139,25 @@ test("rwx: under rw- (fixer), irreversible/x actions always deny", async () => {
   }
 });
 
+// CHANGED (0.19.0): fs is deny-by-default, and agent paths are never
+// canonicalized (a relative path denies outright) — added `fs.readScope`/
+// `writeScope` covering `/repo` and switched the two fs-shaped actions
+// (`read`/`edit`) to absolute paths under it, so this test still exercises
+// rwx (not fs).
 test("rwx: under rw- (fixer), r/w actions with real arguments allow", async () => {
-  const gate = gateFor("fixer");
+  const gate = new Gate({
+    audit: { path: null },
+    rwx: { agent: "fixer", ...RWX },
+    fs: { readScope: ["/repo"], writeScope: ["/repo"] },
+    humanChannel: async () => ({ decision: "deny" }),
+  });
   await gate.init();
   const allowed = [
-    { type: "read", args: { path: "src/gate.js" } },
+    { type: "read", args: { path: "/repo/src/gate.js" } },
     { type: "bash", args: { command: "git status" } },
     { type: "bash", args: { command: "git diff --stat" } },
     { type: "bash", args: { command: "git log --oneline -5" } },
-    { type: "edit", args: { path: "src/gate.js", patch: "..." } },
+    { type: "edit", args: { path: "/repo/src/gate.js", patch: "..." } },
     { type: "bash", args: { command: "git add src/x.js test/x.test.js" } },
     { type: "bash", args: { command: "npm test" } },
     { type: "bash", args: { command: "npm test -- --grep auth" } },

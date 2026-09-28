@@ -68,6 +68,15 @@ test("content.denyPatterns / askPatterns: a non-array must fail closed, not sile
   assert.equal(d2.rule, "content.askPatterns.invalid");
 });
 
+// CHANGED (0.19.0): fs.deny/readScope/writeScope now go through ONE validator
+// (fs-config.js, resolveFsConfig) called from fsCheck itself, but it still
+// surfaces the three separate, already-RELEASED per-key rules
+// (`fs.deny.invalid`/`fs.readScope.invalid`/`fs.writeScope.invalid`) — same
+// names 0.18.1 shipped, now covering BOTH a bad shape (this test) and a bad
+// element (see fs-contract.test.js) under the one released name per key,
+// rather than the interim `fs.config.invalid` this branch tried first.
+// `fs.config.invalid` survives only for the one case no single key can be
+// blamed for: the `fs` SECTION itself isn't a plain object.
 test("fs.deny / readScope / writeScope: a non-array must fail closed, not throw or silently no-op", () => {
   const d1 = fsCheck({ type: "read", path: "/x" }, { deny: "not-an-array" });
   assert.equal(d1.outcome, "deny");
@@ -80,6 +89,12 @@ test("fs.deny / readScope / writeScope: a non-array must fail closed, not throw 
   const d3 = fsCheck({ type: "write", path: "/x" }, { writeScope: "not-an-array" });
   assert.equal(d3.outcome, "deny");
   assert.equal(d3.rule, "fs.writeScope.invalid");
+});
+
+test("fs section itself malformed (not a plain object): falls back to fs.config.invalid — no single key to blame", () => {
+  const d = fsCheck({ type: "read", path: "/x" }, "not-an-object");
+  assert.equal(d.outcome, "deny");
+  assert.equal(d.rule, "fs.config.invalid");
 });
 
 test("net.allowDomains: a non-array must fail closed, not throw", () => {

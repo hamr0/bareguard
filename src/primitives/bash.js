@@ -1,3 +1,5 @@
+import { findInvalidIndex } from "./config-validate.js";
+
 // bash primitive (PRD §8 row 1). Runs at step 3 (action-type deny) when
 // action.type === "bash".
 
@@ -43,6 +45,10 @@ export function bashCheck(action, cfg = {}) {
   if (cfg.denyPatterns !== undefined && cfg.denyPatterns !== null) {
     if (!Array.isArray(cfg.denyPatterns)) {
       return { outcome: "deny", severity: "action", rule: "bash.denyPatterns.invalid", reason: `bash.denyPatterns is not an array (type ${typeof cfg.denyPatterns})` };
+    }
+    const badIdx = findInvalidIndex(cfg.denyPatterns, "regexp");
+    if (badIdx !== -1) {
+      return { outcome: "deny", severity: "action", rule: "bash.denyPatterns.invalid", reason: `bash.denyPatterns[${badIdx}] is not a RegExp (type ${typeof cfg.denyPatterns[badIdx]})` };
     }
     for (const re of cfg.denyPatterns) {
       if (re.test(cmd)) {

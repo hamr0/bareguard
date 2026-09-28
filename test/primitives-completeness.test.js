@@ -12,8 +12,12 @@
 // (CI) covers the third way — the committed file drifting from the source.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
+import { execFileSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import path from "node:path";
 
 const manifest = JSON.parse(
   readFileSync(new URL("../primitives.json", import.meta.url), "utf8"),
@@ -167,7 +171,6 @@ test("manifest carries no version — package.json is the single authority", () 
 test("every example is syntactically valid JavaScript", async () => {
   // An example that does not parse is worse than no example: it is a confident
   // wrong answer to "how do I call this?".
-  const { execFileSync } = await import("node:child_process");
   for (const p of manifest.primitives) {
     assert.doesNotThrow(
       () => execFileSync(process.execPath, ["--input-type=module", "--check"], {
@@ -176,5 +179,101 @@ test("every example is syntactically valid JavaScript", async () => {
       }),
       `primitive ${p.name}: @example does not parse as an ES module`,
     );
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Generator regression: a wrapped @when/@fails must fail LOUD, never be
+// silently truncated to its first line. `primitives.json:addToGates` shipped
+// truncated in 0.18.1 (`"Reach for this when a harness manages a FLEET of
+// gates (one per"`) because `parseBlock` only ever read the tag's FIRST
+// line, and `--check` compares the generator's own output against itself —
+// a truncated field round-trips clean, so the drift was invisible to CI.
+// Matches the fix bare-agent shipped for the identical bug in its own copy
+// of this generator (`git show 89b693d`).
+// ---------------------------------------------------------------------------
+
+// `.pathname` on a file:// URL is WRONG for a filesystem path on Windows — it
+// keeps the leading "/" in front of the drive letter (`/D:/a/...`), which
+// `execFileSync` then resolves as a relative path off the CURRENT drive root,
+// producing `C:\D:\a\...\gen-primitives.mjs` (MODULE_NOT_FOUND). `fileURLToPath`
+// is the one correct conversion on every platform — same fix this repo already
+// uses in `rwx-starter-file.test.js`/`shared-budget.test.js` for the same class
+// of bug.
+const GEN_SCRIPT = fileURLToPath(new URL("../scripts/gen-primitives.mjs", import.meta.url));
+
+/**
+ * Writes the doc-comment BODY verbatim — each array element becomes one
+ * ` * <line>` inside the block — instead of assembling a fixed
+ * @when/@fails/@example shape. Needed for fixtures that must control exactly
+ * what comes after a tag: a blank line, a whitespace-only star line, a line
+ * that itself looks like a tag, or content inside @example.
+ *
+ * NOTE: generic generator-mechanics fixtures (RULE A continuation handling,
+ * RULE C unknown tags, RULE D @example-must-be-last) now live in the shared,
+ * hash-pinned test/primitives-core.test.mjs — only add a fixture here if it
+ * exercises something repo-specific (bareguard's method/@name handling is
+ * covered separately below).
+ * @param {string} dir
+ * @param {string[]} bodyLines
+ */
+function writeFixturePkgRaw(dir, bodyLines) {
+  writeFileSync(path.join(dir, "package.json"), JSON.stringify({
+    name: "fixture-pkg", version: "0.0.0", type: "module",
+    exports: { ".": "./index.js" },
+  }));
+  writeFileSync(path.join(dir, "index.js"), `export { foo } from "./src/foo.js";\n`);
+  mkdirSync(path.join(dir, "src"));
+  const body = bodyLines.map((l) => ` * ${l}`).join("\n");
+  writeFileSync(path.join(dir, "src", "foo.js"), `/**\n${body}\n */\nexport function foo() {}\n`);
+}
+
+/**
+ * Run the generator against a fixture dir and assert it fails loud: non-zero
+ * exit, the given message on stderr, and no primitives.json written.
+ * @param {string} dir
+ * @param {RegExp} messageRe
+ */
+function assertGeneratorRejects(dir, messageRe) {
+  let err;
+  try {
+    execFileSync(process.execPath, [GEN_SCRIPT], { cwd: dir, stdio: "pipe" });
+  } catch (e) {
+    err = e;
+  }
+  assert.ok(err, "generator should exit non-zero");
+  assert.equal(err.status, 1);
+  assert.match(err.stderr.toString(), messageRe);
+  assert.equal(existsSync(path.join(dir, "primitives.json")), false);
+}
+
+// ---------------------------------------------------------------------------
+// Root-fix regression: parseBlock parses each JSDoc block the way JSDoc
+// itself does (a tag's body is every line up to the next tag or comment end)
+// instead of guessing at continuation SHAPES. The generic mechanics of this
+// rule (RULE A/B/C/D) are now covered once, for all three bare-suite repos,
+// by the shared test/primitives-core.test.mjs. This fixture is kept here
+// because it exercises a shape specific to the CORE's newer strict-@example
+// rule (RULE D: @example must be the LAST tag in a block) colliding with the
+// original wrap bug this file's history is about: a wrapped one-line tag as
+// the very LAST tag in a block, with no @example following it at all (an
+// @example placed after a wrapped tag would now be caught by RULE D first,
+// not by this wrap check — see scripts/primitives-core.mjs).
+// ---------------------------------------------------------------------------
+
+test("a wrap as the LAST tag before the comment closes still fails loudly", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "bareguard-prim-gen-last-"));
+  try {
+    writeFixturePkgRaw(dir, [
+      "@fails never",
+      "@when this description",
+      "wraps as the very last thing before the comment ends",
+    ]);
+    assertGeneratorRejects(
+      dir,
+      /foo: @when spans more than one line — keep @when\/@fails on one line \(the manifest reads only the first\)/,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });

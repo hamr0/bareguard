@@ -1,3 +1,5 @@
+import { findInvalidIndex } from "./config-validate.js";
+
 // content primitive (PRD §8 row 12, §11 safe defaults). Pattern-matches over
 // the action's OPERATION shape, NOT the bytes of a file it writes. Two rules:
 //   - denyPatterns at step 2 (universal deny)
@@ -136,6 +138,16 @@ export function contentDenyCheck(action, cfg) {
   }
   const patterns = raw ?? SAFE_DEFAULT_DENY_PATTERNS;
   if (!patterns.length) return null;
+  // A direct call with raw config (construct time would have thrown) can
+  // carry a bad element — a non-RegExp throws at `.test()` below, mid-check().
+  // Fail closed instead, same rule-naming convention as the shape check above.
+  const badIdx = findInvalidIndex(patterns, "regexp");
+  if (badIdx !== -1) {
+    return {
+      outcome: "deny", severity: "action", rule: "content.denyPatterns.invalid",
+      reason: `content.denyPatterns[${badIdx}] is not a RegExp (type ${typeof patterns[badIdx]})`,
+    };
+  }
   const s = serializeForMatch(action);
   if (s === null) return UNSERIALIZABLE;
   for (const re of patterns) {
@@ -165,6 +177,13 @@ export function contentAskCheck(action, cfg) {
   }
   const patterns = raw ?? SAFE_DEFAULT_ASK_PATTERNS;
   if (!patterns.length) return null;
+  const badIdx = findInvalidIndex(patterns, "regexp");
+  if (badIdx !== -1) {
+    return {
+      outcome: "deny", severity: "action", rule: "content.askPatterns.invalid",
+      reason: `content.askPatterns[${badIdx}] is not a RegExp (type ${typeof patterns[badIdx]})`,
+    };
+  }
   const s = serializeForMatch(action);
   // DENY, not ask: an unreadable action is not something a human can usefully
   // adjudicate, and this matches the precedent already set two checks up, where

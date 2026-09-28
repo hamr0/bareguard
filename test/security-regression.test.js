@@ -21,7 +21,10 @@ async function gateWith(t, cfg) {
 // ---------------------------------------------------------------------------
 
 test("fs.deny — `.` and `..` segments cannot bypass a deny entry", async (t) => {
-  const gate = await gateWith(t, { fs: { deny: ["/etc/secrets"] } });
+  // CHANGED (0.19.0): fs is deny-by-default — readScope added so the
+  // "sibling must NOT be denied" assertion reaches "allow" instead of
+  // `fs.readScope.unset` (unrelated to what this test is checking).
+  const gate = await gateWith(t, { fs: { deny: ["/etc/secrets"], readScope: ["/etc"] } });
 
   for (const path of [
     "/etc/./secrets/key",
@@ -130,10 +133,15 @@ test("net.denyPrivateIps — IPv4 link-local (cloud metadata) and 0.0.0.0 are bl
 test("tools.allowlist — an empty allowlist denies every action (fails closed)", async (t) => {
   const gate = await gateWith(t, { tools: { allowlist: [] } });
 
+  // CHANGED (0.19.0): `read` swapped for a second non-fs custom type — fs is
+  // now deny-by-default too, and with no fs config a `read` action would be
+  // denied by `fs.readScope.unset` (step 3) before `tools.allowlist`
+  // (step 5) ever runs, so it would no longer exercise the rule this test
+  // asserts on.
   for (const action of [
     { type: "wireMoney", amount: 999999 },
     { type: "search", query: "anything" },
-    { type: "read", path: "/tmp/x" },
+    { type: "customTool", args: {} },
   ]) {
     const d = await gate.check(action);
     assert.equal(d.outcome, "deny", `${action.type} must be denied by an empty allowlist`);

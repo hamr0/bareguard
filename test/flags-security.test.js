@@ -117,7 +117,10 @@ test("flags: type-keyed ask — deny reply blocks; non-configured type does not 
   const denied = await gate.check({ type: "bash", args: { command: "echo hi" } });
   assert.equal(denied.outcome, "deny", "deny reply blocks the action");
 
-  const other = await gate.check({ type: "read", args: { path: "/tmp/x" } });
+  // CHANGED (0.19.0): use a non-fs action type here — `read` now denies by
+  // default (no fs.readScope configured), which would make this assertion
+  // about `flags` fail for an unrelated reason (fs, not flags).
+  const other = await gate.check({ type: "search", args: { query: "x" } });
   assert.equal(other.outcome, "allow", "an unconfigured type is a no-op — flag never fires");
   assert.equal(seen.length, 1, "humanChannel consulted only for the configured type");
 });
