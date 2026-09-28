@@ -8,6 +8,8 @@
 //   - env-var match  → [REDACTED:ENV_VAR_NAME]
 //   - pattern match  → [REDACTED:pattern=<short prefix>...]
 
+import { filterValidElements } from "./config-validate.js";
+
 // Don't redact short env values that may be meaningful (e.g., port numbers).
 // Trade-off: a secret shorter than this is NOT masked via `envVars` — use a
 // `patterns` entry for short secrets that must be redacted.
@@ -43,7 +45,19 @@ function effectiveKeys(cfg) {
   // paths construction cannot cover — a direct public `redact(cfg)` call and a
   // post-construction `cfg` swap (held by reference). Falling back to `[]`
   // keeps `base` (the default-on set) fully active — fail-SAFE, not fail-open.
-  const extra = Array.isArray(cfg.keys) ? cfg.keys : [];
+  //
+  // A present, ARRAY `keys` can still carry one bad (non-string) ELEMENT —
+  // construction would have thrown, but a direct `redact(cfg)` call or a
+  // post-construction swap bypasses that. `keyMatches()` calls
+  // `spec.toLowerCase()` on every spec; a non-string spec throws there, and
+  // that throw used to be caught by `redact()`'s OUTER never-throw guard
+  // (see below), which discarded the WHOLE key-walk result — not just the
+  // bad element — silently disabling `apiKey`/`api_key`/`authorization`
+  // default-key redaction for the entire call (0.18.1 hole, CONTRACT.md §A).
+  // Filtering the bad element out HERE, before it ever reaches the walk,
+  // fixes it at the source: the bad spec is dropped, `base` and every other
+  // valid `extra` spec keep matching.
+  const extra = filterValidElements(cfg.keys, "string");
   return [...base, ...extra];
 }
 
@@ -58,7 +72,16 @@ function effectiveValuePatterns(cfg) {
   // `patterns` used to spread chars into the RegExp list, which then crashed
   // `new RegExp(re.source, ...)` below with a SyntaxError — inside `redact()`,
   // which must never throw. Fall back to `[]` so `base` stays active.
-  const extra = Array.isArray(cfg.patterns) ? cfg.patterns : [];
+  //
+  // Same per-ELEMENT fix as `effectiveKeys`: a non-RegExp element inside an
+  // otherwise-valid array used to reach `new RegExp(re.source, re.flags+"g")`
+  // below unguarded (`re.source`/`re.flags` are `undefined` on a non-RegExp,
+  // producing `new RegExp(undefined, "undefinedg")`, a SyntaxError) — and
+  // that throw was NOT caught anywhere in `redact()`, violating the
+  // never-throw contract outright (worse than the key-spec swallow above).
+  // Filtering here drops only the bad element; `base` and every valid
+  // `extra` pattern keep matching.
+  const extra = filterValidElements(cfg.patterns, "regexp");
   return [...base, ...extra];
 }
 

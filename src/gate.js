@@ -9,12 +9,14 @@ import { Limits } from "./primitives/limits.js";
 import { redact, makeRedactor } from "./primitives/secrets.js";
 import { bashCheck } from "./primitives/bash.js";
 import { bashClassifyCheck } from "./primitives/classify.js";
-import { fsCheck } from "./primitives/fs.js";
+import { fsCheck, resolveFsConfig } from "./primitives/fs.js";
 import { netCheck } from "./primitives/net.js";
 import {
   toolsDenylistCheck, toolsDenyArgsCheck, toolsAllowlistCheck,
 } from "./primitives/tools.js";
 import { assertRwxConfig, rwxCheck, matchRwxLetter, resolveAgentLetters, clampLetters, normalizeEntry } from "./primitives/rwx.js";
+import { looseIdentity } from "./primitives/tool-identity.js";
+import { assertArrayElementTypes, findInvalidIndex } from "./primitives/config-validate.js";
 import { contentDenyCheck, contentAskCheck } from "./primitives/content.js";
 import { flagsDenyCheck, flagsAskCheck } from "./primitives/flags.js";
 import { deferRateCheck } from "./primitives/defer-rate.js";
@@ -392,10 +394,15 @@ function rwxToolsEntrySnapshot(rwxCfg, action) {
   if (action?.type === "bash") return undefined;
   if (!isPlainObject(rwxCfg)) return null;
   const toolsMap = isPlainObject(rwxCfg.tools) ? rwxCfg.tools : {};
-  if (!Object.prototype.hasOwnProperty.call(toolsMap, action?.type)) return null; // "absent"
+  // Same row `rwxCheck` itself reads: action.tool ?? action.type (loose —
+  // never throws, an unusable `tool` falls back to `type`; a genuinely bad
+  // `tool` value denies via `rwxCheck`'s own check, not this snapshot, which
+  // exists purely to detect a concurrent `add()` racing an ALLOW).
+  const identity = looseIdentity(action);
+  if (!Object.prototype.hasOwnProperty.call(toolsMap, identity)) return null; // "absent"
   // A JSON-stable string is enough to compare "did THIS key's raw value
   // change at all" — the exact shape doesn't matter, only equality.
-  try { return JSON.stringify(toolsMap[action.type]); }
+  try { return JSON.stringify(toolsMap[identity]); }
   catch { return "[unserializable]"; }
 }
 
@@ -417,10 +424,14 @@ function rwxToolsEntrySnapshot(rwxCfg, action) {
  * `budget`, which already throws on an invalid resource cap or softRatio.
  * @type {ReadonlyArray<[string, string]>}
  */
+// `fs.deny`/`fs.readScope`/`fs.writeScope` are validated separately, by
+// `resolveFsConfig` (fs-config.js) — a richer, path-specific validator
+// (tilde expansion, absolute-only, per-index messages) called from the
+// constructor right below this table, not folded into the generic
+// section/array-shape + element-type checks here.
 const ARRAY_SHAPED_CONFIG = Object.freeze([
   ["tools", "allowlist"], ["tools", "denylist"],
   ["content", "denyPatterns"], ["content", "askPatterns"],
-  ["fs", "deny"], ["fs", "readScope"], ["fs", "writeScope"],
   ["net", "allowDomains"],
   ["bash", "allow"], ["bash", "denyPatterns"],
   ["bash", "extraDestructive"], ["bash", "extraSuperDestructive"],
@@ -496,6 +507,16 @@ function assertArrayShapedConfig(config) {
           `invalid bareguard config: tools.denyArgPatterns.${clipKey(tool)} must be an array, got ${typeof patterns}`,
         );
       }
+      // Each per-tool list is RegExp-shaped, same element-type class as
+      // `content.denyPatterns`/`bash.denyPatterns` below — not expressible in
+      // the flat [section, key] table (this key is nested under a caller-named
+      // tool), so checked inline here instead.
+      const badIdx = findInvalidIndex(patterns, "regexp");
+      if (badIdx !== -1) {
+        throw new Error(
+          `invalid bareguard config: tools.denyArgPatterns.${clipKey(tool)}[${badIdx}] must be a RegExp, got ${typeof patterns[badIdx]}`,
+        );
+      }
     }
   }
 
@@ -556,6 +577,16 @@ function assertArrayShapedConfig(config) {
         `invalid bareguard config: ${section}.${key} must be an array, got ${typeof v}`,
       );
     }
+    // ELEMENT-type check (item 6): the array-shape check above only asks "is
+    // this an array at all" — it says nothing about what's INSIDE it. A bad
+    // element (a number in `tools.allowlist`, a string in
+    // `content.denyPatterns`) used to reach the matching code untouched and
+    // throw mid-`check()` (killing the gate for every later action) or, for
+    // `secrets.*`, get silently swallowed by `redact()`'s never-throw guard —
+    // see CONTRACT.md §A and `config-validate.js`. Throwing here, loud and
+    // early, closes the whole class in one place instead of one primitive at
+    // a time.
+    assertArrayElementTypes(section, key, v);
   }
 }
 
@@ -588,6 +619,11 @@ export class Gate {
       value: true, enumerable: false, configurable: false, writable: false,
     });
     assertArrayShapedConfig(config);
+    // fs.deny/readScope/writeScope: one validator (fs-config.js), the same
+    // one fsCheck() calls at eval time — throws loudly at construct on any
+    // bad entry (non-string, "~user" form, relative path, …) instead of
+    // waiting for the first action to surface it as a runtime deny.
+    if (config.fs !== undefined && config.fs !== null) resolveFsConfig(config.fs);
     assertRwxConfig(config); // §23.2: rwx is a second mode, mutually exclusive with tools.allowlist/bash.allow
     // §23.21: the gate copies `rwx` at construct time, deep and decoupled —
     // every other section is still held by reference (unchanged), but rwx

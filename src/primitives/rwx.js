@@ -33,6 +33,8 @@
 // TIGHTEN: it never grants a letter, never skips a `rwx.denied`, never
 // upgrades an ask into an allow or a deny into anything softer.
 
+import { resolveIdentity, looseIdentity } from "./tool-identity.js";
+
 /**
  * True for a plain object — `{}`-literal shaped, or the null-prototype shape
  * `safeAction()` produces gate-wide. Duplicated from `gate.js` (not imported)
@@ -306,8 +308,11 @@ export function matchRwxLetter(action, rwxCfg) {
     const m = matchBash(cmd, rwxCfg.bash);
     return (m.ok && typeof m.letter === "string" && TOOL_LETTER_RE.test(m.letter)) ? m.letter : null;
   }
+  // Identity = action.tool ?? action.type. A bad `tool` value has no letter
+  // to report here — this lookup never throws and never denies, it just
+  // falls back to `type`, same as any other unusable `tool` on this path.
   const toolsMap = isPlainObject(rwxCfg.tools) ? rwxCfg.tools : {};
-  const norm = normalizeEntry(toolsMap[action.type]);
+  const norm = normalizeEntry(toolsMap[looseIdentity(action)]);
   return norm ? norm.letter : null;
 }
 
@@ -412,12 +417,23 @@ export function rwxCheck(action, rwxCfg) {
     };
   }
 
+  // Identity = action.tool ?? action.type for the tools-map row. A bad
+  // `tool` value denies outright, fail closed.
+  const id = resolveIdentity(action);
+  if (!id.ok) {
+    return {
+      outcome: "deny", severity: "action", rule: "rwx.invalidTool",
+      reason: id.decision.reason,
+      rwxLetters: letters,
+    };
+  }
+  const identity = id.identity;
   const toolsMap = isPlainObject(rwxCfg.tools) ? rwxCfg.tools : {};
-  const rawEntry = toolsMap[action?.type];
+  const rawEntry = toolsMap[identity];
   if (rawEntry === undefined) {
     return {
       outcome: "deny", severity: "action", rule: "rwx.unlisted",
-      reason: `"${clipKey(action?.type)}" is not in the rwx tools map — an operator must add it to bareguard.rwx.json as r, w or x`,
+      reason: `"${clipKey(identity)}" is not in the rwx tools map — an operator must add it to bareguard.rwx.json as r, w or x`,
       rwxLetters: letters,
     };
   }
@@ -427,14 +443,14 @@ export function rwxCheck(action, rwxCfg) {
   if (typeof letter !== "string" || !TOOL_LETTER_RE.test(letter)) {
     return {
       outcome: "deny", severity: "action", rule: "rwx.invalid",
-      reason: `rwx.tools.${clipKey(action?.type)} is not a valid letter (got ${JSON.stringify(letter)})`,
+      reason: `rwx.tools.${clipKey(identity)} is not a valid letter (got ${JSON.stringify(letter)})`,
       rwxLetters: letters,
     };
   }
   if (!letters.includes(letter)) {
     return {
       outcome: "deny", severity: "action", rule: "rwx.denied",
-      reason: `"${clipKey(action?.type)}" is tagged "${letter}" but agent "${clipKey(agentName)}" only holds "${letters}"`,
+      reason: `"${clipKey(identity)}" is tagged "${letter}" but agent "${clipKey(agentName)}" only holds "${letters}"`,
       rwxLetters: letters, rwxLetter: letter,
       ...(marker ? { rwxMarker: marker } : {}),
     };
@@ -442,7 +458,7 @@ export function rwxCheck(action, rwxCfg) {
   if (askOn === "loose" && marker === "loose") {
     return {
       outcome: "askHuman", severity: "action", rule: "rwx.ask",
-      reason: `"${clipKey(action?.type)}" is tagged "${letter}" with marker "loose" — rwx.askOn:"loose" asks before allowing (letter is held)`,
+      reason: `"${clipKey(identity)}" is tagged "${letter}" with marker "loose" — rwx.askOn:"loose" asks before allowing (letter is held)`,
       rwxLetters: letters, rwxLetter: letter, rwxMarker: marker,
     };
   }
