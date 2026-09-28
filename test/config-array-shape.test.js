@@ -68,18 +68,23 @@ test("content.denyPatterns / askPatterns: a non-array must fail closed, not sile
   assert.equal(d2.rule, "content.askPatterns.invalid");
 });
 
+// CHANGED (0.19.0): fs.deny/readScope/writeScope now go through ONE validator
+// (fs-config.js, resolveFsConfig) called from fsCheck itself — a non-array
+// section is a bad "entry list" the validator throws on, caught by fsCheck
+// and surfaced as a single `fs.config.invalid` rule, not three separate
+// per-key `.invalid` rules. Still fails closed, not throw, not silent no-op.
 test("fs.deny / readScope / writeScope: a non-array must fail closed, not throw or silently no-op", () => {
   const d1 = fsCheck({ type: "read", path: "/x" }, { deny: "not-an-array" });
   assert.equal(d1.outcome, "deny");
-  assert.equal(d1.rule, "fs.deny.invalid");
+  assert.equal(d1.rule, "fs.config.invalid");
 
   const d2 = fsCheck({ type: "read", path: "/x" }, { readScope: "not-an-array" });
   assert.equal(d2.outcome, "deny");
-  assert.equal(d2.rule, "fs.readScope.invalid");
+  assert.equal(d2.rule, "fs.config.invalid");
 
   const d3 = fsCheck({ type: "write", path: "/x" }, { writeScope: "not-an-array" });
   assert.equal(d3.outcome, "deny");
-  assert.equal(d3.rule, "fs.writeScope.invalid");
+  assert.equal(d3.rule, "fs.config.invalid");
 });
 
 test("net.allowDomains: a non-array must fail closed, not throw", () => {

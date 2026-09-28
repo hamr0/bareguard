@@ -185,9 +185,12 @@ test("audit truncation bounds large action.cmd (not just args) (I3)", async (t) 
 test("fs.deny uses path-segment matching, not substring (m2)", async (t) => {
   const dir = await makeTmpDir(); t.after(async () => cleanup(dir));
   const { auditPath } = uniquePaths(dir);
+  // CHANGED (0.19.0): fs is now deny-by-default, so a `readScope` covering
+  // both paths is required for d3 to reach "allow" — under the old baseline
+  // an unset readScope had "no opinion" and allowed by default.
   const gate = new Gate({
     audit: { path: auditPath },
-    fs:    { deny: ["/etc"] },
+    fs:    { deny: ["/etc"], readScope: ["/etc", "/home"] },
   });
   await gate.init();
 

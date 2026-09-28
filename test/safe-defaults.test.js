@@ -88,25 +88,32 @@ test("safe defaults — git push --force is denied", async () => {
 // Acceptance triad: DROP TABLE / rm -rf in args.contents → allow; same in a
 // command → deny; a structural "method":"DELETE" field → still ask.
 
+// CHANGED (0.19.0): both BG-3 payload tests below now pass an absolute path
+// plus a matching `fs.writeScope`, and use `Gate({ fs: {...} })` instead of
+// `Gate({})` — fs is deny-by-default, and a relative path is rejected
+// outright (`fs.relativePath`, agent paths are never canonicalized), so the
+// original relative "migrations/001.sql" / "src/read.js" paths under an
+// empty config would now deny at the fs step for reasons unrelated to what
+// these tests check (content payload scoping, not fs scoping).
 test("BG-3 — destructive verbs in a write payload (args.contents) do NOT deny", async () => {
-  const gate = new Gate({});
+  const gate = new Gate({ fs: { writeScope: ["/repo"] } });
   await gate.init();
   const dec = await gate.check({
     type: "write",
-    path: "migrations/001.sql",
-    args: { path: "migrations/001.sql", contents: "DROP TABLE users;\n-- also rm -rf / in a comment" },
+    path: "/repo/migrations/001.sql",
+    args: { path: "/repo/migrations/001.sql", contents: "DROP TABLE users;\n-- also rm -rf / in a comment" },
   });
   assert.equal(dec.outcome, "allow", "payload bytes must not trigger content.denyPatterns");
   assert.equal(dec.rule, "default");
 });
 
 test("BG-3 — code vocabulary in a write payload (args.content) does NOT ask", async () => {
-  const gate = new Gate({});
+  const gate = new Gate({ fs: { writeScope: ["/repo"] } });
   await gate.init();
   const dec = await gate.check({
     type: "write",
-    path: "src/read.js",
-    args: { path: "src/read.js", content: "// remove the dropped filter; delete stale entries\nfunction purge(){}" },
+    path: "/repo/src/read.js",
+    args: { path: "/repo/src/read.js", content: "// remove the dropped filter; delete stale entries\nfunction purge(){}" },
   });
   assert.equal(dec.outcome, "allow", "payload code vocab must not trigger content.askPatterns");
   assert.equal(dec.rule, "default");
