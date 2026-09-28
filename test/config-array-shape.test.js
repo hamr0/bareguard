@@ -241,9 +241,15 @@ test("gate config: a Map-shaped section is rejected (same class as the string-se
 
 test("gate config: a null-prototype section (safeAction()'s own shape) must NOT be rejected — must still gate correctly", async () => {
   const nullProtoTools = Object.assign(Object.create(null), { allowlist: ["read"] });
-  const gate = new Gate({ tools: nullProtoTools, audit: { path: null } });
-  const allowed = await gate.check({ type: "read" });
-  const denied = await gate.check({ type: "write" });
+  // fs step runs BEFORE tools.allowlist — give both actions a real, in-scope
+  // path so this test exercises the null-proto tools section, not fs.
+  const gate = new Gate({
+    tools: nullProtoTools,
+    fs: { readScope: ["/tmp"], writeScope: ["/tmp"] },
+    audit: { path: null },
+  });
+  const allowed = await gate.check({ type: "read", path: "/tmp/x" });
+  const denied = await gate.check({ type: "write", path: "/tmp/x" });
   assert.equal(allowed.outcome, "allow");
   assert.equal(allowed.rule, "tools.allowlist");
   assert.equal(denied.outcome, "deny");

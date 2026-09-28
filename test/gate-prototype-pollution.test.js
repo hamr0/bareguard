@@ -40,10 +40,13 @@ test("pollution: a type-less action is NOT granted via inherited type (deny→al
 
 test("pollution: an inherited cmd/path/url cannot inject a denied action (flat + nested)", async () => {
   const gate = new Gate(CFG()); await gate.init();
-  // baseline (no own field) for each is allow via the allowlist; pollution must not change it.
+  // baseline (no own field, or — for "read", which now denies outright with
+  // no path at all, PRD deny-by-default — an own IN-SCOPE path) for each is
+  // allow via the allowlist; the inherited/polluted values must not change
+  // that outcome.
   const flat = await withPollution({ cmd: "rm -rf /tmp", path: "/etc/passwd", url: "http://evil.com/x" }, async () => [
     await gate.check({ type: "bash" }),
-    await gate.check({ type: "read" }),
+    await gate.check({ type: "read", path: "/tmp/own.txt" }),
     await gate.check({ type: "fetch" }),
   ]);
   for (const d of flat) assert.equal(d.outcome, "allow", `${d.rule} should stay allow under pollution`);

@@ -204,7 +204,9 @@ export function fsCheck(action, cfg = {}) {
   if (raw != null && typeof raw !== "string") {
     return { outcome: "deny", severity: "action", rule: "fs.invalidPath", reason: `path is not a string (type ${typeof raw})` };
   }
-  if (typeof raw !== "string") return null;
+  if (raw == null) {
+    return { outcome: "deny", severity: "action", rule: "fs.invalidPath", reason: "file action has no path (action.path / action.args.path)" };
+  }
 
   // Agent paths are NEVER canonicalized by the gate (item 4) — reject
   // anything that isn't already an unambiguous absolute path, before any

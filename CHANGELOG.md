@@ -3,6 +3,17 @@
 All notable changes to bareguard are documented here. Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [SemVer](https://semver.org/).
 
 
+## [Unreleased]
+
+### BREAKING
+
+- **An empty-string or whitespace-only `bash.allow` element is now invalid config, not a wildcard.** `allow: [""]` or `allow: ["   "]` previously allowed every command (`cmd.startsWith("")` is true for any string) — a silent, total allowlist bypass. It now throws at `Gate` construction (`invalid bareguard config: bash.allow[<i>] must be a non-empty, non-whitespace command prefix, got ...`), matching the existing "config typo fails CLOSED at construct time" pattern used for a non-array/wrong-element-type `bash.allow`. A direct `bashCheck()` call, or a `cfg` swapped by reference after construction, hits the same fail-closed runtime guard instead (`bash.allow.invalid`). This tightening is scoped to `bash.allow` only — other array-shaped string keys (`tools.allowlist`/`denylist`, `net.allowDomains`, `secrets.keys`/`envVars`, `axisB.reversible`) still accept `""`, since an empty element is comparatively inert for each of them (measured — see `findBlankStringIndex`'s doc comment in `config-validate.js`).
+
+### Fixed
+
+- `bash.allow` prefixes now match on a word boundary: `allow: ["git status"]` no longer admits `"git statuses-are-fine --evil"` just because the raw bytes match — the prefix must be the whole command, or be followed by a space or tab (or already end in a space/tab itself). The boundary is ASCII space/tab only, not any Unicode whitespace — `allow: ["ls"]` no longer admits `"ls /etc"` (a no-break space) either, since the shell only splits words on space/tab. Previously `cfg.allow.some(prefix => cmd.startsWith(prefix))` had no boundary check at all. Reported by bare-agent; measured on the installed 0.19.0 package. This gap predates 0.19.0 — `bashCheck`'s allow-matching hasn't changed shape since it was introduced.
+- A file action (`read`/`write`/`edit`) with no path at all — `action.path` and `action.args.path` both missing or `null` — is now denied `fs.invalidPath` ("file action has no path (action.path / action.args.path)"). It previously skipped the fs step entirely and was allowed, even with `fs.readScope`/`fs.writeScope` unset — a gap in 0.19.0's deny-by-default contract for the fs primitive. A non-string, non-null path (e.g. an array or object) was already denied `fs.invalidPath`; this closes the same rule for the missing-path case. This behavior gap predates 0.19.0 (present since 0.18.x) and was not newly introduced by 0.19.0's deny-by-default change — it just became more consequential once an unconfigured scope started denying everything else.
+
 ## [0.19.0] - 2026-09-28
 
 ### BREAKING

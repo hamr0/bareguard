@@ -1,4 +1,4 @@
-import { findInvalidIndex } from "./config-validate.js";
+import { findInvalidIndex, findBlankStringIndex } from "./config-validate.js";
 
 // bash primitive (PRD §8 row 1). Runs at step 3 (action-type deny) when
 // action.type === "bash".
@@ -68,7 +68,42 @@ export function bashCheck(action, cfg = {}) {
         reason: `command contains shell metacharacter ${JSON.stringify(meta[0])}; bash.allow is prefix-only`,
       };
     }
-    const allowed = cfg.allow.some(prefix => cmd.startsWith(prefix));
+    // `cfg` is held by reference (TOCTOU, same class as the denyPatterns
+    // guard above): construct time (assertArrayShapedConfig, gate.js) already
+    // throws on a blank/whitespace-only bash.allow element, but a direct
+    // primitive call or a post-construction `cfg` swap bypasses that. Fail
+    // CLOSED here too, reusing the `bash.allow.invalid` rule the shape guard
+    // above uses — a blank entry is a config error, not a wildcard (0.19.1;
+    // `cmd.startsWith("")` used to be true for every command, so a blank
+    // entry silently disabled the whole allowlist).
+    const blankIdx = findBlankStringIndex(cfg.allow);
+    if (blankIdx !== -1) {
+      return {
+        outcome: "deny", severity: "action", rule: "bash.allow.invalid",
+        reason: `bash.allow[${blankIdx}] is empty or whitespace-only, not a valid command prefix`,
+      };
+    }
+    // A prefix match must land on a word boundary: "git status" must not
+    // admit "git statuses-are-fine --evil" just because the raw bytes match.
+    // A prefix matches when: the command equals it exactly; OR the command
+    // continues with the prefix followed by a boundary char (the boundary
+    // can live in either string — a prefix already authored with a trailing
+    // space, e.g. "git ", already carries its own boundary, so a plain
+    // startsWith is correct there and needs no extra char check).
+    // The boundary is ASCII space/tab only, not `\s` (which also matches
+    // Unicode whitespace like U+00A0 NBSP, U+2000 en quad, etc.) — the shell
+    // only splits words on space and tab; newline/CR are already denied
+    // upstream by SHELL_META. Using `\s` here would let a Unicode-whitespace
+    // byte between a real prefix and unrelated text sneak past the boundary
+    // check (`allow: ["ls"]` must not admit "ls /etc"). A blank/whitespace-
+    // only prefix can't reach this point — it's already denied above.
+    const BOUNDARY = /[ \t]/;
+    const allowed = cfg.allow.some(prefix => {
+      if (!cmd.startsWith(prefix)) return false;
+      if (cmd.length === prefix.length) return true; // exact match
+      if (BOUNDARY.test(prefix[prefix.length - 1])) return true; // boundary already baked into the prefix
+      return BOUNDARY.test(cmd[prefix.length]); // next char after the prefix must be a space or tab
+    });
     if (!allowed) {
       return { outcome: "deny", severity: "action", rule: "bash.allow", reason: "command not in bash.allow" };
     }

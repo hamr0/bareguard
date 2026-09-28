@@ -16,7 +16,7 @@ import {
 } from "./primitives/tools.js";
 import { assertRwxConfig, rwxCheck, matchRwxLetter, resolveAgentLetters, clampLetters, normalizeEntry } from "./primitives/rwx.js";
 import { looseIdentity } from "./primitives/tool-identity.js";
-import { assertArrayElementTypes, findInvalidIndex } from "./primitives/config-validate.js";
+import { assertArrayElementTypes, findInvalidIndex, findBlankStringIndex } from "./primitives/config-validate.js";
 import { contentDenyCheck, contentAskCheck } from "./primitives/content.js";
 import { flagsDenyCheck, flagsAskCheck } from "./primitives/flags.js";
 import { deferRateCheck } from "./primitives/defer-rate.js";
@@ -587,6 +587,19 @@ function assertArrayShapedConfig(config) {
     // early, closes the whole class in one place instead of one primitive at
     // a time.
     assertArrayElementTypes(section, key, v);
+    // `bash.allow`-only tightening (0.19.1): a blank/whitespace-only entry is
+    // uniquely dangerous for this ONE key (`cmd.startsWith("")` matches every
+    // command) — see `findBlankStringIndex`'s doc comment for why this isn't
+    // folded into the shared element-type table and doesn't apply to any
+    // other array-shaped key.
+    if (section === "bash" && key === "allow") {
+      const blankIdx = findBlankStringIndex(v);
+      if (blankIdx !== -1) {
+        throw new Error(
+          `invalid bareguard config: bash.allow[${blankIdx}] must be a non-empty, non-whitespace command prefix, got ${JSON.stringify(v[blankIdx])}`,
+        );
+      }
+    }
   }
 }
 

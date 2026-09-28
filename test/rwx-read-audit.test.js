@@ -62,12 +62,13 @@ test("readAudit: returns the same lines readAll() returns, in FILE mode", async 
   try { fs.rmSync(auditPath, { force: true }); } catch {}
   const gate = new Gate({
     audit: { path: auditPath },
+    fs: { readScope: ["/tmp"] },
     rwx: { agent: "fixer", agents: { fixer: "rw-" }, tools: { read: "r" } },
     humanChannel: async () => ({ decision: "deny" }),
   });
   try {
     await gate.init();
-    await gate.check({ type: "read", args: {} });
+    await gate.check({ type: "read", path: "/tmp/x", args: {} });
     const viaReadAll = await gate.audit.readAll();
     const viaReadAudit = await gate.readAudit();
     assert.deepEqual(viaReadAudit, viaReadAll);
