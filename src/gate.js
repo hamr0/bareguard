@@ -1510,6 +1510,7 @@ export class Gate {
    * @when Reach for this to read back this gate's own rwx tools map — e.g. before calling `add()`, to check what's already granted, or to log or inspect current state. Mutating what comes back never affects the live gate; call `add()` to actually change anything.
    * @category rwx
    * @signature gate.rwxTools() => Object<string, string|{letter:string, marker:(string|null)}>|null
+   * @fails Never throws. `rwx.tools` is already construct-time-validated as JSON-shaped by {@link assertRwxConfig} (via {@link deepCopyRwx}), so the round-trip below cannot fail in practice; the catch is defensive only.
    * @example
    * import { Gate } from "bareguard";
    * const gate = new Gate({
@@ -1519,7 +1520,6 @@ export class Gate {
    * });
    * await gate.init();
    * gate.rwxTools(); // { read: "r", write: "w" } — a decoupled copy
-   * @fails Never throws. `rwx.tools` is already construct-time-validated as JSON-shaped by {@link assertRwxConfig} (via {@link deepCopyRwx}), so the round-trip below cannot fail in practice; the catch is defensive only.
    */
   rwxTools() {
     if (this.cfg.rwx == null) return null;
@@ -1561,6 +1561,7 @@ export class Gate {
    * @when Reach for this to read this gate's own audit log back programmatically — e.g. to verify what a run actually did, replay it, or feed it to a dashboard — without risking a live in-memory line (fileless mode) being mutated out from under a still-running gate.
    * @category audit
    * @signature gate.readAudit() => Promise<object[]>
+   * @fails Never throws. A line containing something that cannot round-trip through JSON (this can only happen in fileless mode — `Audit.emit()` in file mode already degrades an unserializable payload before persisting, so a file-mode read is always JSON-shaped) falls back to {@link safeDeepClone}, a per-line deep, decoupled clone that tolerates a BigInt, a function/symbol/`undefined` value, a true cycle, or a throwing getter/`toJSON` — NEVER a shared reference into the live line and never a live function reference either — so one bad line can never sink an otherwise-good read, and mutating what comes back can never reach the gate's live audit state either way. `safeDeepClone` itself is called inside its own try/catch here too: a pathologically deep chain is bounded by {@link MAX_CLONE_DEPTH} internally, but the wrapping catch is defensive — a `RangeError` at this top-level call site would otherwise escape `lines.map` and this async function.
    * @example
    * import { Gate } from "bareguard";
    * const gate = new Gate({
@@ -1572,7 +1573,6 @@ export class Gate {
    * await gate.check({ type: "read", args: {} });
    * const lines = await gate.readAudit();
    * lines.length > 0; // true
-   * @fails Never throws. A line containing something that cannot round-trip through JSON (this can only happen in fileless mode — `Audit.emit()` in file mode already degrades an unserializable payload before persisting, so a file-mode read is always JSON-shaped) falls back to {@link safeDeepClone}, a per-line deep, decoupled clone that tolerates a BigInt, a function/symbol/`undefined` value, a true cycle, or a throwing getter/`toJSON` — NEVER a shared reference into the live line and never a live function reference either — so one bad line can never sink an otherwise-good read, and mutating what comes back can never reach the gate's live audit state either way. `safeDeepClone` itself is called inside its own try/catch here too: a pathologically deep chain is bounded by {@link MAX_CLONE_DEPTH} internally, but the wrapping catch is defensive — a `RangeError` at this top-level call site would otherwise escape `lines.map` and this async function.
    */
   async readAudit() {
     if (!this._initialized) await this.init();
@@ -1658,6 +1658,7 @@ export class Gate {
    * @when Reach for this at RUNTIME when your harness meets a spec-less site mid-run and needs to grow THIS gate's own rwx tools map on the fly (tighten-only) — never for anything an operator should review and commit up front; that belongs in the construct-time `rwx.tools` config or `bareguard.rwx.json` instead. For a whole fleet of gates at once, use `addToGates()`.
    * @category rwx
    * @signature gate.add(entries) => Promise<void>
+   * @fails Throws (after emitting `rwx.add_rejected`) when: this gate has been {@link Gate#terminate}d; it has no `rwx` config; `entries` is not a non-empty plain object, or is unreadable; a key is `__proto__`/`constructor`/`prototype`; an entry's shape is malformed (same rule as construct time); an entry would loosen an existing key's letter or move it off marker `"loose"`; or the batch would push `rwx.tools` past {@link RWX_TOOLS_CAP} keys. Nothing lands on any throw. A budget-halt state does NOT block `add()` — it spends no budget itself and nothing in §23.21 makes growing the tools map conditional on the cost/token axis.
    * @example
    * import { Gate } from "bareguard";
    * const gate = new Gate({
@@ -1669,7 +1670,6 @@ export class Gate {
    * await gate.add({ deploy: "x" }); // new key, mid-run — tighten-only from here
    * const decision = await gate.check({ type: "deploy", args: {} });
    * decision.outcome; // "allow"
-   * @fails Throws (after emitting `rwx.add_rejected`) when: this gate has been {@link Gate#terminate}d; it has no `rwx` config; `entries` is not a non-empty plain object, or is unreadable; a key is `__proto__`/`constructor`/`prototype`; an entry's shape is malformed (same rule as construct time); an entry would loosen an existing key's letter or move it off marker `"loose"`; or the batch would push `rwx.tools` past {@link RWX_TOOLS_CAP} keys. Nothing lands on any throw. A budget-halt state does NOT block `add()` — it spends no budget itself and nothing in §23.21 makes growing the tools map conditional on the cost/token axis.
    */
   async add(entries) {
     if (!this._initialized) await this.init();
@@ -2003,16 +2003,6 @@ function captureGateAdd(g) {
  * @when Reach for this when a harness manages a FLEET of gates (one per agent identity) and needs to apply one learned rwx entry batch to all of them at once, instead of calling each gate's own `add()` by hand and remembering to keep them in sync. For a single gate, call `gate.add()` directly instead.
  * @category rwx
  * @fails Throws an `AggregateError` synchronously, before any gate is touched, when `gates` is not a non-empty array of distinct gate-like objects or `entries` is unreadable/malformed; throws an `AggregateError` after every gate has been attempted when one or more rejected (its `.results` carries every gate's outcome, success and failure alike, and `.failures` names just the failing ones). NOT all-or-nothing: every gate keeps its own tighten-only state, so one gate's rejection never affects the others.
- * @example
- * import { Gate, addToGates } from "bareguard";
- * const gates = ["searcher", "booker"].map((agent) => new Gate({
- *   audit: { path: null },
- *   rwx: { agent, agents: { searcher: "r--", booker: "rw-" }, tools: {} },
- *   humanChannel: async () => ({ decision: "deny" }),
- * }));
- * await Promise.all(gates.map((g) => g.init()));
- * const results = await addToGates(gates, { search: "r" });
- * results.every((r) => r.ok); // true — both gates now admit "search"
  * @param {Gate[]} gates the fleet — 1..n distinct gate-like objects (see above)
  * @param {Object<string, (string|{letter:string, marker?:string})>} entries
  *   the same shape `gate.add()` accepts — read once, snapshotted, and
@@ -2037,6 +2027,16 @@ function captureGateAdd(g) {
  *   `ok` is `false`), so a caller can still see which OTHER gates landed
  *   even when the call as a whole throws. A failed gate's own rwx state is
  *   left exactly as `add()` itself leaves it on rejection: unchanged.
+ * @example
+ * import { Gate, addToGates } from "bareguard";
+ * const gates = ["searcher", "booker"].map((agent) => new Gate({
+ *   audit: { path: null },
+ *   rwx: { agent, agents: { searcher: "r--", booker: "rw-" }, tools: {} },
+ *   humanChannel: async () => ({ decision: "deny" }),
+ * }));
+ * await Promise.all(gates.map((g) => g.init()));
+ * const results = await addToGates(gates, { search: "r" });
+ * results.every((r) => r.ok); // true — both gates now admit "search"
  */
 export async function addToGates(gates, entries) {
   if (!Array.isArray(gates) || gates.length === 0) {

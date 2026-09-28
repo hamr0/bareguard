@@ -203,37 +203,17 @@ test("every example is syntactically valid JavaScript", async () => {
 const GEN_SCRIPT = fileURLToPath(new URL("../scripts/gen-primitives.mjs", import.meta.url));
 
 /**
- * A minimal, real npm package on disk — the generator reads package.json's
- * `exports` and dynamically `import()`s the resolved file, so a fixture has
- * to be an actual resolvable package, not a bare .js file.
- * @param {string} dir
- * @param {string} whenLine the full `@when ...` JSDoc line (and any
- *   continuation lines), written verbatim into the fixture's only export
- */
-function writeFixturePkg(dir, whenLine) {
-  writeFileSync(path.join(dir, "package.json"), JSON.stringify({
-    name: "fixture-pkg", version: "0.0.0", type: "module",
-    exports: { ".": "./index.js" },
-  }));
-  writeFileSync(path.join(dir, "index.js"), `export { foo } from "./src/foo.js";\n`);
-  mkdirSync(path.join(dir, "src"));
-  writeFileSync(path.join(dir, "src", "foo.js"), `/**
- * ${whenLine}
- * @fails never
- * @example
- * foo()
- */
-export function foo() {}
-`);
-}
-
-/**
- * Same fixture shape as writeFixturePkg, but writes the doc-comment BODY
- * verbatim — each array element becomes one ` * <line>` inside the block —
- * instead of assembling a fixed @when/@fails/@example shape. Needed for
- * fixtures that must control exactly what comes after a tag: a blank line, a
- * whitespace-only star line, a line that itself looks like a tag, or content
- * inside @example.
+ * Writes the doc-comment BODY verbatim — each array element becomes one
+ * ` * <line>` inside the block — instead of assembling a fixed
+ * @when/@fails/@example shape. Needed for fixtures that must control exactly
+ * what comes after a tag: a blank line, a whitespace-only star line, a line
+ * that itself looks like a tag, or content inside @example.
+ *
+ * NOTE: generic generator-mechanics fixtures (RULE A continuation handling,
+ * RULE C unknown tags, RULE D @example-must-be-last) now live in the shared,
+ * hash-pinned test/primitives-core.test.mjs — only add a fixture here if it
+ * exercises something repo-specific (bareguard's method/@name handling is
+ * covered separately below).
  * @param {string} dir
  * @param {string[]} bodyLines
  */
@@ -267,101 +247,25 @@ function assertGeneratorRejects(dir, messageRe) {
   assert.equal(existsSync(path.join(dir, "primitives.json")), false);
 }
 
-test("a continued @when fails the generator loudly instead of silently truncating", () => {
-  const dir = mkdtempSync(path.join(tmpdir(), "bareguard-prim-gen-cont-"));
-  try {
-    writeFixturePkg(dir, "@when this description\n * wraps onto a second line");
-    let err;
-    try {
-      execFileSync(process.execPath, [GEN_SCRIPT], { cwd: dir, stdio: "pipe" });
-    } catch (e) {
-      err = e;
-    }
-    assert.ok(err, "generator should exit non-zero on a continued @when");
-    assert.equal(err.status, 1);
-    assert.match(
-      err.stderr.toString(),
-      /foo: @when spans more than one line — keep @when\/@fails on one line \(the manifest reads only the first\)/,
-    );
-    // No primitives.json should have been written on a failed generation.
-    assert.equal(existsSync(path.join(dir, "primitives.json")), false);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("a single-line @when generates cleanly", () => {
-  const dir = mkdtempSync(path.join(tmpdir(), "bareguard-prim-gen-ok-"));
-  try {
-    writeFixturePkg(dir, "@when this description stays on one line");
-    execFileSync(process.execPath, [GEN_SCRIPT], { cwd: dir, stdio: "pipe" });
-    const out = JSON.parse(readFileSync(path.join(dir, "primitives.json"), "utf8"));
-    assert.equal(out.primitives.length, 1);
-    assert.equal(out.primitives[0].name, "foo");
-    assert.equal(out.primitives[0].when, "this description stays on one line");
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
 // ---------------------------------------------------------------------------
-// Root-fix regression: parseBlock now parses each JSDoc block the way JSDoc
+// Root-fix regression: parseBlock parses each JSDoc block the way JSDoc
 // itself does (a tag's body is every line up to the next tag or comment end)
-// instead of guessing at continuation SHAPES. Two escapes of the original
-// (89b693d) shape-by-shape fix were found, both silently truncating with
-// exit 0: a whitespace-only star line right after @when/@fails, and a wrapped
-// continuation line that itself starts with `@word` (read as an unknown tag
-// and dropped). Both are now caught by one rule, plus a KNOWN_TAGS check for
-// any unrecognized @tag inside a @when block. See scripts/gen-primitives.mjs.
+// instead of guessing at continuation SHAPES. The generic mechanics of this
+// rule (RULE A/B/C/D) are now covered once, for all three bare-suite repos,
+// by the shared test/primitives-core.test.mjs. This fixture is kept here
+// because it exercises a shape specific to the CORE's newer strict-@example
+// rule (RULE D: @example must be the LAST tag in a block) colliding with the
+// original wrap bug this file's history is about: a wrapped one-line tag as
+// the very LAST tag in a block, with no @example following it at all (an
+// @example placed after a wrapped tag would now be caught by RULE D first,
+// not by this wrap check — see scripts/primitives-core.mjs).
 // ---------------------------------------------------------------------------
-
-test("a whitespace-only star line then text still fails loudly", () => {
-  const dir = mkdtempSync(path.join(tmpdir(), "bareguard-prim-gen-ws-"));
-  try {
-    writeFixturePkgRaw(dir, [
-      "@when this description",
-      "   ",
-      "continues here after a whitespace-only star line",
-      "@fails never",
-      "@example",
-      "foo()",
-    ]);
-    assertGeneratorRejects(
-      dir,
-      /foo: @when spans more than one line — keep @when\/@fails on one line \(the manifest reads only the first\)/,
-    );
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("a blank ` *` line then text still fails loudly", () => {
-  const dir = mkdtempSync(path.join(tmpdir(), "bareguard-prim-gen-blank-"));
-  try {
-    writeFixturePkgRaw(dir, [
-      "@when this description",
-      "",
-      "continues here after a blank line",
-      "@fails never",
-      "@example",
-      "foo()",
-    ]);
-    assertGeneratorRejects(
-      dir,
-      /foo: @when spans more than one line — keep @when\/@fails on one line \(the manifest reads only the first\)/,
-    );
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
 
 test("a wrap as the LAST tag before the comment closes still fails loudly", () => {
   const dir = mkdtempSync(path.join(tmpdir(), "bareguard-prim-gen-last-"));
   try {
     writeFixturePkgRaw(dir, [
       "@fails never",
-      "@example",
-      "foo()",
       "@when this description",
       "wraps as the very last thing before the comment ends",
     ]);
@@ -369,65 +273,6 @@ test("a wrap as the LAST tag before the comment closes still fails loudly", () =
       dir,
       /foo: @when spans more than one line — keep @when\/@fails on one line \(the manifest reads only the first\)/,
     );
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("a continuation line that looks like a tag is rejected as an unknown tag", () => {
-  const dir = mkdtempSync(path.join(tmpdir(), "bareguard-prim-gen-typo-"));
-  try {
-    writeFixturePkgRaw(dir, [
-      "@when this description",
-      "@typo more text that looks like a tag but isn't one",
-      "@fails never",
-      "@example",
-      "foo()",
-    ]);
-    assertGeneratorRejects(
-      dir,
-      /foo: unknown tag @typo — if this is a wrapped @when\/@fails line, keep them on one line; otherwise add the tag to KNOWN_TAGS/,
-    );
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("@when followed by a known tag on the next line generates cleanly", () => {
-  const dir = mkdtempSync(path.join(tmpdir(), "bareguard-prim-gen-known-"));
-  try {
-    writeFixturePkgRaw(dir, [
-      "@when this description",
-      "@category demo",
-      "@fails never",
-      "@example",
-      "foo()",
-    ]);
-    execFileSync(process.execPath, [GEN_SCRIPT], { cwd: dir, stdio: "pipe" });
-    const out = JSON.parse(readFileSync(path.join(dir, "primitives.json"), "utf8"));
-    assert.equal(out.primitives.length, 1);
-    assert.equal(out.primitives[0].name, "foo");
-    assert.equal(out.primitives[0].when, "this description");
-    assert.equal(out.primitives[0].category, "demo");
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("an @example body containing a line that looks like a tag generates cleanly", () => {
-  const dir = mkdtempSync(path.join(tmpdir(), "bareguard-prim-gen-ex-tag-"));
-  try {
-    writeFixturePkgRaw(dir, [
-      "@when this description",
-      "@fails never",
-      "@example",
-      "@something inline decorator-like content, not a real tag",
-      "foo()",
-    ]);
-    execFileSync(process.execPath, [GEN_SCRIPT], { cwd: dir, stdio: "pipe" });
-    const out = JSON.parse(readFileSync(path.join(dir, "primitives.json"), "utf8"));
-    assert.equal(out.primitives.length, 1);
-    assert.match(out.primitives[0].example, /@something inline decorator-like content/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
