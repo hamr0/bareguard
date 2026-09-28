@@ -53,7 +53,7 @@ import { Gate } from "bareguard";
 const gate = new Gate({
   tools:  { allowlist: ["bash", "read", "write", "fetch"] },
   bash:   { allow: ["git", "ls"], denyPatterns: [/sudo/, /rm\s+-rf/] },
-  fs:     { writeScope: ["/tmp/agent"], readScope: ["/tmp"], deny: ["~/.ssh"] },
+  fs:     { readScope: ["/tmp"], writeScope: ["/tmp/agent"], deny: ["~/.ssh"] },
   budget: { maxCostUsd: 5.00, maxTokens: 100_000 },
   limits: { maxTurns: 50 },
   // event.kind: "ask" | "halt" — your UX decides (TUI, Slack, web, PIN)
@@ -68,6 +68,8 @@ if (decision.outcome === "allow") {
   await gate.record(action, result);  // result.costUsd / result.tokens
 }
 ```
+
+`fs.readScope` and `fs.writeScope` are separate, deny-by-default lists — a folder listed only in `writeScope` isn't readable, and file actions with neither list configured are denied outright, not left "no opinion." `fs.deny` is an optional extra layer *inside* whatever the scopes already allow, never a substitute for one. Deny-by-default here for the same reason the rest of this file's structure does: an allow-list mistake (a scope you forgot to add) fails **closed**, not open.
 
 ## The primitives
 

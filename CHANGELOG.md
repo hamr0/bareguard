@@ -3,6 +3,36 @@
 All notable changes to bareguard are documented here. Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [SemVer](https://semver.org/).
 
 
+## [Unreleased]
+
+### BREAKING
+
+- **`fs` file actions (`read`/`write`/`edit`) now deny by default.** `fs.readScope` and `fs.writeScope` are separate, independently-configured allow lists: unset or `[]` now denies EVERY action of that kind (`fs.readScope.unset`/`fs.writeScope.unset`), where 0.18.1 and earlier had "no opinion" (allow) for an unconfigured scope. There is no crossover between the two lists — a folder listed only in `fs.writeScope` is not readable, and vice versa; list a folder in both to grant both. `fs.deny` is unchanged in spirit (an optional extra layer *inside* whatever the scopes already allow) but is now validated by the same single entry-validator as the scopes (see below).
+
+  **Upgrade note:** if your `Gate` config has no `fs` section at all, every `read`/`write`/`edit` action now denies — add `fs.readScope`/`fs.writeScope` covering the folders your agent actually needs. If you configure only `fs.writeScope` (a write-only shape, e.g. the `adaptlearn` pattern found during this design pass), reads now deny too — add `fs.readScope` explicitly if reads should be allowed.
+
+- **Agent-supplied paths are never canonicalized by the gate.** A `read`/`write`/`edit` path that is not a string, starts with `~`, or is not absolute now denies outright (`fs.invalidPath`/`fs.homePath`/`fs.relativePath`) before any scope/deny matching runs — canonicalize relative paths in your own code before they reach `gate.check()`.
+
+- **fs config entries accept `~`/`~/x`, expanded once via `os.homedir()` at construct time.** Previously a literal `~` in `fs.deny`/`readScope`/`writeScope` never expanded and matched nothing (a silent dead entry). The `~user` form, a relative entry, an empty string, and a non-string entry now all throw at `Gate` construction instead of being accepted as a literal (and mostly useless) string.
+
+- **Symlink/resolved-path checking is on by default, with no opt-out.** In addition to the existing lexical normalization (`.`/`..` collapsed), every `fs` check now realpath-resolves the checked path AND every configured scope/deny root, fresh on every call. A symlink that lexically sits inside an allowed scope but resolves outside it now denies (`fs.readScope.symlinkEscape`/`fs.writeScope.symlinkEscape`) where 0.18.1 allowed it; a dangling symlink anywhere on the resolution walk denies (`fs.readScope.danglingSymlink`/`fs.writeScope.danglingSymlink`); a genuine symlink cycle denies (`fs.readScope.resolveError`/`fs.writeScope.resolveError`, ELOOP). A brand-new file or directory that doesn't exist yet still checks cleanly (resolved via its nearest existing ancestor + the non-existent tail) — this is not a regression on "create a new file inside my scope."
+
+- **`fs.deny`/`fs.readScope`/`fs.writeScope` now go through one validator, retiring three rule names.** A non-array `fs.deny`/`fs.readScope`/`fs.writeScope` (or any bad entry) now surfaces a single `fs.config.invalid` rule instead of the three separate `fs.deny.invalid`/`fs.readScope.invalid`/`fs.writeScope.invalid` rules 0.18.1 used. If you match on these rule strings, update to `fs.config.invalid`.
+
+### Added
+
+- **`action.tool`** — an optional action field, separate from `action.type`, agreed with bare-agent. Kind checks (which primitive applies: `fs`/`bash`/`net`/`spawn`/`defer`) stay on `type` alone, unchanged. Identity checks — `tools.allowlist`, the rwx tools-map row, and the key `tools.denyArgPatterns` is looked up under — now resolve via `action.tool ?? action.type`. Deny-side checks (`tools.denylist`, `tools.denyArgPatterns`) match if EITHER `type` OR `tool` hits, so adding `tool` to an action can only WIDEN what denies, never loosen an existing deny. A present-but-invalid `tool` (not a non-empty string — a number, `""`, an object) denies fail-closed (`tools.invalidTool` under allowlist mode, `rwx.invalidTool` under rwx mode); `tool: null` is treated the same as absent (falls back to `type`). An action with no `tool` field at all is byte-identical to pre-existing behavior.
+
+- **One construct-time element-type validator for every array-shaped config key**, not just `fs.*`: `tools.allowlist`/`denylist` (and the per-tool arrays under `tools.denyArgPatterns`), `content.denyPatterns`/`askPatterns`, `bash.allow`/`denyPatterns`/`extraDestructive`/`extraSuperDestructive`, `net.allowDomains`, `secrets.keys`/`patterns`/`envVars`, `axisB.reversible`. Previously only the ARRAY shape (is this key an array at all) was validated at construct time — a bad ELEMENT inside an otherwise-well-shaped array (`content.denyPatterns: [/ok/, "oops"]`, `tools.allowlist: [123]`) reached the matching code untouched and either threw mid-`check()` (killing the gate for every later action in the same process) or, for `secrets.*`, was silently swallowed whole (see Security below). A bad element on any of these keys now throws loud and early at `new Gate(...)`, naming the key and index. The same table backs a never-throwing runtime path for direct primitive calls made with raw (unvalidated) config — these now deny with a `<key>.invalidElement` rule instead of crashing.
+
+### Security
+
+- **`secrets.redact()` silently disabled its own default-on key redaction when `secrets.keys` carried one bad (non-string) element.** `redact()`'s outer never-throw guard caught the `TypeError` from `keyMatches()` calling `.toLowerCase()` on a non-string spec — but that catch discarded the WHOLE key-walk result, not just the bad element, so a single malformed `secrets.keys` entry turned off `apiKey`/`api_key`/`authorization` default-key redaction for the entire call. A bad `secrets.patterns` element was worse: `new RegExp(re.source, re.flags + "g")` on a non-RegExp threw a raw `SyntaxError` that nothing in `redact()` caught at all, violating its documented never-throw contract outright. Both cases are pre-existing since `secrets.keys`/`patterns` were introduced; a config built from a partially-templated or programmatically-assembled list (one bad entry among many good ones) would silently widen what leaks into the audit log. Fixed at the source: a bad element is now filtered out before it ever reaches the matching code, so only the bad element is skipped — every other configured spec/pattern, and the default set, keep working.
+
+### Fixed
+
+- **A configured `fs` scope root that didn't exist yet on disk previously fell back to a lexical-only comparison** (no symlink resolution for that one root) rather than being resolved via the same nearest-existing-ancestor walk used for a not-yet-created target path — closed as part of the symlink-resolution work above; a fresh workdir scope (including one reached through a symlinked ancestor) is now resolved consistently with everything else, and re-resolved fresh (not cached) on every check, so retargeting a scope root's symlink between two checks is honored immediately.
+
 ## [0.18.1] - 2026-09-27
 
 ### Added

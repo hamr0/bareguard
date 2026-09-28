@@ -129,6 +129,44 @@ hardening (fail-loud on corrupt read) (bareguard-prd.md:995-999).
 
 (bareguard-prd.md:1034-1076)
 
+### bareguard 0.19 — file-rule contract: fs deny-by-default, symlink resolution, action.tool (BUILT, not yet released)
+
+- **`fs` flips to deny-by-default (BREAKING).** `fs.readScope`/`fs.writeScope` are now separate,
+  independently-configured lists — unset or `[]` denies every action of that kind, with no
+  crossover either direction (a `writeScope`-only folder is not readable). `fs.deny` stays an
+  optional extra layer *inside* whatever the scopes already allow. Adopters with no `fs`
+  config at all now deny every file action (previously "no opinion"/allow); a write-only config
+  (the `adaptlearn` shape found during the design pass) needs an explicit `readScope` added.
+- **Symlink/realpath resolution, ON by default, no opt-out.** The checked path and every
+  configured scope/deny root are realpath-resolved fresh on every call (nearest-existing-
+  ancestor + tail for a path/root that doesn't exist yet — never a lexical-only fallback, and
+  never cached, so a root retargeted between two checks is honored on the next one). A symlink
+  escape, a dangling symlink anywhere on the walk, or a genuine ELOOP cycle now denies; a
+  brand-new file/dir still checks cleanly.
+- **Config entries accept `~`/`~/x`, expanded once via `os.homedir()` at construct** (previously
+  a dead literal). `~user`, relative, empty, and non-string entries throw at construct. Agent-
+  supplied paths are never canonicalized by the gate — non-string/`~`-prefixed/relative denies
+  outright, before any scope/deny matching.
+- **`action.tool`** — an optional identity field, separate from `action.type`, agreed with
+  bare-agent. Allow-side lookups (`tools.allowlist`, the rwx tools-map row,
+  `tools.denyArgPatterns`' key) use `action.tool ?? action.type`; deny-side checks match on
+  EITHER key (adding `tool` only ever widens deny surface). An action with no `tool` field is
+  byte-identical to pre-0.19.0.
+- **One construct-time element-type validator** for every array-shaped config key (not just
+  `fs.*`) — `tools.allowlist`/`denylist`, `content.denyPatterns`/`askPatterns`,
+  `bash.allow`/`denyPatterns`/`extraDestructive`/`extraSuperDestructive`, `net.allowDomains`,
+  `secrets.keys`/`patterns`/`envVars`, `axisB.reversible`. A bad element now throws at
+  construct instead of crashing mid-`check()` later; the same table backs a never-throwing
+  runtime path for direct primitive calls with raw config.
+- **Security fix:** `secrets.redact()`'s never-throw guard used to discard the WHOLE key-walk
+  result on a single bad `secrets.keys`/`patterns` element, silently disabling the default-on
+  `apiKey`/`api_key`/`authorization` redaction for that call. Now skips only the bad element.
+- **SemVer-surface rename:** the three runtime `fs.deny.invalid`/`fs.readScope.invalid`/
+  `fs.writeScope.invalid` rule strings (promised in the "1.0 SemVer surface" list below) are
+  retired — `fsCheck` now goes through one validator and surfaces a single
+  `fs.config.invalid` for any of the three on a non-array/malformed section. Still pre-1.0,
+  so this is a normal (if breaking) evolution, not an SLA break.
+
 ### bareguard 1.0 — stabilize
 
 - Lock the API. SemVer commitments.
@@ -193,8 +231,11 @@ them — incl. `flags.<field>`, now live in litectx's write-gate seam, `bash.cla
 v0.14, reached npm in v0.15 — 0.14.0 was never published), and the ten runtime `<key>.invalid`
 deny rules extending the same fail-closed-on-mutation pattern to the rest of the array/map-shaped
 config surface — `tools.denylist.invalid`, `content.denyPatterns.invalid`/`askPatterns.invalid`,
-`fs.deny.invalid`/`readScope.invalid`/`writeScope.invalid`, `net.allowDomains.invalid`,
-`bash.allow.invalid`/`denyPatterns.invalid`, `flags.invalid` (v0.15), and
+`net.allowDomains.invalid`,
+`bash.allow.invalid`/`denyPatterns.invalid`, `flags.invalid` (v0.15; the three
+`fs.deny.invalid`/`readScope.invalid`/`writeScope.invalid` rules from this same set were
+retired in v0.19 — one validator now surfaces `fs.config.invalid` for all three, see the 0.19
+entry above), and
 `content.unserializable` — an action that cannot be serialized for content matching now fails
 closed here instead of throwing out of the gate (v0.16)), the audit JSONL line format (incl. the
 `unpriced` phase, v0.9, the `annotate_malformed` phase, v0.13, `aid` now redacted/byte-bounded
