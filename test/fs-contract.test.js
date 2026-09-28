@@ -6,13 +6,28 @@
 // direct-primitive raw-config safety). Exercised through the real shipped
 // `fsCheck` (via the public `Gate`, and directly for the config-shape rows).
 
-import test from "node:test";
+import test, { mock } from "node:test";
 import assert from "node:assert/strict";
 import fsp from "node:fs/promises";
+import fsSync from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import { Gate } from "../src/index.js";
 import { fsCheck } from "../src/primitives/fs.js";
 import { makeTmpDir, cleanup, uniquePaths } from "./_helpers.js";
+
+// Control `os.homedir()` directly rather than via an env var: `os.homedir()`
+// is platform-specific about WHICH env var it reads (POSIX: `HOME`; Windows:
+// `USERPROFILE`, never `HOME`) — setting only `process.env.HOME` is a no-op
+// on Windows, so a test built that way "passes" locally and silently
+// exercises the REAL machine home on Windows CI instead of the fake one,
+// producing a false negative (a `~/.ssh` deny that never matches the path
+// under test, because the two never agree on what `~` means). Mocking the
+// function itself is the one control surface both platforms actually read.
+function stubHomedir(t, value) {
+  mock.method(os, "homedir", () => value);
+  t.after(() => mock.restoreAll());
+}
 
 let ROOT, SCOPE, SECRET, F;
 
@@ -247,9 +262,7 @@ test("fs.deny wins over a readScope that is a parent of the denied folder", asyn
 
 test("fs: '~' and '~/x' entries expand once via os.homedir()", async (t) => {
   const home = path.join(F, "fakehome");
-  const prevHome = process.env.HOME;
-  process.env.HOME = home;
-  t.after(() => { process.env.HOME = prevHome; });
+  stubHomedir(t, home);
   const gate = await gateWith(t, { fs: { deny: ["~/.ssh"], readScope: [home] } });
   const d = await gate.check({ type: "read", path: path.join(home, ".ssh", "id_rsa") });
   assert.equal(d.outcome, "deny");
@@ -258,12 +271,35 @@ test("fs: '~' and '~/x' entries expand once via os.homedir()", async (t) => {
 
 test("fs: bare '~' readScope expands to the whole home, honestly (not a leak — explicitly scoped)", async (t) => {
   const home = path.join(F, "fakehome");
-  const prevHome = process.env.HOME;
-  process.env.HOME = home;
-  t.after(() => { process.env.HOME = prevHome; });
+  stubHomedir(t, home);
   const gate = await gateWith(t, { fs: { readScope: ["~"] } });
   const d = await gate.check({ type: "read", path: path.join(home, ".ssh", "id_rsa") });
   assert.equal(d.outcome, "allow");
+});
+
+// Regression: a Windows-native (backslash-separated) value coming back from
+// `os.homedir()`/`realpathSync()` must still match a normalized agent path.
+// NOTE on what's actually simulable here: `normalizeEntry()` itself gates a
+// tilde entry's EXPANDED value through `path.isAbsolute(home)` — on this
+// (POSIX) test host, `path.isAbsolute("C:\\Users\\x")` is false, so a
+// homedir stub returning a Windows-shaped string can't even reach
+// construction on this platform; that gate only ever passes on real win32,
+// where `path.isAbsolute` is win32-flavored too. The separator-folding
+// mechanism that actually needs to be proven — `norm()` cleaning up a raw
+// NATIVE-separator string before it's compared — is shared by every
+// consumption site (`within()`, `resolveRootFresh()`) regardless of WHICH
+// call produced the native string, so it's proven here via the other real
+// producer of one: `realpathSync()`. See `fs.js`'s own comment at the
+// `norm(fsSync.realpathSync(...))` call sites for why this specific wrap
+// exists — this test is what falsifies it going forward.
+test("fs: a native (backslash-separated) value from realpathSync still matches a normalized scope root", async (t) => {
+  const gate = await gateWith(t, { fs: { readScope: [SCOPE] } });
+  const target = path.join(SCOPE, "x.txt");
+  const realFsRealpath = fsSync.realpathSync;
+  mock.method(fsSync, "realpathSync", (p) => String(realFsRealpath(p)).replace(/\//g, "\\"));
+  t.after(() => mock.restoreAll());
+  const d = await gate.check({ type: "read", path: target });
+  assert.equal(d.outcome, "allow", "a real file under a real scope root must still allow even when realpathSync returns native backslash separators");
 });
 
 test("fs: '~user' form is refused at construct time (not silently literal)", async () => {

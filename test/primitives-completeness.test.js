@@ -14,6 +14,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -192,7 +193,14 @@ test("every example is syntactically valid JavaScript", async () => {
 // of this generator (`git show 89b693d`).
 // ---------------------------------------------------------------------------
 
-const GEN_SCRIPT = new URL("../scripts/gen-primitives.mjs", import.meta.url).pathname;
+// `.pathname` on a file:// URL is WRONG for a filesystem path on Windows — it
+// keeps the leading "/" in front of the drive letter (`/D:/a/...`), which
+// `execFileSync` then resolves as a relative path off the CURRENT drive root,
+// producing `C:\D:\a\...\gen-primitives.mjs` (MODULE_NOT_FOUND). `fileURLToPath`
+// is the one correct conversion on every platform — same fix this repo already
+// uses in `rwx-starter-file.test.js`/`shared-budget.test.js` for the same class
+// of bug.
+const GEN_SCRIPT = fileURLToPath(new URL("../scripts/gen-primitives.mjs", import.meta.url));
 
 /**
  * A minimal, real npm package on disk — the generator reads package.json's
