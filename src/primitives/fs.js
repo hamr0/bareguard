@@ -71,6 +71,33 @@ function getResolvedConfig(rawCfg) {
 // didn't already report via ELOOP/ENOENT.
 const MAX_WALK = 200;
 
+// Windows drive-letter root, e.g. "C:/" out of "C:/Users/x/.ssh/id_rsa".
+const WIN_DRIVE_ROOT = /^[A-Za-z]:\//;
+// UNC root, e.g. "//server/share/" out of "//server/share/x/y".
+const UNC_ROOT = /^\/\/[^/]+\/[^/]+\//;
+
+/**
+ * The root prefix of an already-normalized (forward-slash), absolute path —
+ * platform-aware so the ancestor walk below terminates at the actual root
+ * (a drive letter or UNC share on Windows, `/` everywhere else) instead of
+ * mis-popping through a drive letter as if it were an ordinary segment, or
+ * walking past it into a bare `"/"` that means something different on
+ * Windows (the root of the CURRENT drive, not a stable, config-independent
+ * root). One definition, shared by both the target-path walk and the
+ * scope/deny-root walk (`resolveRootFresh` below) — no separate "absolute"
+ * concept for config entries vs agent paths.
+ * @param {string} p
+ * @returns {string|null} the root prefix (trailing `/` included), or null if `p` isn't recognizably absolute
+ */
+function rootOf(p) {
+  const win = WIN_DRIVE_ROOT.exec(p);
+  if (win) return win[0];
+  const unc = UNC_ROOT.exec(p);
+  if (unc) return unc[0];
+  if (p.startsWith("/")) return "/";
+  return null;
+}
+
 /**
  * Resolve `absPath` via realpath of its nearest EXISTING ancestor, then
  * reattach the non-existent tail (normalized; a path component that doesn't
@@ -79,10 +106,14 @@ const MAX_WALK = 200;
  * scope/deny ROOTS — one function, one set of symlink semantics, so "a root
  * that doesn't exist yet" is resolved exactly the same way as "a new file
  * inside an existing scope" (no separate lexical-only fallback for either).
+ * The walk never pops past the path's own root (drive letter / UNC share /
+ * `/`) — see `rootOf`.
  * @param {string} absPath already lexically-normalized absolute (posix-style) path
  * @returns {{resolved:string}|{error:"ELOOP"|"EACCES"|"DANGLING"|string}}
  */
 function resolveWithSymlinks(absPath) {
+  const root = rootOf(absPath);
+  if (root === null) return { error: "EINVAL" };
   let testPath = absPath;
   const tail = [];
   let iterations = 0;
@@ -98,23 +129,30 @@ function resolveWithSymlinks(absPath) {
         // Genuinely absent (not a broken symlink) — pop the last segment
         // onto the tail and retry the parent. Candidate for "new file/dir
         // inside an existing (or still-to-be-created) ancestor".
-        if (testPath === "/" || testPath === "") return { resolved: path.posix.join("/", ...tail) };
-        const parts = testPath.split("/");
-        const last = parts.pop() ?? "";
-        if (last === "") { // trailing-slash case
-          const last2 = parts.pop() ?? "";
-          tail.unshift(last2);
-        } else {
-          tail.unshift(last);
+        if (testPath === root) {
+          // The root itself doesn't exist (e.g. an unmounted drive) — no
+          // further ancestor to try; hand back the lexical join so the
+          // caller sees a resolved-looking path rather than an error for
+          // what is, at worst, a root that was never going to exist.
+          return { resolved: root + tail.join("/") };
         }
-        testPath = parts.join("/") || "/";
+        const rest = testPath.slice(root.length); // no leading slash; root already ends in "/"
+        const parts = rest.split("/").filter((s) => s !== "");
+        const last = parts.pop();
+        if (last !== undefined) tail.unshift(last);
+        testPath = parts.length ? root + parts.join("/") : root;
         continue;
       }
       return { error: e.code || "EUNKNOWN" };
     }
     if (lst.isSymbolicLink()) {
       try {
-        const real = fsSync.realpathSync(testPath);
+        // `realpathSync` returns a NATIVE path — backslash-separated on
+        // Windows. `norm()` folds it back to the same forward-slash form
+        // every other path in this module is compared in, so
+        // `path.posix.join` with the (posix-style) tail never produces a
+        // mixed-separator string.
+        const real = norm(fsSync.realpathSync(testPath));
         return { resolved: tail.length ? path.posix.join(real, ...tail) : real };
       } catch (e) {
         if (e.code === "ELOOP") return { error: "ELOOP" };
@@ -127,7 +165,7 @@ function resolveWithSymlinks(absPath) {
     // Real (non-symlink) existing node — realpath it (resolves any
     // symlinked ANCESTOR directory above it) and reattach the tail.
     try {
-      const real = fsSync.realpathSync(testPath);
+      const real = norm(fsSync.realpathSync(testPath));
       return { resolved: tail.length ? path.posix.join(real, ...tail) : real };
     } catch (e) {
       if (e.code === "ELOOP") return { error: "ELOOP" };
@@ -175,10 +213,10 @@ export function fsCheck(action, cfg = {}) {
     return { outcome: "deny", severity: "action", rule: "fs.invalidPath", reason: "path is an empty string" };
   }
   if (raw.startsWith("~")) {
-    return { outcome: "deny", severity: "action", rule: "fs.homePath", reason: `agent path must not use "~": ${raw}` };
+    return { outcome: "deny", severity: "action", rule: "fs.invalidPath", reason: `agent path must not use "~": ${raw}` };
   }
   if (!path.isAbsolute(raw)) {
-    return { outcome: "deny", severity: "action", rule: "fs.relativePath", reason: `agent path must be absolute: ${raw}` };
+    return { outcome: "deny", severity: "action", rule: "fs.invalidPath", reason: `agent path must be absolute: ${raw}` };
   }
 
   const p = norm(raw);
@@ -189,8 +227,13 @@ export function fsCheck(action, cfg = {}) {
   } catch (e) {
     // The ONE validator threw (a bad scope/deny entry). Fail closed — never
     // silently ignore a malformed config, same polarity as every other
-    // `<key>.invalid` rule in this codebase.
-    return { outcome: "deny", severity: "action", rule: "fs.config.invalid", reason: e.message };
+    // `<key>.invalid` rule in this codebase. `e.key` (set by resolveFsConfig
+    // for every entry-level failure) attributes this to the released
+    // `fs.deny.invalid`/`fs.readScope.invalid`/`fs.writeScope.invalid` rule;
+    // only a section-shape error (`fs` itself isn't a plain object — no
+    // single key to blame) falls back to `fs.config.invalid`.
+    const rule = e.key ? `fs.${e.key}.invalid` : "fs.config.invalid";
+    return { outcome: "deny", severity: "action", rule, reason: e.message };
   }
 
   // fs.deny: optional extra layer INSIDE the allowed folders (lexical pass).

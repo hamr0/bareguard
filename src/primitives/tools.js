@@ -37,7 +37,7 @@ export function toolsDenylistCheck(action, cfg = {}) {
   const badIdx = findInvalidIndex(list, "string");
   if (badIdx !== -1) {
     return {
-      outcome: "deny", severity: "action", rule: "tools.denylist.invalidElement",
+      outcome: "deny", severity: "action", rule: "tools.denylist.invalid",
       reason: `tools.denylist[${badIdx}] is not a string (type ${typeof list[badIdx]})`,
     };
   }
@@ -102,7 +102,7 @@ export function toolsDenyArgsCheck(action, cfg = {}) {
     const badIdx = findInvalidIndex(patterns, "regexp");
     if (badIdx !== -1) {
       return {
-        outcome: "deny", severity: "action", rule: "tools.denyArgPatterns.invalidElement",
+        outcome: "deny", severity: "action", rule: "tools.denyArgPatterns.invalid",
         reason: `tools.denyArgPatterns.${key}[${badIdx}] is not a RegExp (type ${typeof patterns[badIdx]})`,
       };
     }
@@ -148,7 +148,7 @@ export function toolsAllowlistCheck(action, cfg = {}) {
   const badIdx = findInvalidIndex(list, "string");
   if (badIdx !== -1) {
     return {
-      outcome: "deny", severity: "action", rule: "tools.allowlist.invalidElement",
+      outcome: "deny", severity: "action", rule: "tools.allowlist.invalid",
       reason: `tools.allowlist[${badIdx}] is not a string (type ${typeof list[badIdx]})`,
     };
   }

@@ -77,7 +77,7 @@ test("direct call: toolsAllowlistCheck with a bad element denies, does not throw
   assert.doesNotThrow(() => {
     const d = toolsAllowlistCheck({ type: "x" }, { allowlist: [123] });
     assert.equal(d.outcome, "deny");
-    assert.equal(d.rule, "tools.allowlist.invalidElement");
+    assert.equal(d.rule, "tools.allowlist.invalid");
   });
 });
 
@@ -85,7 +85,7 @@ test("direct call: toolsDenylistCheck with a bad element denies, does not throw"
   assert.doesNotThrow(() => {
     const d = toolsDenylistCheck({ type: "x" }, { denylist: [123] });
     assert.equal(d.outcome, "deny");
-    assert.equal(d.rule, "tools.denylist.invalidElement");
+    assert.equal(d.rule, "tools.denylist.invalid");
   });
 });
 
@@ -93,7 +93,7 @@ test("direct call: contentDenyCheck with a bad element denies, does not throw", 
   assert.doesNotThrow(() => {
     const d = contentDenyCheck({ type: "bash", cmd: "ls" }, { denyPatterns: [/ok/, "oops"] });
     assert.equal(d.outcome, "deny");
-    assert.equal(d.rule, "content.denyPatterns.invalidElement");
+    assert.equal(d.rule, "content.denyPatterns.invalid");
   });
 });
 
@@ -101,7 +101,7 @@ test("direct call: contentAskCheck with a bad element denies, does not throw", (
   assert.doesNotThrow(() => {
     const d = contentAskCheck({ type: "bash", cmd: "ls" }, { askPatterns: ["oops"] });
     assert.equal(d.outcome, "deny");
-    assert.equal(d.rule, "content.askPatterns.invalidElement");
+    assert.equal(d.rule, "content.askPatterns.invalid");
   });
 });
 
@@ -109,7 +109,7 @@ test("direct call: bashCheck with a bad denyPatterns element denies, does not th
   assert.doesNotThrow(() => {
     const d = bashCheck({ type: "bash", cmd: "ls" }, { denyPatterns: ["oops"] });
     assert.equal(d.outcome, "deny");
-    assert.equal(d.rule, "bash.denyPatterns.invalidElement");
+    assert.equal(d.rule, "bash.denyPatterns.invalid");
   });
 });
 

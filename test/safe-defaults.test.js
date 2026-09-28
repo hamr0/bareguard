@@ -91,7 +91,7 @@ test("safe defaults — git push --force is denied", async () => {
 // CHANGED (0.19.0): both BG-3 payload tests below now pass an absolute path
 // plus a matching `fs.writeScope`, and use `Gate({ fs: {...} })` instead of
 // `Gate({})` — fs is deny-by-default, and a relative path is rejected
-// outright (`fs.relativePath`, agent paths are never canonicalized), so the
+// outright (`fs.invalidPath`, agent paths are never canonicalized), so the
 // original relative "migrations/001.sql" / "src/read.js" paths under an
 // empty config would now deny at the fs step for reasons unrelated to what
 // these tests check (content payload scoping, not fs scoping).

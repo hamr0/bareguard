@@ -144,7 +144,7 @@ export function contentDenyCheck(action, cfg) {
   const badIdx = findInvalidIndex(patterns, "regexp");
   if (badIdx !== -1) {
     return {
-      outcome: "deny", severity: "action", rule: "content.denyPatterns.invalidElement",
+      outcome: "deny", severity: "action", rule: "content.denyPatterns.invalid",
       reason: `content.denyPatterns[${badIdx}] is not a RegExp (type ${typeof patterns[badIdx]})`,
     };
   }
@@ -180,7 +180,7 @@ export function contentAskCheck(action, cfg) {
   const badIdx = findInvalidIndex(patterns, "regexp");
   if (badIdx !== -1) {
     return {
-      outcome: "deny", severity: "action", rule: "content.askPatterns.invalidElement",
+      outcome: "deny", severity: "action", rule: "content.askPatterns.invalid",
       reason: `content.askPatterns[${badIdx}] is not a RegExp (type ${typeof patterns[badIdx]})`,
     };
   }

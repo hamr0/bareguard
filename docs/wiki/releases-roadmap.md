@@ -145,27 +145,57 @@ hardening (fail-loud on corrupt read) (bareguard-prd.md:995-999).
   brand-new file/dir still checks cleanly.
 - **Config entries accept `~`/`~/x`, expanded once via `os.homedir()` at construct** (previously
   a dead literal). `~user`, relative, empty, and non-string entries throw at construct. Agent-
-  supplied paths are never canonicalized by the gate — non-string/`~`-prefixed/relative denies
-  outright, before any scope/deny matching.
+  supplied paths are never canonicalized by the gate — non-string/`~`-prefixed/relative/empty all
+  deny via `fs.invalidPath` (one rule, the reason string says which), before any scope/deny
+  matching.
 - **`action.tool`** — an optional identity field, separate from `action.type`, agreed with
   bare-agent. Allow-side lookups (`tools.allowlist`, the rwx tools-map row,
   `tools.denyArgPatterns`' key) use `action.tool ?? action.type`; deny-side checks match on
-  EITHER key (adding `tool` only ever widens deny surface). An action with no `tool` field is
-  byte-identical to pre-0.19.0.
+  EITHER key (adding `tool` only ever widens deny surface). A present-but-invalid `tool` value
+  denies via `tools.invalidTool` — one rule name whether `tools` or `rwx` is the primitive doing
+  the check, since `action.tool` is one shared field, not owned by either. An action with no
+  `tool` field is byte-identical to pre-0.19.0.
 - **One construct-time element-type validator** for every array-shaped config key (not just
-  `fs.*`) — `tools.allowlist`/`denylist`, `content.denyPatterns`/`askPatterns`,
-  `bash.allow`/`denyPatterns`/`extraDestructive`/`extraSuperDestructive`, `net.allowDomains`,
-  `secrets.keys`/`patterns`/`envVars`, `axisB.reversible`. A bad element now throws at
-  construct instead of crashing mid-`check()` later; the same table backs a never-throwing
-  runtime path for direct primitive calls with raw config.
+  `fs.*`) — `tools.allowlist`/`denylist` (incl. the per-tool arrays under `denyArgPatterns`),
+  `content.denyPatterns`/`askPatterns`, `bash.allow`/`denyPatterns`/`extraDestructive`/
+  `extraSuperDestructive`, `net.allowDomains`, `secrets.keys`/`patterns`/`envVars`,
+  `axisB.reversible`. A bad element now throws at construct instead of crashing mid-`check()`
+  later; a direct primitive call with raw config now denies via the SAME already-released
+  `<key>.invalid` rule the array-shape check itself uses (`tools.allowlist.invalid`,
+  `content.denyPatterns.invalid`, …) rather than a second `.invalidElement` name — one rule per
+  key covers "this config value is unusable," whether the problem is its shape or one element.
 - **Security fix:** `secrets.redact()`'s never-throw guard used to discard the WHOLE key-walk
   result on a single bad `secrets.keys`/`patterns` element, silently disabling the default-on
   `apiKey`/`api_key`/`authorization` redaction for that call. Now skips only the bad element.
-- **SemVer-surface rename:** the three runtime `fs.deny.invalid`/`fs.readScope.invalid`/
-  `fs.writeScope.invalid` rule strings (promised in the "1.0 SemVer surface" list below) are
-  retired — `fsCheck` now goes through one validator and surfaces a single
-  `fs.config.invalid` for any of the three on a non-array/malformed section. Still pre-1.0,
-  so this is a normal (if breaking) evolution, not an SLA break.
+- **Windows-aware symlink resolution.** The ancestor walk in `resolveWithSymlinks()` is now
+  root-aware (`path.parse`-style: a drive letter, a UNC share, or `/`) instead of hardcoding
+  `/` as the only stopping point — on Windows the walk used to mis-terminate through a drive
+  letter, and `realpathSync`'s native (backslash) output was joined with the posix-style tail
+  unconverted, producing a mixed-separator path that could never match a scope root and turned
+  ordinary (non-symlinked) allows into false denies. Both fixed; `fs-contract.test.js`'s
+  symlink-creating tests skip cleanly (never silently pass) when symlink creation itself is
+  unavailable (Windows without admin/dev-mode privilege) — the non-symlink tests in the same
+  file still run everywhere.
+- **Perf, re-measured on the shipped build** (10,000 `fsCheck()` calls, Linux, warm cache):
+  ~1–2µs/check on `origin/main` (c469796, no realpath calls) vs ~20–25µs/check on this branch
+  for an existing target (~75–80µs for a not-yet-created one, the nearest-existing-ancestor
+  walk's cost) — roughly 15–60x depending on scenario, all still well under 100µs/check. Root
+  count barely matters when the target matches an early root (`.some()` short-circuits); a
+  forced full scan across 5 roots costs roughly 3x a single root. No optimization made — nothing
+  pathological, per the task brief's own bar.
+- **Rule-name consistency pass (item 3 of the 0.19 debrief).** ONE scheme, stated once: a bad
+  CONFIG value (shape OR element) denies via the existing released `<config.key>.invalid` for
+  that key; a bad ACTION field (non-string/malformed `path`/`tool`) denies via one
+  `<domain>.invalid<Field>` name shared by every primitive that reads that field; an fs OUTCOME
+  decision is `fs.<scope>.<reason>` (scope-specific) or `fs.<reason>` (kind-independent, e.g.
+  `fs.deny`). This UN-retires the three released `fs.deny.invalid`/`fs.readScope.invalid`/
+  `fs.writeScope.invalid` names this branch had folded into an interim `fs.config.invalid` (kept
+  only for the one case no single key can be blamed for: the `fs` section itself isn't a plain
+  object), merges `fs.homePath`/`fs.relativePath` into the existing `fs.invalidPath`, drops the
+  never-released `.invalidElement` suffix everywhere in favor of the already-released `.invalid`
+  name for that key, and merges `tools.invalidTool`/`rwx.invalidTool` (both new, never released)
+  into one `tools.invalidTool`. Net effect: fewer rule names than this branch had before, and the
+  only names that actually change meaning are ones that were never released.
 
 ### bareguard 1.0 — stabilize
 
@@ -232,10 +262,10 @@ v0.14, reached npm in v0.15 — 0.14.0 was never published), and the ten runtime
 deny rules extending the same fail-closed-on-mutation pattern to the rest of the array/map-shaped
 config surface — `tools.denylist.invalid`, `content.denyPatterns.invalid`/`askPatterns.invalid`,
 `net.allowDomains.invalid`,
-`bash.allow.invalid`/`denyPatterns.invalid`, `flags.invalid` (v0.15; the three
-`fs.deny.invalid`/`readScope.invalid`/`writeScope.invalid` rules from this same set were
-retired in v0.19 — one validator now surfaces `fs.config.invalid` for all three, see the 0.19
-entry above), and
+`bash.allow.invalid`/`denyPatterns.invalid`, `flags.invalid`, `fs.deny.invalid`/
+`readScope.invalid`/`writeScope.invalid` (v0.15; v0.19 widened all thirteen `.invalid` rules
+to also fire on a bad array ELEMENT, not just a bad shape — same name, more triggers, see the
+0.19 entry above), and
 `content.unserializable` — an action that cannot be serialized for content matching now fails
 closed here instead of throwing out of the gate (v0.16)), the audit JSONL line format (incl. the
 `unpriced` phase, v0.9, the `annotate_malformed` phase, v0.13, `aid` now redacted/byte-bounded

@@ -59,6 +59,23 @@ function describe(v) {
 }
 
 /**
+ * An `fs.<key>` validation failure, carrying WHICH key (`deny`/`readScope`/
+ * `writeScope`) failed so a never-throwing runtime caller (`fs.js`) can
+ * attribute the failure to the matching released `fs.<key>.invalid` rule
+ * instead of one generic rule for every fs config problem.
+ */
+class FsConfigError extends Error {
+  /**
+   * @param {string} message
+   * @param {string} key
+   */
+  constructor(message, key) {
+    super(message);
+    this.key = key;
+  }
+}
+
+/**
  * Validate + normalize a full `fs` config section. Throws (construct-time,
  * fail-closed) on the first bad entry anywhere in `deny`/`readScope`/
  * `writeScope`. `undefined`/`null` for a list means "not configured" (the fs
@@ -73,6 +90,9 @@ function describe(v) {
 export function resolveFsConfig(fsCfg = {}) {
   const cfg = fsCfg ?? {};
   if (typeof cfg !== "object" || Array.isArray(cfg)) {
+    // Section-shape error — not attributable to one of deny/readScope/
+    // writeScope specifically, so no `.key` is attached; the caller (fs.js)
+    // falls back to `fs.config.invalid` for this one case only.
     throw new Error(`invalid bareguard config: fs must be a plain object, got ${Array.isArray(cfg) ? "array" : typeof cfg}`);
   }
   const out = { deny: [], readScope: null, writeScope: null };
@@ -81,13 +101,17 @@ export function resolveFsConfig(fsCfg = {}) {
     const list = cfg[key];
     if (list === undefined || list === null) continue; // absent — deny-by-default for scopes is fsCheck's job; `deny` stays "no extra layer"
     if (!Array.isArray(list)) {
-      throw new Error(`invalid bareguard config: fs.${key} must be an array, got ${typeof list}`);
+      throw new FsConfigError(`invalid bareguard config: fs.${key} must be an array, got ${typeof list}`, key);
     }
     const resolved = [];
     for (let i = 0; i < list.length; i++) {
       const r = normalizeEntry(list[i]);
       if (!r.ok) {
-        throw new Error(`invalid bareguard config: fs.${key}[${i}] — ${r.reason}`);
+        // `.key` lets the runtime (never-throwing) caller in fs.js attribute
+        // this to the released `fs.<key>.invalid` rule rather than a generic
+        // one — same key, whether the failure is shape (above) or one bad
+        // element (here).
+        throw new FsConfigError(`invalid bareguard config: fs.${key}[${i}] — ${r.reason}`, key);
       }
       resolved.push(r.value);
     }

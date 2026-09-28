@@ -11,8 +11,9 @@
 // - DENY-side checks (`tools.denylist`, `tools.denyArgPatterns`) must never
 //   get WEAKER because `tool` is present: they match if EITHER `tool` OR
 //   `type` matches. Adding `tool` can only ADD deny surface, never remove it.
-// - `tool` present but not a non-empty string -> deny, fail closed
-//   (`tools.invalidTool` / `rwx.invalidTool`).
+// - `tool` present but not a non-empty string -> deny, fail closed, rule
+//   `tools.invalidTool` — ONE name whether `tools` or `rwx` is the primitive
+//   evaluating it (`action.tool` is one shared field, not owned by either).
 // - `tool: null` is treated the SAME as absent (falls back to `type`) — this
 //   mirrors the existing convention elsewhere in this codebase that `null`
 //   reads as "caller didn't set this" (e.g. `fs.js`'s `raw != null` treats

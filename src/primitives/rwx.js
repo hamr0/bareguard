@@ -418,11 +418,15 @@ export function rwxCheck(action, rwxCfg) {
   }
 
   // Identity = action.tool ?? action.type for the tools-map row. A bad
-  // `tool` value denies outright, fail closed.
+  // `tool` value denies outright, fail closed. Same rule name as the
+  // `tools.allowlist`/`denylist` identity checks (`tools.invalidTool`) —
+  // `action.tool` is one shared field, not a per-primitive one, so there is
+  // one rule for "this action's tool identity is unusable" no matter which
+  // primitive (tools or rwx) is the one evaluating it.
   const id = resolveIdentity(action);
   if (!id.ok) {
     return {
-      outcome: "deny", severity: "action", rule: "rwx.invalidTool",
+      outcome: "deny", severity: "action", rule: "tools.invalidTool",
       reason: id.decision.reason,
       rwxLetters: letters,
     };

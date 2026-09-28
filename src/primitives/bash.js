@@ -48,7 +48,7 @@ export function bashCheck(action, cfg = {}) {
     }
     const badIdx = findInvalidIndex(cfg.denyPatterns, "regexp");
     if (badIdx !== -1) {
-      return { outcome: "deny", severity: "action", rule: "bash.denyPatterns.invalidElement", reason: `bash.denyPatterns[${badIdx}] is not a RegExp (type ${typeof cfg.denyPatterns[badIdx]})` };
+      return { outcome: "deny", severity: "action", rule: "bash.denyPatterns.invalid", reason: `bash.denyPatterns[${badIdx}] is not a RegExp (type ${typeof cfg.denyPatterns[badIdx]})` };
     }
     for (const re of cfg.denyPatterns) {
       if (re.test(cmd)) {

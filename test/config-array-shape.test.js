@@ -69,22 +69,32 @@ test("content.denyPatterns / askPatterns: a non-array must fail closed, not sile
 });
 
 // CHANGED (0.19.0): fs.deny/readScope/writeScope now go through ONE validator
-// (fs-config.js, resolveFsConfig) called from fsCheck itself — a non-array
-// section is a bad "entry list" the validator throws on, caught by fsCheck
-// and surfaced as a single `fs.config.invalid` rule, not three separate
-// per-key `.invalid` rules. Still fails closed, not throw, not silent no-op.
+// (fs-config.js, resolveFsConfig) called from fsCheck itself, but it still
+// surfaces the three separate, already-RELEASED per-key rules
+// (`fs.deny.invalid`/`fs.readScope.invalid`/`fs.writeScope.invalid`) — same
+// names 0.18.1 shipped, now covering BOTH a bad shape (this test) and a bad
+// element (see fs-contract.test.js) under the one released name per key,
+// rather than the interim `fs.config.invalid` this branch tried first.
+// `fs.config.invalid` survives only for the one case no single key can be
+// blamed for: the `fs` SECTION itself isn't a plain object.
 test("fs.deny / readScope / writeScope: a non-array must fail closed, not throw or silently no-op", () => {
   const d1 = fsCheck({ type: "read", path: "/x" }, { deny: "not-an-array" });
   assert.equal(d1.outcome, "deny");
-  assert.equal(d1.rule, "fs.config.invalid");
+  assert.equal(d1.rule, "fs.deny.invalid");
 
   const d2 = fsCheck({ type: "read", path: "/x" }, { readScope: "not-an-array" });
   assert.equal(d2.outcome, "deny");
-  assert.equal(d2.rule, "fs.config.invalid");
+  assert.equal(d2.rule, "fs.readScope.invalid");
 
   const d3 = fsCheck({ type: "write", path: "/x" }, { writeScope: "not-an-array" });
   assert.equal(d3.outcome, "deny");
-  assert.equal(d3.rule, "fs.config.invalid");
+  assert.equal(d3.rule, "fs.writeScope.invalid");
+});
+
+test("fs section itself malformed (not a plain object): falls back to fs.config.invalid — no single key to blame", () => {
+  const d = fsCheck({ type: "read", path: "/x" }, "not-an-object");
+  assert.equal(d.outcome, "deny");
+  assert.equal(d.rule, "fs.config.invalid");
 });
 
 test("net.allowDomains: a non-array must fail closed, not throw", () => {

@@ -1,10 +1,19 @@
 // ONE element-type validator for every array-shaped config key EXCEPT
 // `fs.deny`/`fs.readScope`/`fs.writeScope`, which get a richer, path-specific
 // validator (`fs-config.js`: tilde expansion, absolute-only, per-index
-// messages) — this table exists for everything else: `tools.allowlist`/
-// `denylist`, `content.denyPatterns`/`askPatterns`, `bash.allow`/
-// `denyPatterns`/`extraDestructive`/`extraSuperDestructive`, `net.allowDomains`,
-// `secrets.keys`/`patterns`/`envVars`, `axisB.reversible`.
+// messages, VALUE transformation) — this table exists for everything else:
+// `tools.allowlist`/`denylist`, `content.denyPatterns`/`askPatterns`,
+// `bash.allow`/`denyPatterns`/`extraDestructive`/`extraSuperDestructive`,
+// `net.allowDomains`, `secrets.keys`/`patterns`/`envVars`, `axisB.reversible`.
+//
+// Two validators, not one, because they do different KINDS of work, not just
+// different keys: this table only asks "is each element the right TYPE"
+// (string vs RegExp) and returns a yes/no per element; `fs-config.js` also
+// TRANSFORMS a valid entry (`~` -> `os.homedir()`), so its return value is
+// the normalized string array itself, not a pass/fail. Folding fs into this
+// table would mean either bolting a transform step onto a table whose whole
+// contract is "boolean/index, never a value," or dropping tilde expansion —
+// neither is an improvement, so fs keeps its own validator.
 //
 // `gate.js`'s `assertArrayShapedConfig` already throws at construct time when
 // one of these keys is present but not an ARRAY (section/array shape). What it

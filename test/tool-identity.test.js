@@ -133,10 +133,10 @@ test("action.tool: null is treated as absent, falls back to `type`", () => {
   assert.equal(d.outcome, "allow");
 });
 
-test("action.tool: a bad value denies via rwx.invalidTool under rwx mode", () => {
+test("action.tool: a bad value denies via tools.invalidTool under rwx mode too (one shared rule, not two)", () => {
   const d = rwxCheck({ type: "search", tool: 42 }, RWX);
   assert.equal(d.outcome, "deny");
-  assert.equal(d.rule, "rwx.invalidTool");
+  assert.equal(d.rule, "tools.invalidTool");
 });
 
 test("action.tool: matchRwxLetter (accrual-only, never denies) falls back to `type` on a bad `tool`", () => {

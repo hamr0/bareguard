@@ -16,6 +16,31 @@ import { makeTmpDir, cleanup, uniquePaths } from "./_helpers.js";
 
 let ROOT, SCOPE, SECRET, F;
 
+// Symlink creation needs admin/dev-mode privilege on Windows
+// (`SeCreateSymbolicLinkPrivilege`) and fails with EPERM without it. The
+// non-symlink tests in this file (deny-by-default, agent-path
+// canonicalization, config-shape) must still run everywhere; only the
+// symlink-dependent tests skip, cleanly and with a stated reason — never a
+// silent pass (an unhandled EPERM in `before()` would instead fail EVERY
+// test in the file, symlink or not).
+let symlinksSupported = true;
+let symlinksSkipReason = "";
+
+async function trySymlink(target, linkPath, type) {
+  if (!symlinksSupported) return;
+  try {
+    await fsp.symlink(target, linkPath, type);
+  } catch (e) {
+    symlinksSupported = false;
+    symlinksSkipReason = `symlink creation unsupported in this environment (${e.code || e.message}) — needs admin/dev-mode privilege on Windows`;
+  }
+}
+
+function skipIfNoSymlinks(t) {
+  if (!symlinksSupported) t.skip(symlinksSkipReason);
+  return !symlinksSupported;
+}
+
 test.before(async () => {
   ROOT = await makeTmpDir("bareguard-fs-contract-");
   F = ROOT;
@@ -28,20 +53,20 @@ test.before(async () => {
 
   // symlink escape: scope/escape-link -> ../secret (lexically inside scope,
   // resolves outside it)
-  await fsp.symlink(SECRET, path.join(SCOPE, "escape-link"), "dir");
+  await trySymlink(SECRET, path.join(SCOPE, "escape-link"), "dir");
 
   // legit scope ROOT itself is a symlink pointing at a real directory
   await fsp.mkdir(path.join(F, "real-scope"), { recursive: true });
   await fsp.writeFile(path.join(F, "real-scope", "ok.txt"), "ok");
-  await fsp.symlink(path.join(F, "real-scope"), path.join(F, "legit-root-link"), "dir");
+  await trySymlink(path.join(F, "real-scope"), path.join(F, "legit-root-link"), "dir");
 
   // dangling symlink (final component, and as an intermediate segment)
-  await fsp.symlink(path.join(F, "does-not-exist"), path.join(SCOPE, "dangling"), "file");
+  await trySymlink(path.join(F, "does-not-exist"), path.join(SCOPE, "dangling"), "file");
 
   // genuine ELOOP cycle: loopdir/a <-> loopdir/b
   await fsp.mkdir(path.join(F, "loopdir"), { recursive: true });
-  await fsp.symlink(path.join(F, "loopdir", "b"), path.join(F, "loopdir", "a"), "file");
-  await fsp.symlink(path.join(F, "loopdir", "a"), path.join(F, "loopdir", "b"), "file");
+  await trySymlink(path.join(F, "loopdir", "b"), path.join(F, "loopdir", "a"), "file");
+  await trySymlink(path.join(F, "loopdir", "a"), path.join(F, "loopdir", "b"), "file");
 
   // fake HOME for ~ expansion, isolated from the real user's home
   const home = path.join(F, "fakehome");
@@ -105,28 +130,41 @@ test("fs: relative agent path denies outright, before scope matching", async (t)
   const gate = await gateWith(t, { fs: { readScope: [F] } });
   const d = await gate.check({ type: "read", path: ".ssh/id_rsa" });
   assert.equal(d.outcome, "deny");
-  assert.equal(d.rule, "fs.relativePath");
+  assert.equal(d.rule, "fs.invalidPath");
 });
 
 test("fs: traversal-relative agent path denies outright", async (t) => {
   const gate = await gateWith(t, { fs: { readScope: [F] } });
   const d = await gate.check({ type: "read", path: "../.ssh/id_rsa" });
   assert.equal(d.outcome, "deny");
-  assert.equal(d.rule, "fs.relativePath");
+  assert.equal(d.rule, "fs.invalidPath");
 });
 
 test("fs: a '~'-prefixed agent path denies outright (agent paths are never canonicalized)", async (t) => {
   const gate = await gateWith(t, { fs: { readScope: [F] } });
   const d = await gate.check({ type: "read", path: "~/.ssh/id_rsa" });
   assert.equal(d.outcome, "deny");
-  assert.equal(d.rule, "fs.homePath");
+  assert.equal(d.rule, "fs.invalidPath");
 });
 
-test("fs: Windows-style backslash path denies as relative/non-absolute on this POSIX host", async (t) => {
+// `path.isAbsolute()` is platform-aware (the same "one definition of
+// absolute" shared by fs-config.js — see fs.js header), so the SAME literal
+// string is genuinely absolute on win32 and genuinely relative everywhere
+// else — this is not a bug to paper over, it's why the fs contract insists
+// on one shared `path.isAbsolute()` instead of a bareguard-private notion of
+// "looks absolute."
+test("fs: a drive-letter path denies as relative/non-absolute on a POSIX host (fs.invalidPath — never reaches scope matching)", { skip: process.platform === "win32" ? "posix-only: this literal string is a genuine absolute path on win32" : false }, async (t) => {
   const gate = await gateWith(t, { fs: { readScope: [F] } });
   const d = await gate.check({ type: "read", path: "C:\\Users\\x\\.ssh\\id_rsa" });
   assert.equal(d.outcome, "deny");
-  assert.equal(d.rule, "fs.relativePath");
+  assert.equal(d.rule, "fs.invalidPath");
+});
+
+test("fs: the SAME drive-letter path is a genuine absolute path on win32 — passes canonicalization, denies on scope miss instead", { skip: process.platform !== "win32" ? "win32-only: exercises the branch above's inverse" : false }, async (t) => {
+  const gate = await gateWith(t, { fs: { readScope: [F] } });
+  const d = await gate.check({ type: "read", path: "C:\\Users\\x\\.ssh\\id_rsa" });
+  assert.equal(d.outcome, "deny");
+  assert.equal(d.rule, "fs.readScope"); // absolute and canonicalized fine — just outside this test's readScope
 });
 
 // ---------------------------------------------------------------------------
@@ -134,6 +172,7 @@ test("fs: Windows-style backslash path denies as relative/non-absolute on this P
 // ---------------------------------------------------------------------------
 
 test("fs: symlink escape — lexically inside scope, resolves outside it, denies", async (t) => {
+  if (skipIfNoSymlinks(t)) return;
   const gate = await gateWith(t, { fs: { readScope: [SCOPE] } });
   const d = await gate.check({ type: "read", path: path.join(SCOPE, "escape-link", "id_rsa") });
   assert.equal(d.outcome, "deny");
@@ -141,12 +180,14 @@ test("fs: symlink escape — lexically inside scope, resolves outside it, denies
 });
 
 test("fs: a symlinked scope ROOT (legit alias) still allows a real file through it", async (t) => {
+  if (skipIfNoSymlinks(t)) return;
   const gate = await gateWith(t, { fs: { readScope: [path.join(F, "legit-root-link")] } });
   const d = await gate.check({ type: "read", path: path.join(F, "legit-root-link", "ok.txt") });
   assert.equal(d.outcome, "allow");
 });
 
 test("fs: dangling symlink as the write target denies", async (t) => {
+  if (skipIfNoSymlinks(t)) return;
   const gate = await gateWith(t, { fs: { writeScope: [SCOPE] } });
   const d = await gate.check({ type: "write", path: path.join(SCOPE, "dangling") });
   assert.equal(d.outcome, "deny");
@@ -154,6 +195,7 @@ test("fs: dangling symlink as the write target denies", async (t) => {
 });
 
 test("fs: dangling symlink as the read target denies", async (t) => {
+  if (skipIfNoSymlinks(t)) return;
   const gate = await gateWith(t, { fs: { readScope: [SCOPE] } });
   const d = await gate.check({ type: "read", path: path.join(SCOPE, "dangling") });
   assert.equal(d.outcome, "deny");
@@ -161,6 +203,7 @@ test("fs: dangling symlink as the read target denies", async (t) => {
 });
 
 test("fs: dangling symlink as an INTERMEDIATE path segment denies", async (t) => {
+  if (skipIfNoSymlinks(t)) return;
   const gate = await gateWith(t, { fs: { writeScope: [SCOPE] } });
   const d = await gate.check({ type: "write", path: path.join(SCOPE, "dangling", "deeper.txt") });
   assert.equal(d.outcome, "deny");
@@ -180,6 +223,7 @@ test("fs: new file CREATE two levels deep, intermediate dir absent, still allows
 });
 
 test("fs: ELOOP — a genuine symlink cycle denies with a resolveError rule", async (t) => {
+  if (skipIfNoSymlinks(t)) return;
   const gate = await gateWith(t, { fs: { readScope: [F] } });
   const d = await gate.check({ type: "read", path: path.join(F, "loopdir", "a") });
   assert.equal(d.outcome, "deny");
@@ -250,13 +294,13 @@ test("fs.deny with a non-string element throws at construct time", async () => {
 test("fs.deny with a non-string element denies (not throws) via a direct fsCheck() call", () => {
   const d = fsCheck({ type: "read", path: path.join(SCOPE, "x.txt") }, { deny: [123], readScope: [SCOPE] });
   assert.equal(d.outcome, "deny");
-  assert.equal(d.rule, "fs.config.invalid");
+  assert.equal(d.rule, "fs.deny.invalid");
 });
 
 test("fs.readScope not an array (string typo) denies via a direct fsCheck() call", () => {
   const d = fsCheck({ type: "read", path: path.join(SCOPE, "x.txt") }, { readScope: SCOPE });
   assert.equal(d.outcome, "deny");
-  assert.equal(d.rule, "fs.config.invalid");
+  assert.equal(d.rule, "fs.readScope.invalid");
 });
 
 // ---------------------------------------------------------------------------
@@ -275,6 +319,7 @@ test("fs: a not-yet-created scope root is resolved via nearest-existing-ancestor
 });
 
 test("fs: a symlinked ancestor of a not-yet-created scope root is honored", async (t) => {
+  if (skipIfNoSymlinks(t)) return;
   // real-scope/aliased-parent -> symlink to a real dir; the scope root sits
   // ONE level below that symlink and does not exist yet itself.
   const realParent = path.join(F, "real-parent-for-fresh-root");
@@ -300,6 +345,7 @@ test("fs: a symlinked ancestor of a not-yet-created scope root is honored", asyn
 });
 
 test("fs: scope roots are resolved FRESH on every check — retargeting a root symlink between two checks is reflected immediately", async (t) => {
+  if (skipIfNoSymlinks(t)) return;
   // Both the checked path and the scope root go through the SAME live
   // symlink, so a STALE cached root resolution (resolved once, reused) would
   // disagree with the target's always-fresh realpath after a retarget — the
