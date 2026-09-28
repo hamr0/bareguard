@@ -1636,6 +1636,20 @@ export class Gate {
    * only behavior; there is no silent-reject mode. A gate with no `rwx`
    * config at all rejects every `add()` (conservative: nothing to tighten
    * against, so nothing is accepted).
+   *
+   * **Serialized**, on the SAME gate-wide ordering lock `check()`'s final
+   * commit uses (`_withLock`) — not a separate queue. `add()` reads the live
+   * tools map, then AWAITS (the audit-first writes), then mutates — a
+   * genuine async window between "validate against current state" and "use
+   * that validation." Two concurrent `add()` calls that both entered before
+   * either had mutated would both validate against the SAME stale state:
+   * found by review, this let an `x`-tagged key concurrently "tighten" to
+   * `w` (loosening it, past the tighten-only guard, because the `w` call's
+   * tighten-check read the map before the `x` call had landed) and would
+   * equally have let two batches that each individually fit the 10,000-key
+   * cap jointly cross it. Sharing the lock with `check()`'s final commit
+   * (rather than a separate `add()`-only queue) is what makes the audit
+   * log's line order the TRUE order across BOTH operations (§23.21).
    * @param {Object<string, (string|{letter:string, marker?:string})>} entries
    *   1..n tools-map entries, the same shape `rwx.tools` accepts at
    *   construct time (a bare `"r"`/`"w"`/`"x"`, or `{letter, marker?}`).
@@ -1656,20 +1670,6 @@ export class Gate {
    * const decision = await gate.check({ type: "deploy", args: {} });
    * decision.outcome; // "allow"
    * @fails Throws (after emitting `rwx.add_rejected`) when: this gate has been {@link Gate#terminate}d; it has no `rwx` config; `entries` is not a non-empty plain object, or is unreadable; a key is `__proto__`/`constructor`/`prototype`; an entry's shape is malformed (same rule as construct time); an entry would loosen an existing key's letter or move it off marker `"loose"`; or the batch would push `rwx.tools` past {@link RWX_TOOLS_CAP} keys. Nothing lands on any throw. A budget-halt state does NOT block `add()` — it spends no budget itself and nothing in §23.21 makes growing the tools map conditional on the cost/token axis.
-   *
-   * **Serialized**, on the SAME gate-wide ordering lock `check()`'s final
-   * commit uses (`_withLock`) — not a separate queue. `add()` reads the live
-   * tools map, then AWAITS (the audit-first writes), then mutates — a
-   * genuine async window between "validate against current state" and "use
-   * that validation." Two concurrent `add()` calls that both entered before
-   * either had mutated would both validate against the SAME stale state:
-   * found by review, this let an `x`-tagged key concurrently "tighten" to
-   * `w` (loosening it, past the tighten-only guard, because the `w` call's
-   * tighten-check read the map before the `x` call had landed) and would
-   * equally have let two batches that each individually fit the 10,000-key
-   * cap jointly cross it. Sharing the lock with `check()`'s final commit
-   * (rather than a separate `add()`-only queue) is what makes the audit
-   * log's line order the TRUE order across BOTH operations (§23.21).
    */
   async add(entries) {
     if (!this._initialized) await this.init();

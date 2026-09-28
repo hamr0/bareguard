@@ -34,40 +34,64 @@ function braced(s) {
   }
   return null;
 }
+// Tags this generator understands, derived by scanning every @when block in
+// this repo's own src/ (see the header comment) — not guessed. A tag outside
+// this set inside a @when-bearing block is exactly the shape that let a
+// wrapped @when/@fails line truncate silently (it read as an unrecognized tag
+// and got ignored rather than flagged): 'param', 'returns', 'type',
+// 'signature', 'when', 'fails', 'category', 'name', 'example', 'template',
+// 'throws'.
+const KNOWN_TAGS = new Set([
+  'param', 'returns', 'type', 'signature', 'when', 'fails', 'category',
+  'name', 'example', 'template', 'throws',
+]);
 function parseBlock(block) {
   const inner = block.replace(/^\/\*\*/, '').replace(/\*\/\s*$/, '');
-  const params = []; let returns = null, when = null, fails = null, category = null, primName = null, type = null, sigOverride = null;
-  const example = []; let mode = null;
-  // @when/@fails are one-line catalog entries by design (the manifest reads
-  // only the first line) — a wrapped continuation must be flagged, never
-  // silently joined or truncated (a truncated entry still round-trips
-  // through `--check`, since that only compares against its own output).
-  // `contState` tracks "the previous tag was when/fails and hasn't been
-  // closed yet"; a non-blank, non-tag line while it's set is a continuation.
-  // A blank line or the next @tag closes it without a problem.
-  const continued = new Set(); let contState = null;
+  // Parse the way JSDoc itself does: a tag's body is every line from the tag
+  // through the line before the next tag (or the end of the comment) — no
+  // shape-by-shape guessing about what a "continuation" looks like (blank
+  // vs. whitespace-only vs. a line that itself starts with @word all used to
+  // need their own case; this one rule covers all of them).
+  //
+  // The one deliberate exception is @example: its body is a verbatim code
+  // sample, so a line inside it that merely LOOKS like a tag (a decorator, an
+  // annotation) must not fracture the sample. While @example's body is open,
+  // only a RECOGNIZED tag line closes it — everything else is content, never
+  // a tag line, matching the real blocks in this repo where @example is
+  // followed by a genuine @fails/@category.
+  const segments = [];
   for (const raw of inner.split('\n').map(strip)) {
     const tag = raw.trimEnd().match(/^@(\w+)\s*(.*)$/);
-    if (tag) {
-      mode = null; const [, name, rest] = tag;
-      contState = null;
-      if (name === 'param') {
-        const b = braced(rest); const nm = b && b.rest.match(/^\s*(\[?)([\w.$]+)/);
-        if (b && nm && !nm[2].includes('.')) params.push({ name: nm[2], type: b.inner, optional: nm[1] === '[' });
-      } else if (name === 'returns') { const b = braced(rest); returns = b ? b.inner : null; }
-      else if (name === 'type') { const b = braced(rest); type = b ? b.inner : null; }
-      else if (name === 'when') { when = rest.trim(); contState = 'when'; }
-      else if (name === 'fails') { fails = rest.trim(); contState = 'fails'; }
-      else if (name === 'category') category = rest.trim();
-      else if (name === 'signature') sigOverride = rest.trim();
-      else if (name === 'name') primName = rest.trim(); // override when the export name differs from the declaration (alias)
-      else if (name === 'example') mode = 'example';
-      continue;
+    const openExample = segments.length && segments[segments.length - 1].tag === 'example';
+    if (tag && (!openExample || KNOWN_TAGS.has(tag[1]))) {
+      segments.push({ tag: tag[1], rest: tag[2], body: [] });
+    } else if (segments.length) {
+      segments[segments.length - 1].body.push(raw);
     }
-    if (mode === 'example') { example.push(raw); continue; }
-    if (contState) {
-      if (raw.trim()) continued.add(contState);
-      contState = null;
+  }
+  const params = []; let returns = null, when = null, fails = null, category = null, primName = null, type = null, sigOverride = null;
+  const example = []; const problems = [];
+  for (const { tag: name, rest, body } of segments) {
+    if (name === 'param') {
+      const b = braced(rest); const nm = b && b.rest.match(/^\s*(\[?)([\w.$]+)/);
+      if (b && nm && !nm[2].includes('.')) params.push({ name: nm[2], type: b.inner, optional: nm[1] === '[' });
+    } else if (name === 'returns') { const b = braced(rest); returns = b ? b.inner : null; }
+    else if (name === 'type') { const b = braced(rest); type = b ? b.inner : null; }
+    else if (name === 'when') when = rest.trim();
+    else if (name === 'fails') fails = rest.trim();
+    else if (name === 'category') category = rest.trim();
+    else if (name === 'signature') sigOverride = rest.trim();
+    else if (name === 'name') primName = rest.trim(); // override when the export name differs from the declaration (alias)
+    else if (name === 'example') example.push(...body);
+    // @when/@fails are one-line catalog entries by design (the manifest reads
+    // only the first line) — a wrapped continuation must be flagged, never
+    // silently joined or truncated (a truncated entry still round-trips
+    // through `--check`, since that only compares against its own output).
+    if ((name === 'when' || name === 'fails') && body.some(l => l.trim())) {
+      problems.push(`@${name} spans more than one line — keep @when/@fails on one line (the manifest reads only the first)`);
+    }
+    if (!KNOWN_TAGS.has(name)) {
+      problems.push(`unknown tag @${name} — if this is a wrapped @when/@fails line, keep them on one line; otherwise add the tag to KNOWN_TAGS`);
     }
   }
   while (example.length && !example[0].trim()) example.shift();
@@ -77,7 +101,7 @@ function parseBlock(block) {
   const indents = example.filter(l => l.trim()).map(l => l.match(/^\s*/)[0].length);
   const pad = indents.length ? Math.min(...indents) : 0;
   if (pad) for (let i = 0; i < example.length; i++) example[i] = example[i].slice(pad);
-  return { params, returns, when, fails, category, primName, type, sigOverride, example: example.join('\n'), continued: [...continued] };
+  return { params, returns, when, fails, category, primName, type, sigOverride, example: example.join('\n'), problems };
 }
 function symbolAfter(src, afterIdx) {
   const tail = src.slice(afterIdx);
@@ -189,7 +213,7 @@ for (const rel of jsFiles) {
     }
     const name = p.primName || sym.name; // @name overrides an aliased export, or names a method
     for (const req of ['when', 'fails', 'example']) if (!p[req]) problems.push(`${name}: missing @${req}`);
-    for (const tag of p.continued) problems.push(`${name}: @${tag} continues onto a second line — keep @when/@fails on one line (the manifest reads only the first)`);
+    for (const msg of p.problems) problems.push(`${name}: ${msg}`);
     // A method is never itself exported — its ENCLOSING CLASS is what a
     // caller imports; the method is reached off an instance (`gate.add(...)`).
     const specKey = sym.kind === 'method' ? sym.cls : name;
