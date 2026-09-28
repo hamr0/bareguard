@@ -12,8 +12,11 @@
 // (CI) covers the third way — the committed file drifting from the source.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
+import { execFileSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import path from "node:path";
 
 const manifest = JSON.parse(
   readFileSync(new URL("../primitives.json", import.meta.url), "utf8"),
@@ -167,7 +170,6 @@ test("manifest carries no version — package.json is the single authority", () 
 test("every example is syntactically valid JavaScript", async () => {
   // An example that does not parse is worse than no example: it is a confident
   // wrong answer to "how do I call this?".
-  const { execFileSync } = await import("node:child_process");
   for (const p of manifest.primitives) {
     assert.doesNotThrow(
       () => execFileSync(process.execPath, ["--input-type=module", "--check"], {
@@ -176,5 +178,80 @@ test("every example is syntactically valid JavaScript", async () => {
       }),
       `primitive ${p.name}: @example does not parse as an ES module`,
     );
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Generator regression: a wrapped @when/@fails must fail LOUD, never be
+// silently truncated to its first line. `primitives.json:addToGates` shipped
+// truncated in 0.18.1 (`"Reach for this when a harness manages a FLEET of
+// gates (one per"`) because `parseBlock` only ever read the tag's FIRST
+// line, and `--check` compares the generator's own output against itself —
+// a truncated field round-trips clean, so the drift was invisible to CI.
+// Matches the fix bare-agent shipped for the identical bug in its own copy
+// of this generator (`git show 89b693d`).
+// ---------------------------------------------------------------------------
+
+const GEN_SCRIPT = new URL("../scripts/gen-primitives.mjs", import.meta.url).pathname;
+
+/**
+ * A minimal, real npm package on disk — the generator reads package.json's
+ * `exports` and dynamically `import()`s the resolved file, so a fixture has
+ * to be an actual resolvable package, not a bare .js file.
+ * @param {string} dir
+ * @param {string} whenLine the full `@when ...` JSDoc line (and any
+ *   continuation lines), written verbatim into the fixture's only export
+ */
+function writeFixturePkg(dir, whenLine) {
+  writeFileSync(path.join(dir, "package.json"), JSON.stringify({
+    name: "fixture-pkg", version: "0.0.0", type: "module",
+    exports: { ".": "./index.js" },
+  }));
+  writeFileSync(path.join(dir, "index.js"), `export { foo } from "./src/foo.js";\n`);
+  mkdirSync(path.join(dir, "src"));
+  writeFileSync(path.join(dir, "src", "foo.js"), `/**
+ * ${whenLine}
+ * @fails never
+ * @example
+ * foo()
+ */
+export function foo() {}
+`);
+}
+
+test("a continued @when fails the generator loudly instead of silently truncating", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "bareguard-prim-gen-cont-"));
+  try {
+    writeFixturePkg(dir, "@when this description\n * wraps onto a second line");
+    let err;
+    try {
+      execFileSync(process.execPath, [GEN_SCRIPT], { cwd: dir, stdio: "pipe" });
+    } catch (e) {
+      err = e;
+    }
+    assert.ok(err, "generator should exit non-zero on a continued @when");
+    assert.equal(err.status, 1);
+    assert.match(
+      err.stderr.toString(),
+      /foo: @when continues onto a second line — keep @when\/@fails on one line \(the manifest reads only the first\)/,
+    );
+    // No primitives.json should have been written on a failed generation.
+    assert.equal(existsSync(path.join(dir, "primitives.json")), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a single-line @when generates cleanly", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "bareguard-prim-gen-ok-"));
+  try {
+    writeFixturePkg(dir, "@when this description stays on one line");
+    execFileSync(process.execPath, [GEN_SCRIPT], { cwd: dir, stdio: "pipe" });
+    const out = JSON.parse(readFileSync(path.join(dir, "primitives.json"), "utf8"));
+    assert.equal(out.primitives.length, 1);
+    assert.equal(out.primitives[0].name, "foo");
+    assert.equal(out.primitives[0].when, "this description stays on one line");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });
