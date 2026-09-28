@@ -540,9 +540,13 @@ the tag is the inclusion marker, so there is no separate target list that can
 drift from the source. `@when` / `@fails` / `@example` are the only
 hand-authored fields on each entry; `name` / `import` / `signature` /
 `category` are derived from the source. As of 0.18.1 the generator also
-picks up `@when` on `Gate`'s own class METHODS (named `Gate#add` etc., since
-a bare method name is ambiguous across classes) — added for `add()`,
-`rwxTools()`, and `readAudit()`, harness-only rwx/audit verbs the AI
+picks up `@when` on `Gate`'s own class METHODS. An explicit `@name
+Class#method` override (e.g. `@name Gate#add`) is bareguard's naming
+convention for these and still wins when present; the generator itself no
+longer requires it — an unnamed method would render under its bare method
+name, and two primitives that resolve to the same name is a hard generator
+error, not a silent collision. `Gate#add`/`Gate#rwxTools`/`Gate#readAudit`
+were added as harness-only rwx/audit verbs the AI
 **building** a harness reaches for even though the running agent never
 holds a `Gate` reference. 14 of the package's 15 public exports are
 manifested (13 module-level primitives + `addToGates()`, which joined the
