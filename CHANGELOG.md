@@ -3,7 +3,7 @@
 All notable changes to bareguard are documented here. Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [SemVer](https://semver.org/).
 
 
-## [Unreleased]
+## [0.19.1] - 2026-09-29
 
 ### BREAKING
 
