@@ -11,12 +11,14 @@ import { randomUUID } from "node:crypto";
 // root is created under the REAL tmpdir.
 export const REAL_TMPDIR = realpathSync(tmpdir());
 
+// Falls back to the input path when it does not exist (e.g. Windows has no /tmp).
+function realOr(p) { try { return realpathSync(p); } catch { return p; } }
+
 // A real (non-symlink) path for the system temp dir, for tests that scope to
 // "/tmp" literally: /tmp itself is a symlink on macOS (-> /private/tmp).
-export const REAL_SLASH_TMP = realpathSync("/tmp");
+export const REAL_SLASH_TMP = realOr("/tmp");
 
 // Same for "/etc" (-> /private/etc on macOS) and "/home".
-function realOr(p) { try { return realpathSync(p); } catch { return p; } }
 export const REAL_ETC = realOr("/etc");
 export const REAL_HOME_ROOT = realOr("/home");
 
