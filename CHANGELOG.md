@@ -3,7 +3,7 @@
 All notable changes to bareguard are documented here. Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [SemVer](https://semver.org/).
 
 
-## [Unreleased]
+## [0.19.2] - 2026-09-29
 
 ### BREAKING (security fix)
 
@@ -13,6 +13,12 @@ All notable changes to bareguard are documented here. Format: [Keep a Changelog]
   - `fs.deny` roots are unchanged (a moved deny root only narrows access).
   - **Upgrade note / operators:** list the real (resolved) path in scopes, e.g. via `fs.realpathSync(dir)`. **macOS caveat:** `os.tmpdir()` lives under `/var` -> `/private/var`, and `/tmp` and `/etc` are symlinks (`/private/tmp`, `/private/etc`), so a scope rooted at any of them now throws — use `fs.realpathSync(os.tmpdir())`. A config that deliberately aliased a scope through a symlink (the previously-tested "legit alias" shape) must now list the target instead.
   - New rule strings (SemVer surface): `fs.readScope.symlinkRoot`, `fs.writeScope.symlinkRoot`.
+  - **Known limit (documented):** root re-verification is check-time only — a root swapped between an allowed `check()` and the harness's actual write is not caught. Closing that window (`openat`/`O_NOFOLLOW`, or writing in a directory the agent cannot modify) is the harness's job.
+
+### Docs
+
+- **`fsCheck` cost figures re-measured** (the old ~20-25µs/check figure was stale): with the per-check lstat walk of every scope root, an existing target now costs roughly 100-150µs with one shallow scope root, ~300-360µs at root depth ~13, and ~550-650µs with 20 roots (machine-dependent). Cost grows with scope roots x path depth, uncached by design so a swap is caught. Documented in `bareguard.context.md`.
+- README example scope roots changed from `/tmp` to `/srv/agent` (a `/tmp` root now throws on macOS), plus a note that scope roots must be real paths; `bareguard.context.md` eval-order block gains `.symlinkRoot`, and its "fixed on this branch" wording now reads "fixed in 0.19.1".
 
 ## [0.19.1] - 2026-09-29
 
