@@ -3,6 +3,12 @@
 All notable changes to bareguard are documented here. Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [SemVer](https://semver.org/).
 
 
+## [0.19.3] - 2026-09-29
+
+### Fixed
+
+- **The shipped `FsConfig` type JSDoc (`types/*.d.ts`, shown on IDE hover) no longer says "symlinks are not resolved".** That sentence was wrong in 0.19.0-0.19.2. It now states that target paths are symlink-resolved and checked against scope (`symlinkEscape` deny), and that scope roots must not be or contain symlinks (a construct-time throw; the `.symlinkRoot` deny if a root is swapped for a symlink later). Comment-only change: no runtime behavior change.
+
 ## [0.19.2] - 2026-09-29
 
 ### BREAKING (security fix)

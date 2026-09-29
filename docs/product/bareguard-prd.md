@@ -1215,7 +1215,7 @@ questions the POC was scoped to answer (§23.18):
    Fixed by gating `net` on **URL presence** (`action.url`/`action.args.url`) instead of on
    `action.type`. The harness contract for every rwx web-call shape: put the URL the harness
    will actually fetch in `url` (or `args.url`) — a URL carried in any other field is not
-   checked. See CHANGELOG [Unreleased].
+   checked. Shipped in 0.18.0; see CHANGELOG [0.18.0].
 4. **bareguard takes the parsed object, never a file path** — all config is a JS object today
    (per §10's public API); the caller does the file I/O. bareguard does not gain its own
    settings-file loader by this decision (see the open question at §23.18).
@@ -1362,8 +1362,7 @@ committed or reviewed, tighten-only; the no-dependency half of this boundary is 
 
 ### 23.21 Runtime `add()` for spec-less sites (BUILT 0.18.0 — hamr, 2026-09-25/26; settled with rwxmap)
 
-**Built in `src/` this session (Unreleased, see CHANGELOG.md).** Not yet published as a version
-bump — release is a separate decision.
+**Built in `src/` and shipped in 0.18.0 (see CHANGELOG.md [0.18.0]).**
 
 **Why.** An agent that visits websites (e.g. a flight-search agent) meets sites the operator
 never listed. The harness — never the agent — fetches each site's API spec and runs rwxmap
@@ -1454,7 +1453,7 @@ narrow, tighten-only operation.
   also closes today's live link to the caller's object.
 - **check()/add() race — "check and audit in the same logical order."** The settled design,
   after three iterations each closed one gap and (twice) opened another; PRD history is kept
-  brief here on purpose — see CHANGELOG.md's `[Unreleased]` entries for the blow-by-blow if
+  brief here on purpose — see CHANGELOG.md's `[0.18.0]` entries for the blow-by-blow if
   needed.
 
   **The invariant.** The audit log's line order is the TRUE order. `check()`'s ONE final
@@ -1638,6 +1637,5 @@ resolved value on full success — to the thrown `AggregateError` as `.results`.
 
 **On ship:** `gate.add`, `gate.rwxTools`, `gate.readAudit`, `addToGates`, the `rwx.added` phase,
 the `rwx.add_rejected` phase, the `rwx.tightened` deny rule, and the 10,000-entry size cap all
-join the 1.0 SemVer surface (§23.17). Built this session on `main`'s `feat/rwx-add` branch; not
-yet released as a version bump (release is a separate decision, per this project's own standing
-rule).
+join the 1.0 SemVer surface (§23.17). Built on `main`'s `feat/rwx-add` branch and shipped in
+0.18.0.
