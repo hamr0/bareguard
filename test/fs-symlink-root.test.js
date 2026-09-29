@@ -48,7 +48,7 @@ test("repro 2: readScope root that is a symlink THROWS (was: read via link allow
 test("construct error tells the operator to list the real path (and names it)", (t) => {
   if (skipReason) return t.skip(skipReason);
   assert.throws(() => new Gate({ fs: { readScope: [OUT] } }),
-    (e) => /real \(resolved\) path/.test(e.message) && e.message.includes(OUTSIDE));
+    (e) => /real \(resolved\) path/.test(e.message) && e.message.includes(OUTSIDE.replaceAll("\\", "/")));
 });
 
 test("repro 3/4: same file, any spelling, same answer — listing the REAL path scopes the real file", async (t) => {
