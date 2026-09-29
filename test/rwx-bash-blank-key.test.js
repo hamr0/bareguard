@@ -2,11 +2,12 @@
 //
 // `matchBash`'s leading-word match treats "" as a prefix every command
 // starts with: `rwx.bash: {"": "r"}` matched ANY command with a leading
-// space (` rm -rf x` → ok, letter "r") because `startsWithWordBoundary("
-// rm -rf x", "")` is true (empty prefix matches trivially, and the very
-// next char — the leading space — satisfies the boundary check). This is
-// the same bug class as the `bash.allow: [""]` wildcard fixed alongside the
-// 0.19.1 word-boundary work, applied to rwx's bash map.
+// space (` rm -rf x` → ok, letter "r") because `cmd === key ||
+// cmd.startsWith(key + " ")` with `key === ""` reduces to
+// `cmd.startsWith(" ")` — the empty prefix plus a literal space matches any
+// command with a leading space. This is the same bug class as the
+// `bash.allow: [""]` wildcard fixed alongside the 0.19.1 word-boundary work,
+// applied to rwx's bash map.
 //
 // Scoped to `rwx.bash` only — measured and confirmed NOT equally dangerous
 // for `rwx.tools` or `rwx.agents`: both are matched by an EXACT identity

@@ -390,16 +390,23 @@ in the rwx agents map — it holds \"---\""}`.
 ### Bash — two rules only (§23.6)
 
 1. **Leading-word match, longest listed prefix wins**, word-boundary aware
-   (`"ls"` never matches `"lsblk"`) — the boundary is ASCII space **or tab**
-   (0.19.1; was space-only, so `"git\tstatus"` denied as unlisted even though
-   a shell runs it identically to `"git status"`), shared with `bash.allow`'s
-   own boundary check, not any Unicode whitespace. `git status --short` matches the key
-   `"git status"`. A blank/whitespace-only key (`""`, `"  "`) throws at
-   `Gate` construction (0.19.1) — `matchBash` treats `""` as a prefix every
+   (`"ls"` never matches `"lsblk"`) — the boundary is ASCII space **only**
+   (`cmd === key || cmd.startsWith(key + " ")`), NOT shared with `bash.allow`'s
+   `startsWithWordBoundary` helper, and not any Unicode whitespace. **Known
+   limit:** a tab-separated command like `"git\tstatus"` denies as unlisted
+   even though a shell runs it identically to `"git status"` — a 0.19.1
+   change to share `bash.allow`'s space-or-tab boundary was reverted before
+   shipping, because that helper's "prefix already ends in whitespace"
+   shortcut let a trailing-whitespace rwx key (e.g. `{"rm ": "x"}`) match far
+   more commands than intended, not just ones split by a tab. Fail-safe
+   direction (over-deny, never a bypass), so left as the documented
+   space-only behavior rather than reintroduced. `git status --short` matches
+   the key `"git status"`. A blank/whitespace-only key (`""`, `"  "`) throws
+   at `Gate` construction (0.19.1) — `matchBash` treats `""` as a prefix every
    command starts with, so it would otherwise match any command with a
-   leading space/tab; `matchBash` also skips one at runtime as a TOCTOU
-   backstop. Scoped to `rwx.bash`: `rwx.tools`/`rwx.agents` match by exact
-   identity, not prefix, so a blank key there isn't the same hole.
+   leading space; `matchBash` also skips one at runtime as a TOCTOU backstop.
+   Scoped to `rwx.bash`: `rwx.tools`/`rwx.agents` match by exact identity,
+   not prefix, so a blank key there isn't the same hole.
 2. **Joined/chained commands are denied unless listed verbatim in full.**
    "Joined" means `;` `&` `|` `` ` `` `$` `(` `)` newline/`\` continuation,
    **and redirects** `>` `>>` `<` (closed during the POC per §23.14). A quote-

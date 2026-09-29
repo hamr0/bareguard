@@ -34,7 +34,6 @@
 // upgrades an ask into an allow or a deny into anything softer.
 
 import { resolveIdentity, looseIdentity } from "./tool-identity.js";
-import { startsWithWordBoundary } from "./word-boundary.js";
 
 /**
  * True for a plain object — `{}`-literal shaped, or the null-prototype shape
@@ -174,9 +173,8 @@ export function hasJoinMeta(cmd) {
 /**
  * Rule (§23.6): match a bash command's LEADING WORD(S) against the rwx bash
  * map, longest listed prefix wins, word-boundary aware (`"ls"` never matches
- * `"lsblk"` — the prefix must be followed by end-of-string or a space/tab,
- * via {@link startsWithWordBoundary}, the same boundary `bash.allow` uses).
- * A joined/chained command ({@link hasJoinMeta}) is denied unless the WHOLE
+ * `"lsblk"` — the prefix must be followed by end-of-string or a space). A
+ * joined/chained command ({@link hasJoinMeta}) is denied unless the WHOLE
  * string is listed verbatim.
  * A matched entry is normalized via {@link normalizeEntry}: `letter` is
  * `null` unless the raw value is a valid bare-letter string OR a valid
@@ -214,7 +212,7 @@ export function matchBash(cmd, bashMap) {
   let best = null;
   for (const key of Object.keys(map)) {
     if (isBlankKey(key)) continue;
-    if (startsWithWordBoundary(cmd, key)) {
+    if (cmd === key || cmd.startsWith(key + " ")) {
       if (best === null || key.length > best.length) best = key;
     }
   }
