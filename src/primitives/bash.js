@@ -1,4 +1,5 @@
 import { findInvalidIndex, findBlankStringIndex } from "./config-validate.js";
+import { startsWithWordBoundary } from "./word-boundary.js";
 
 // bash primitive (PRD §8 row 1). Runs at step 3 (action-type deny) when
 // action.type === "bash".
@@ -97,13 +98,7 @@ export function bashCheck(action, cfg = {}) {
     // byte between a real prefix and unrelated text sneak past the boundary
     // check (`allow: ["ls"]` must not admit "ls /etc"). A blank/whitespace-
     // only prefix can't reach this point — it's already denied above.
-    const BOUNDARY = /[ \t]/;
-    const allowed = cfg.allow.some(prefix => {
-      if (!cmd.startsWith(prefix)) return false;
-      if (cmd.length === prefix.length) return true; // exact match
-      if (BOUNDARY.test(prefix[prefix.length - 1])) return true; // boundary already baked into the prefix
-      return BOUNDARY.test(cmd[prefix.length]); // next char after the prefix must be a space or tab
-    });
+    const allowed = cfg.allow.some(prefix => startsWithWordBoundary(cmd, prefix));
     if (!allowed) {
       return { outcome: "deny", severity: "action", rule: "bash.allow", reason: "command not in bash.allow" };
     }

@@ -390,8 +390,16 @@ in the rwx agents map — it holds \"---\""}`.
 ### Bash — two rules only (§23.6)
 
 1. **Leading-word match, longest listed prefix wins**, word-boundary aware
-   (`"ls"` never matches `"lsblk"`). `git status --short` matches the key
-   `"git status"`.
+   (`"ls"` never matches `"lsblk"`) — the boundary is ASCII space **or tab**
+   (0.19.1; was space-only, so `"git\tstatus"` denied as unlisted even though
+   a shell runs it identically to `"git status"`), shared with `bash.allow`'s
+   own boundary check, not any Unicode whitespace. `git status --short` matches the key
+   `"git status"`. A blank/whitespace-only key (`""`, `"  "`) throws at
+   `Gate` construction (0.19.1) — `matchBash` treats `""` as a prefix every
+   command starts with, so it would otherwise match any command with a
+   leading space/tab; `matchBash` also skips one at runtime as a TOCTOU
+   backstop. Scoped to `rwx.bash`: `rwx.tools`/`rwx.agents` match by exact
+   identity, not prefix, so a blank key there isn't the same hole.
 2. **Joined/chained commands are denied unless listed verbatim in full.**
    "Joined" means `;` `&` `|` `` ` `` `$` `(` `)` newline/`\` continuation,
    **and redirects** `>` `>>` `<` (closed during the POC per §23.14). A quote-
