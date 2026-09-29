@@ -251,7 +251,10 @@ export {};
 
 /**
  * `fs` config — applies to `read` / `write` / `edit`. Paths are normalized
- * (`.`/`..` collapsed) and segment-boundary matched; symlinks are not resolved.
+ * (`.`/`..` collapsed) and segment-boundary matched. Target paths are
+ * symlink-resolved and checked against scope (`symlinkEscape` deny). Scope roots
+ * must not be or contain symlinks: that throws at construct, and denies
+ * `.symlinkRoot` if a root is swapped for a symlink later.
  *
  * @typedef {object} FsConfig
  * @property {string[]} [writeScope]  Allowed roots for `write` / `edit`.
