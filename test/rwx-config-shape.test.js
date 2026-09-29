@@ -128,21 +128,21 @@ test("rwx: mutating the caller's rwx object post-construction no longer reaches 
   // Pre-0.18.0 this reached the gate (`this.cfg.rwx` held by reference) and
   // denied `rwx.invalid`. Since 0.18.0 the gate copies `rwx` at construct
   // time, so this mutation of the CALLER's own object is now inert.
-  const cfg = { audit: { path: null }, rwx: { ...VALID_RWX }, humanChannel: async () => ({ decision: "deny" }) };
+  const cfg = { audit: { path: null }, fs: { readScope: ["/tmp"] }, rwx: { ...VALID_RWX }, humanChannel: async () => ({ decision: "deny" }) };
   const gate = new Gate(cfg);
   await gate.init();
   cfg.rwx = "oops"; // swap the value out after construction validated it
-  const d = await gate.check({ type: "read", args: {} });
+  const d = await gate.check({ type: "read", path: "/tmp/x", args: {} });
   assert.equal(d.outcome, "allow"); // "fixer" holds "rw-"; "read" is tagged "r" — unaffected by the external mutation
   assert.equal(d.rule, "rwx.allow");
 });
 
 test("rwx: mutating the caller's rwx.tools object post-construction no longer reaches the gate", async () => {
-  const cfg = { audit: { path: null }, rwx: { ...VALID_RWX, tools: { ...VALID_RWX.tools } }, humanChannel: async () => ({ decision: "deny" }) };
+  const cfg = { audit: { path: null }, fs: { readScope: ["/tmp"] }, rwx: { ...VALID_RWX, tools: { ...VALID_RWX.tools } }, humanChannel: async () => ({ decision: "deny" }) };
   const gate = new Gate(cfg);
   await gate.init();
   cfg.rwx.tools = "oops";
-  const d = await gate.check({ type: "read", args: {} });
+  const d = await gate.check({ type: "read", path: "/tmp/x", args: {} });
   assert.equal(d.outcome, "allow");
   assert.equal(d.rule, "rwx.allow");
 });

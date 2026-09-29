@@ -19,6 +19,10 @@ const RWX = {
 function gateFor(agent, overrides = {}) {
   return new Gate({
     audit: { path: null },
+    // Broad fs scope so a "read"-typed action's fs step (which runs BEFORE
+    // the rwx step) passes through on a real path, letting these tests
+    // exercise rwx.unlisted reason wording, not fs scoping.
+    fs: { readScope: ["/tmp"] },
     rwx: { agent, ...RWX, ...overrides },
     humanChannel: async () => ({ decision: "deny" }),
   });
@@ -27,7 +31,7 @@ function gateFor(agent, overrides = {}) {
 test("rwx.unlisted (agent): reason names bareguard.rwx.json and operator", async () => {
   const gate = gateFor("nobody");
   await gate.init();
-  const d = await gate.check({ type: "read", args: {} });
+  const d = await gate.check({ type: "read", path: "/tmp/x", args: {} });
   assert.equal(d.outcome, "deny");
   assert.equal(d.rule, "rwx.unlisted");
   assert.match(d.reason, /bareguard\.rwx\.json/);

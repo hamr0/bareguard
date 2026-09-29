@@ -24,9 +24,21 @@ const RWX = {
 function gateFor(agent, overrides = {}) {
   return new Gate({
     audit: { path: null },
+    // Broad fs scope so a "read"/"write"/"edit"-typed action's fs step
+    // (which runs BEFORE the rwx step) passes through on a real path,
+    // letting these tests exercise rwx letter matching, not fs scoping.
+    fs: { readScope: ["/tmp"], writeScope: ["/tmp"] },
     rwx: { agent, ...RWX, ...overrides },
     humanChannel: async () => ({ decision: "deny" }),
   });
+}
+
+// fs.js's FS_TYPES ("read"/"write"/"edit") need a real, in-scope path to
+// pass the fs step before rwx is even consulted; every other type name is
+// unaffected by fs and ignores this extra field.
+const FS_TYPES = new Set(["read", "write", "edit"]);
+function actionFor(type, rest = {}) {
+  return FS_TYPES.has(type) ? { type, path: "/tmp/x", ...rest } : { type, ...rest };
 }
 
 // ─── E-rwx-1: adversarial bash under r-- (researcher) ────────────────────────
@@ -88,7 +100,7 @@ test("rwx tools: catalog (gate.allows) hides tools whose letter the agent lacks"
   const catalog = Object.keys(RWX.tools);
   const visible = [];
   for (const name of catalog) {
-    if (await gate.allows({ type: name })) visible.push(name);
+    if (await gate.allows(actionFor(name))) visible.push(name);
   }
   assert.deepEqual(visible.sort(), ["fetch", "read", "search"].sort());
 });
@@ -97,7 +109,7 @@ test("rwx tools: a hidden tool called by name anyway is denied at check (model-c
   const gate = gateFor("researcher"); // r--
   await gate.init();
   for (const tool of ["deploy", "write", "edit", "github.create_pr", "wireMoney"]) {
-    const d = await gate.check({ type: tool, args: {} });
+    const d = await gate.check(actionFor(tool, { args: {} }));
     assert.equal(d.outcome, "deny", `${tool} should deny`);
     assert.equal(d.rule, "rwx.denied", `${tool} should deny via rwx.denied (tagged, letter lacking)`);
   }
@@ -114,7 +126,7 @@ test("rwx tools: an unlisted tool (not in the map at all) denies with rwx.unlist
 test("rwx: an unlisted agent gets \"---\" — it starts, but every action denies", async () => {
   const gate = gateFor("ghost-agent");
   await gate.init();
-  const d1 = await gate.check({ type: "read", args: {} });
+  const d1 = await gate.check(actionFor("read", { args: {} }));
   assert.equal(d1.outcome, "deny");
   assert.equal(d1.rule, "rwx.unlisted");
   const d2 = await gate.check({ type: "bash", args: { command: "git status" } });

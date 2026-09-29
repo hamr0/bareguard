@@ -196,12 +196,22 @@ export function matchBash(cmd, bashMap) {
       ? { ok: true, letter: norm.letter, marker: norm.marker, matchedKey: key, joined: false }
       : { ok: true, letter: raw, marker: null, matchedKey: key, joined: false };
   };
+  // A blank/whitespace-only key is a TOCTOU backstop, not the primary guard
+  // (that's `assertRwxConfig`'s construct-time throw, 0.19.1): `cfg` is held
+  // by reference and can be swapped/mutated after construction validated it,
+  // same class as every other `<key>.invalid` fail-closed runtime check in
+  // this file. Never let one match here — the leading-word loop below would
+  // otherwise treat "" as a prefix every command starts with, and the
+  // verbatim/joined lookup would let a whitespace-only `cmd` match one too.
+  // Skipping it makes it behave exactly like an absent key: `rwx.unlisted`.
+  const isBlankKey = (k) => typeof k === "string" && k.trim() === "";
   if (hasJoinMeta(cmd)) {
-    if (Object.prototype.hasOwnProperty.call(map, cmd)) return entryFor(map[cmd], cmd);
+    if (!isBlankKey(cmd) && Object.prototype.hasOwnProperty.call(map, cmd)) return entryFor(map[cmd], cmd);
     return { ok: false, letter: null, marker: null, matchedKey: null, joined: true };
   }
   let best = null;
   for (const key of Object.keys(map)) {
+    if (isBlankKey(key)) continue;
     if (cmd === key || cmd.startsWith(key + " ")) {
       if (best === null || key.length > best.length) best = key;
     }
@@ -539,6 +549,27 @@ export function assertRwxConfig(config) {
         }
       }
       continue;
+    }
+    // `rwx.bash`-only tightening (0.19.1), same class and same narrow scope
+    // as `bash.allow`'s own blank-entry throw above (`findBlankStringIndex`):
+    // a blank/whitespace-only KEY is uniquely dangerous here because
+    // `matchBash`'s leading-word match treats "" as a prefix every command
+    // starts with, so `rwx.bash: {"":"r"}` matches ANY command carrying a
+    // leading space/tab (`" rm -rf x"` reads as `letter:"r"`, i.e. an
+    // unlisted-by-name command silently gets read access). Scoped to `bash`
+    // only, not `tools`/`agents`: those two are matched by an EXACT
+    // `action.tool ?? action.type` / `rwx.agent` lookup, never a prefix, so
+    // an empty key there can only ever match an equally-empty identity/agent
+    // name — not a prefix-boundary bypass reachable by adding a leading
+    // whitespace byte to otherwise-ordinary agent-generated text.
+    if (section === "bash") {
+      for (const k of Object.keys(m)) {
+        if (k.trim() === "") {
+          throw new Error(
+            `invalid bareguard config: rwx.bash key must be a non-empty, non-whitespace command prefix, got ${JSON.stringify(k)}`,
+          );
+        }
+      }
     }
     // tools / bash (D103): a bare letter string, or a marker-carrying object
     // `{ letter: "r"|"w"|"x", marker?: "tight"|"loose"|"settled" }` — any

@@ -9,6 +9,10 @@ import { Gate } from "../src/index.js";
 function gateFor(overrides = {}) {
   return new Gate({
     audit: { path: null }, // fileless — inspect via gate.audit.readAll()
+    // Broad fs scope so a "read"/"write"-typed action's fs step (which runs
+    // BEFORE the rwx step) passes through on a real path, letting these
+    // tests exercise rwx letter matching, not fs scoping.
+    fs: { readScope: ["/tmp"], writeScope: ["/tmp"] },
     rwx: {
       agent: "fixer",
       agents: { researcher: "r--", fixer: "rw-" },
@@ -23,7 +27,7 @@ function gateFor(overrides = {}) {
 test("rwx audit: the gate audit line carries rwxLetters and the matched rwxLetter on allow", async () => {
   const gate = gateFor();
   await gate.init();
-  await gate.check({ type: "read", args: {} });
+  await gate.check({ type: "read", path: "/tmp/x", args: {} });
   const lines = await gate.audit.readAll();
   const gateLine = lines.find((l) => l.phase === "gate" && l.decision === "allow");
   assert.ok(gateLine, "expected an allow gate line");
@@ -75,6 +79,7 @@ test("rwx audit: a non-rwx gate's audit line never carries rwxLetters/rwxLetter 
 test("rwx budget: record() accrues a resource cap keyed by the matched letter, without the caller supplying counts", async () => {
   const gate = new Gate({
     audit: { path: null },
+    fs: { writeScope: ["/tmp"] },
     rwx: {
       agent: "fixer",
       agents: { fixer: "rw-" },
@@ -87,14 +92,14 @@ test("rwx budget: record() accrues a resource cap keyed by the matched letter, w
 
   // Two writes allowed under the cap — caller passes NO counts at all.
   for (let i = 0; i < 2; i++) {
-    const d = await gate.check({ type: "write", args: {} });
+    const d = await gate.check({ type: "write", path: "/tmp/x", args: {} });
     assert.equal(d.outcome, "allow");
-    await gate.record({ type: "write", args: {} }, { costUsd: 0 }); // no result.counts supplied
+    await gate.record({ type: "write", path: "/tmp/x", args: {} }, { costUsd: 0 }); // no result.counts supplied
   }
   assert.equal(gate.budget.resourceSpent.w, 2);
 
   // Third write halts the budget axis (post-fact, on the NEXT preEval).
-  const d3 = await gate.check({ type: "write", args: {} });
+  const d3 = await gate.check({ type: "write", path: "/tmp/x", args: {} });
   assert.equal(d3.outcome, "deny");
   assert.equal(d3.severity, "halt");
   assert.equal(d3.rule, "budget.resource.w");

@@ -162,6 +162,82 @@ test("fs: a '~'-prefixed agent path denies outright (agent paths are never canon
   assert.equal(d.rule, "fs.invalidPath");
 });
 
+// ---------------------------------------------------------------------------
+// missing path (action.path AND action.args.path both absent): must deny,
+// not skip the fs step entirely — a translator that puts the path under a
+// key this checker doesn't know about must never reach an implicit allow,
+// with scope set OR unset. See CHANGELOG "Fixed" entry.
+// ---------------------------------------------------------------------------
+
+test("fs: a read with no path at all denies fs.invalidPath, scope UNSET", async (t) => {
+  const gate = await gateWith(t, {});
+  const d = await gate.check({ type: "read" });
+  assert.equal(d.outcome, "deny");
+  assert.equal(d.rule, "fs.invalidPath");
+});
+
+test("fs: a write with no path at all denies fs.invalidPath, scope UNSET", async (t) => {
+  const gate = await gateWith(t, {});
+  const d = await gate.check({ type: "write" });
+  assert.equal(d.outcome, "deny");
+  assert.equal(d.rule, "fs.invalidPath");
+});
+
+test("fs: an edit with no path at all denies fs.invalidPath, scope UNSET", async (t) => {
+  const gate = await gateWith(t, {});
+  const d = await gate.check({ type: "edit" });
+  assert.equal(d.outcome, "deny");
+  assert.equal(d.rule, "fs.invalidPath");
+});
+
+test("fs: a read with no path at all denies fs.invalidPath, scope SET (not merely a scope-unset gap)", async (t) => {
+  const gate = await gateWith(t, { fs: { readScope: [SCOPE] } });
+  const d = await gate.check({ type: "read" });
+  assert.equal(d.outcome, "deny");
+  assert.equal(d.rule, "fs.invalidPath");
+});
+
+test("fs: a write with no path at all denies fs.invalidPath, scope SET", async (t) => {
+  const gate = await gateWith(t, { fs: { writeScope: [SCOPE] } });
+  const d = await gate.check({ type: "write" });
+  assert.equal(d.outcome, "deny");
+  assert.equal(d.rule, "fs.invalidPath");
+});
+
+test("fs: action.path === null denies fs.invalidPath (missing, not merely non-string)", async (t) => {
+  const gate = await gateWith(t, { fs: { readScope: [SCOPE] } });
+  const d = await gate.check({ type: "read", path: null });
+  assert.equal(d.outcome, "deny");
+  assert.equal(d.rule, "fs.invalidPath");
+});
+
+test("fs: action.args.path === null denies fs.invalidPath (nested, missing)", async (t) => {
+  const gate = await gateWith(t, { fs: { writeScope: [SCOPE] } });
+  const d = await gate.check({ type: "write", args: { path: null } });
+  assert.equal(d.outcome, "deny");
+  assert.equal(d.rule, "fs.invalidPath");
+});
+
+test("fs: path in action.args.path (nested) still works — allow when in scope", async (t) => {
+  const gate = await gateWith(t, { fs: { readScope: [SCOPE] } });
+  const d = await gate.check({ type: "read", args: { path: path.join(SCOPE, "x.txt") } });
+  assert.equal(d.outcome, "allow");
+});
+
+test("fs: gate.allows() returns false for a path-less read (not a silent true)", async (t) => {
+  const gate = await gateWith(t, { fs: { readScope: [SCOPE] } });
+  assert.equal(await gate.allows({ type: "read" }), false);
+});
+
+test("fs: fsCheck() direct call denies a path-less write regardless of cfg shape", () => {
+  const d1 = fsCheck({ type: "write" }, { writeScope: ["/tmp/agent"] });
+  assert.equal(d1?.outcome, "deny");
+  assert.equal(d1?.rule, "fs.invalidPath");
+  const d2 = fsCheck({ type: "write" }, {}); // scope unset too — still denies on the path, not the scope
+  assert.equal(d2?.outcome, "deny");
+  assert.equal(d2?.rule, "fs.invalidPath");
+});
+
 // `path.isAbsolute()` is platform-aware (the same "one definition of
 // absolute" shared by fs-config.js — see fs.js header), so the SAME literal
 // string is genuinely absolute on win32 and genuinely relative everywhere

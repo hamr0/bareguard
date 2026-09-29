@@ -52,8 +52,13 @@ test("fs — non-string nested args.path is denied", () => {
   assert.equal(d?.rule, "fs.invalidPath");
 });
 
-test("fs — absent path is still a no-op (not a deny)", () => {
-  assert.equal(fsCheck({ type: "write" }, { writeScope: ["/tmp/agent"] }), null);
+test("fs — absent path is denied (0.19.1: deny-by-default; was a no-op pre-0.19.1)", () => {
+  // Flipped from a no-op to fs.invalidPath: this was the v0.5.0 contract, when
+  // an unset scope meant allow; 0.19.0's deny-by-default replaced that, and
+  // 0.19.1 closed the last gap that let a path-less action skip the fs step.
+  const d = fsCheck({ type: "write" }, { writeScope: ["/tmp/agent"] });
+  assert.equal(d?.outcome, "deny");
+  assert.equal(d?.rule, "fs.invalidPath");
 });
 
 for (const [label, value] of [["array", ["http://127.0.0.1"]], ["object", { toString: () => "http://127.0.0.1" }]]) {

@@ -124,3 +124,30 @@ export function filterValidElements(list, elementType) {
   if (!Array.isArray(list)) return [];
   return list.filter((v) => isValidElement(v, elementType));
 }
+
+/**
+ * `bash.allow`-only tightening (0.19.1): an empty or whitespace-only prefix
+ * is NOT a valid `bash.allow` element, even though it's a perfectly valid
+ * `"string"` for the shared element-type table above. Deliberately NOT folded
+ * into `isValidElement`/`ARRAY_ELEMENT_TYPES`, which are shared by
+ * `tools.allowlist`/`denylist`, `net.allowDomains`, `secrets.keys`/`envVars`,
+ * and `axisB.reversible` — an empty string is comparatively inert for every
+ * one of those (measured: `tools.allowlist`/`denylist` match it only against
+ * an action whose `type`/`tool` is itself `""`; `net.allowDomains: [""]`
+ * only admits a host with a literal trailing dot via `endsWith("." + "")`;
+ * `secrets.keys`/`envVars` and `axisB.reversible` do exact-string or
+ * env-lookup matching, so `""` just never matches a real value). `bash.allow`
+ * is the one key where blank is uniquely dangerous: `cmd.startsWith("")` is
+ * true for EVERY command, so a blank entry silently disabled the whole
+ * allowlist. Widening this check to the other keys is explicitly out of
+ * scope — they don't share the failure mode.
+ * @param {*} list
+ * @returns {number} index of the first empty/whitespace-only string element, or -1
+ */
+export function findBlankStringIndex(list) {
+  if (!Array.isArray(list)) return -1;
+  for (let i = 0; i < list.length; i++) {
+    if (typeof list[i] === "string" && list[i].trim() === "") return i;
+  }
+  return -1;
+}

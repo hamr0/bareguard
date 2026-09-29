@@ -64,6 +64,7 @@ test("rwx clamp: an r-x parent cannot produce a w-holding child, chained through
     // no `agents` lookup needed for a spawned child.
     const childGate = new Gate({
       audit: { path: null },
+      fs: { readScope: ["/tmp"] },
       spawnDepth: depth,
       parentRunId: parentGate.runId,
       rwx: { letters: childLetters },
@@ -72,7 +73,7 @@ test("rwx clamp: an r-x parent cannot produce a w-holding child, chained through
 
     // The child cannot verify (or widen) its own letters — check() reflects
     // exactly the clamped grant it was handed, nothing more.
-    const dRead = await childGate.check({ type: "read", args: {} });
+    const dRead = await childGate.check({ type: "read", path: "/tmp/x", args: {} });
     // "read" is unlisted in the child's tools map (none was configured for
     // the child) — still correctly denies (deny-by-absence), not a false
     // allow from "it holds r".
