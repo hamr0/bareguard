@@ -1097,6 +1097,17 @@ exactly**. Readers that can run other programs (`less`, `vim`, `find -exec`, `aw
 type itself defaults to `x` in the starter file's `tools` map for agents not using the
 per-command list. (bareguard-prd.md:1076-1084)
 
+**0.19.1 follow-up:** rule (1)'s boundary is ASCII **space only**
+(`cmd === key || cmd.startsWith(key + " ")`) — deliberately NOT the space-or-tab
+`startsWithWordBoundary` helper `bash.allow` uses. A shared-helper migration was tried and
+reverted before shipping: that helper's "prefix already ends in whitespace" shortcut let a
+trailing-space key (e.g. `{"rm ": "x"}`) match far more commands than the tab-only gap it was
+meant to close. A tab-separated command (`"git\tstatus"`) therefore still denies `rwx.unlisted`
+— a documented, fail-safe over-deny, not a leak. A blank or whitespace-only `rwx.bash` key now
+throws at `Gate` construction (`matchBash` treats `""` as a prefix every command starts with,
+which would otherwise grant its letter to any command with a leading space); `rwx.tools`/
+`rwx.agents` are unaffected, since both match by exact identity, never a prefix.
+
 ### 23.7 Letters never go inside a tool
 
 One action type = one letter. A tool mixing safe and dangerous calls takes its **worst**
