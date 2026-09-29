@@ -176,3 +176,23 @@ test("a root's ANCESTOR swapped to a symlink AFTER construction denies .symlinkR
     await cleanup(base);
   }
 });
+
+// ── No symlink creation needed: run on EVERY platform (never skipped) ──
+// The tmp dir sits under the filesystem/drive root, so constructing a Gate on
+// it walks findSymlinkComponent from `/` (or `C:\`) down through every
+// component, even where symlink creation is unsupported.
+
+test("real (non-symlink) scope root constructs and an in-scope write allows [no symlink needed]", async () => {
+  const g = new Gate({ audit: { path: null }, fs: { readScope: [RUN], writeScope: [RUN] } });
+  await g.init();
+  assert.equal((await g.check({ type: "write", path: path.join(RUN, "f.txt"), content: "x" })).outcome, "allow");
+  assert.equal((await g.check({ type: "read", path: path.join(RUN, "f.txt") })).outcome, "allow");
+});
+
+test("nonexistent root under the real tmp dir constructs; fsCheck allows [no symlink needed]", () => {
+  const root = path.join(X, "not-created-yet", "deeper");
+  const g = new Gate({ audit: { path: null }, fs: { writeScope: [root] } });
+  assert.ok(g);
+  const cfg = { writeScope: [root] };
+  assert.equal(fsCheck({ type: "write", path: path.join(root, "f.txt"), content: "x" }, cfg), null);
+});
