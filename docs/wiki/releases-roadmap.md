@@ -129,7 +129,7 @@ hardening (fail-loud on corrupt read) (bareguard-prd.md:995-999).
 
 (bareguard-prd.md:1034-1076)
 
-### bareguard 0.19 — file-rule contract: fs deny-by-default, symlink resolution, action.tool (BUILT, not yet released)
+### bareguard 0.19 — file-rule contract: fs deny-by-default, symlink resolution, action.tool (RELEASED 0.19.0; 0.19.1/0.19.2 follow-up fixes)
 
 - **`fs` flips to deny-by-default (BREAKING).** `fs.readScope`/`fs.writeScope` are now separate,
   independently-configured lists — unset or `[]` denies every action of that kind, with no
@@ -143,6 +143,9 @@ hardening (fail-loud on corrupt read) (bareguard-prd.md:995-999).
   never cached, so a root retargeted between two checks is honored on the next one). A symlink
   escape, a dangling symlink anywhere on the walk, or a genuine ELOOP cycle now denies; a
   brand-new file/dir still checks cleanly.
+  *Note: the "a root retargeted between two checks is honored" part was reversed in the next
+  release — a symlinked scope root now throws at construct and denies `fs.<scope>.symlinkRoot`
+  at check time.*
 - **Config entries accept `~`/`~/x`, expanded once via `os.homedir()` at construct** (previously
   a dead literal). `~user`, relative, empty, and non-string entries throw at construct. Agent-
   supplied paths are never canonicalized by the gate — non-string/`~`-prefixed/relative/empty all
@@ -179,7 +182,9 @@ hardening (fail-loud on corrupt read) (bareguard-prd.md:995-999).
 - **Perf, re-measured on the shipped build** (10,000 `fsCheck()` calls, Linux, warm cache):
   ~1–2µs/check on `origin/main` (c469796, no realpath calls) vs ~20–25µs/check on this branch
   for an existing target (~75–80µs for a not-yet-created one, the nearest-existing-ancestor
-  walk's cost) — roughly 15–60x depending on scenario, all still well under 100µs/check. Root
+  walk's cost) — roughly 15–60x depending on scenario, all still well under 100µs/check.
+  *Superseded in 0.19.2: the per-check lstat walk of every scope root makes an existing target
+  ~100–150µs (shallow root) to ~550–650µs (20 roots); see `bareguard.context.md` and CHANGELOG.* Root
   count barely matters when the target matches an early root (`.some()` short-circuits); a
   forced full scan across 5 roots costs roughly 3x a single root. No optimization made — nothing
   pathological, per the task brief's own bar.

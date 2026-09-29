@@ -29,6 +29,7 @@ import { netCheck } from "../src/primitives/net.js";
 import { bashCheck } from "../src/primitives/bash.js";
 import { flagsDenyCheck, flagsAskCheck } from "../src/primitives/flags.js";
 
+import { REAL_SLASH_TMP } from "./_helpers.js";
 // Before the #4 fix, `new Gate({ tools: "search", fs: "/etc" })` constructed
 // SUCCESSFULLY, and then `check({type:"wireMoney"})` /
 // `check({type:"read",path:"/etc/shadow"})` both came back
@@ -245,11 +246,11 @@ test("gate config: a null-prototype section (safeAction()'s own shape) must NOT 
   // path so this test exercises the null-proto tools section, not fs.
   const gate = new Gate({
     tools: nullProtoTools,
-    fs: { readScope: ["/tmp"], writeScope: ["/tmp"] },
+    fs: { readScope: [REAL_SLASH_TMP], writeScope: [REAL_SLASH_TMP] },
     audit: { path: null },
   });
-  const allowed = await gate.check({ type: "read", path: "/tmp/x" });
-  const denied = await gate.check({ type: "write", path: "/tmp/x" });
+  const allowed = await gate.check({ type: "read", path: REAL_SLASH_TMP + "/x" });
+  const denied = await gate.check({ type: "write", path: REAL_SLASH_TMP + "/x" });
   assert.equal(allowed.outcome, "allow");
   assert.equal(allowed.rule, "tools.allowlist");
   assert.equal(denied.outcome, "deny");

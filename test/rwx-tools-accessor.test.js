@@ -13,13 +13,14 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { Gate } from "../src/index.js";
 
+import { REAL_SLASH_TMP } from "./_helpers.js";
 function gateFor(rwxOverrides = {}) {
   return new Gate({
     audit: { path: null },
     // Broad fs scope so a "read"/"write"-typed action's fs step (which runs
     // BEFORE the rwx step) passes through on a real path, letting these
     // tests exercise the rwxTools() accessor, not fs scoping.
-    fs: { readScope: ["/tmp"], writeScope: ["/tmp"] },
+    fs: { readScope: [REAL_SLASH_TMP], writeScope: [REAL_SLASH_TMP] },
     rwx: {
       agent: "fixer",
       agents: { fixer: "rwx" },
@@ -80,14 +81,14 @@ test("rwxTools: a bare-letter entry stays a bare string, not an object", async (
 test("rwxTools: mutating the top-level returned object does not affect a later check()", async () => {
   const gate = gateFor();
   await gate.init();
-  const before = await gate.check({ type: "read", path: "/tmp/x", args: {} });
+  const before = await gate.check({ type: "read", path: REAL_SLASH_TMP + "/x", args: {} });
   assert.equal(before.outcome, "allow");
 
   const snapshot = gate.rwxTools();
   delete snapshot.read; // try to erase the key from the "map"
   snapshot.read = "x"; // and try to plant a bogus one back
 
-  const after = await gate.check({ type: "read", path: "/tmp/x", args: {} });
+  const after = await gate.check({ type: "read", path: REAL_SLASH_TMP + "/x", args: {} });
   assert.equal(after.outcome, "allow", "the gate's live map must be untouched by the mutation above");
   assert.equal(after.rwxLetter, "r", "the ORIGINAL letter, not the mutated one");
 });
@@ -137,6 +138,6 @@ test("rwxTools: two successive calls return independent copies (mutating one sna
   const snap2 = gate.rwxTools();
   snap1.read = "MUTATED";
   assert.equal(snap2.read, "r", "snap2 must be unaffected by mutating snap1");
-  const d = await gate.check({ type: "read", path: "/tmp/x", args: {} });
+  const d = await gate.check({ type: "read", path: REAL_SLASH_TMP + "/x", args: {} });
   assert.equal(d.rwxLetter, "r", "the live map must be unaffected by mutating either snapshot");
 });

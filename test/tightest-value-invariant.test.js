@@ -24,6 +24,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { Gate } from "../src/index.js";
+import { REAL_ETC } from "./_helpers.js";
 
 // A biting cap RAISES a halt event through humanChannel; whatever the human then
 // answers becomes the final rule. So the proof that the cap fired is the EVENT,
@@ -53,8 +54,8 @@ test("allow-scopes: an empty scope permits nothing (never falls through to defau
   const populated = [
     ["tools.allowlist",  { tools: { allowlist: ["wireMoney"] } },        { type: "wireMoney", amount: 1 }],
     ["net.allowDomains", { net: { allowDomains: ["example.com"] } },     { type: "fetch", url: "https://example.com/" }],
-    ["fs.readScope",     { fs: { readScope: ["/etc"] } },                { type: "read", path: "/etc/passwd" }],
-    ["fs.writeScope",    { fs: { writeScope: ["/etc"] } },               { type: "write", path: "/etc/x", content: "y" }],
+    ["fs.readScope",     { fs: { readScope: [REAL_ETC] } },                { type: "read", path: REAL_ETC + "/passwd" }],
+    ["fs.writeScope",    { fs: { writeScope: [REAL_ETC] } },               { type: "write", path: REAL_ETC + "/x", content: "y" }],
     ["bash.allow",       { bash: { allow: ["ls"] } },                    { type: "bash", cmd: "ls" }],
   ];
   for (const [key, cfg, action] of populated) {

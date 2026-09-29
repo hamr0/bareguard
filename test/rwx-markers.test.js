@@ -10,6 +10,7 @@ import assert from "node:assert/strict";
 import { Gate } from "../src/index.js";
 import { rwxCheck, assertRwxConfig, matchRwxLetter } from "../src/primitives/rwx.js";
 
+import { REAL_SLASH_TMP } from "./_helpers.js";
 function gateFor(rwxOverrides = {}, humanChannel) {
   return new Gate({
     audit: { path: null },
@@ -17,7 +18,7 @@ function gateFor(rwxOverrides = {}, humanChannel) {
     // (which runs BEFORE the rwx step) passes through on a real path,
     // letting these tests exercise rwx marker/letter matching, not fs
     // scoping.
-    fs: { readScope: ["/tmp"], writeScope: ["/tmp"] },
+    fs: { readScope: [REAL_SLASH_TMP], writeScope: [REAL_SLASH_TMP] },
     rwx: {
       agent: "fixer",
       agents: { researcher: "r--", fixer: "rw-", deployer: "rwx" },
@@ -47,7 +48,7 @@ test("rwx marker: bare-string entry never asks even under askOn:\"loose\"", asyn
   let asked = false;
   const gate = gateFor({ askOn: "loose" }, async () => { asked = true; return { decision: "deny" }; });
   await gate.init();
-  const d = await gate.check({ type: "read", path: "/tmp/x", args: {} });
+  const d = await gate.check({ type: "read", path: REAL_SLASH_TMP + "/x", args: {} });
   assert.equal(d.outcome, "allow");
   assert.equal(asked, false, "humanChannel must not be called for a bare-string entry");
 });
@@ -64,7 +65,7 @@ test("rwx marker: askOn:\"loose\" + marker:\"loose\" asks via humanChannel (lett
   let event = null;
   const gate = gateFor({ askOn: "loose" }, async (e) => { event = e; return { decision: "allow" }; });
   await gate.init();
-  const d = await gate.check({ type: "edit", path: "/tmp/x", args: {} }); // w, marker loose; fixer holds rw-
+  const d = await gate.check({ type: "edit", path: REAL_SLASH_TMP + "/x", args: {} }); // w, marker loose; fixer holds rw-
   assert.equal(d.outcome, "allow"); // humanChannel said allow
   assert.ok(event, "humanChannel must have been called");
   assert.equal(event.rwxLetter, "w");
@@ -75,7 +76,7 @@ test("rwx marker: askOn:\"loose\" + marker:\"loose\" asks via humanChannel (lett
 test("rwx marker: askOn:\"loose\" ask can be denied by humanChannel", async () => {
   const gate = gateFor({ askOn: "loose" }, async () => ({ decision: "deny", reason: "not today" }));
   await gate.init();
-  const d = await gate.check({ type: "edit", path: "/tmp/x", args: {} });
+  const d = await gate.check({ type: "edit", path: REAL_SLASH_TMP + "/x", args: {} });
   assert.equal(d.outcome, "deny");
   assert.equal(d.reason, "not today");
 });
@@ -102,7 +103,7 @@ test("rwx marker: \"tight\" marker never asks under askOn:\"loose\"", async () =
   let asked = false;
   const gate = gateFor({ askOn: "loose" }, async () => { asked = true; return { decision: "deny" }; });
   await gate.init();
-  const d = await gate.check({ type: "write", path: "/tmp/x", args: {} });
+  const d = await gate.check({ type: "write", path: REAL_SLASH_TMP + "/x", args: {} });
   assert.equal(d.outcome, "allow");
   assert.equal(asked, false);
 });
@@ -142,7 +143,7 @@ test("rwx marker: askOn:\"none\" (default) never asks regardless of marker", asy
   let asked = false;
   const gate = gateFor({}, async () => { asked = true; return { decision: "deny" }; }); // no askOn -> default "none"
   await gate.init();
-  const d1 = await gate.check({ type: "edit", path: "/tmp/x", args: {} });   // marker loose
+  const d1 = await gate.check({ type: "edit", path: REAL_SLASH_TMP + "/x", args: {} });   // marker loose
   const d2 = await gate.check({ type: "blank", args: {} });  // marker missing -> would-be loose
   assert.equal(d1.outcome, "allow");
   assert.equal(d2.outcome, "allow");
@@ -178,7 +179,7 @@ test("rwx marker: bash bare-string entry never asks under askOn:\"loose\"", asyn
 test("rwx marker: the audit line carries rwxMarker next to rwxLetters/rwxLetter on allow", async () => {
   const gate = gateFor();
   await gate.init();
-  await gate.check({ type: "write", path: "/tmp/x", args: {} }); // marker "tight"
+  await gate.check({ type: "write", path: REAL_SLASH_TMP + "/x", args: {} }); // marker "tight"
   const lines = await gate.audit.readAll();
   const gateLine = lines.find((l) => l.phase === "gate" && l.decision === "allow");
   assert.equal(gateLine.rwxLetters, "rw-");
@@ -189,7 +190,7 @@ test("rwx marker: the audit line carries rwxMarker next to rwxLetters/rwxLetter 
 test("rwx marker: the audit line carries rwxMarker on an askHuman gate line", async () => {
   const gate = gateFor({ askOn: "loose" }, async () => ({ decision: "allow" }));
   await gate.init();
-  await gate.check({ type: "edit", path: "/tmp/x", args: {} });
+  await gate.check({ type: "edit", path: REAL_SLASH_TMP + "/x", args: {} });
   const lines = await gate.audit.readAll();
   const askLine = lines.find((l) => l.phase === "gate" && l.decision === "askHuman");
   assert.ok(askLine);
@@ -200,11 +201,11 @@ test("rwx marker: the audit line carries rwxMarker on an askHuman gate line", as
 test("rwx marker: the audit line carries rwxMarker on a rwx.denied deny", async () => {
   const gate = gateFor();
   await gate.init();
-  await gate.check({ type: "edit", path: "/tmp/x", args: {} }); // w/loose, but researcher-in-disguise test below uses fixer which HOLDS w
+  await gate.check({ type: "edit", path: REAL_SLASH_TMP + "/x", args: {} }); // w/loose, but researcher-in-disguise test below uses fixer which HOLDS w
   // Use an agent without w to force rwx.denied while marker is present.
   const denyGate = new Gate({
     audit: { path: null },
-    fs: { writeScope: ["/tmp"] },
+    fs: { writeScope: [REAL_SLASH_TMP] },
     rwx: {
       agent: "researcher", // holds r-- only
       agents: { researcher: "r--" },
@@ -213,7 +214,7 @@ test("rwx marker: the audit line carries rwxMarker on a rwx.denied deny", async 
     humanChannel: async () => ({ decision: "deny" }),
   });
   await denyGate.init();
-  await denyGate.check({ type: "edit", path: "/tmp/x", args: {} });
+  await denyGate.check({ type: "edit", path: REAL_SLASH_TMP + "/x", args: {} });
   const lines = await denyGate.audit.readAll();
   const gateLine = lines.find((l) => l.phase === "gate" && l.decision === "deny");
   assert.equal(gateLine.rule, "rwx.denied");
@@ -287,7 +288,7 @@ test("rwx marker: a valid object entry with an unrecognized marker does NOT thro
 test("rwx marker: any other key on an object entry is ignored (rwxmap's evidence field never enters this file)", async () => {
   const gate = new Gate({
     audit: { path: null },
-    fs: { writeScope: ["/tmp"] },
+    fs: { writeScope: [REAL_SLASH_TMP] },
     rwx: {
       agent: "fixer",
       agents: { fixer: "rw-" },
@@ -296,7 +297,7 @@ test("rwx marker: any other key on an object entry is ignored (rwxmap's evidence
     humanChannel: async () => ({ decision: "deny" }),
   });
   await gate.init();
-  const d = await gate.check({ type: "edit", path: "/tmp/x", args: {} });
+  const d = await gate.check({ type: "edit", path: REAL_SLASH_TMP + "/x", args: {} });
   assert.equal(d.outcome, "allow");
 });
 

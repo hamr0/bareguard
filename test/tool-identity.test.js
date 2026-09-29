@@ -12,6 +12,7 @@ import { Gate } from "../src/index.js";
 import { toolsDenylistCheck, toolsAllowlistCheck } from "../src/primitives/tools.js";
 import { rwxCheck, matchRwxLetter } from "../src/primitives/rwx.js";
 
+import { REAL_SLASH_TMP } from "./_helpers.js";
 // ---------------------------------------------------------------------------
 // tools.allowlist / tools.denylist
 // ---------------------------------------------------------------------------
@@ -81,7 +82,7 @@ test("rwx: same map, action has only `type`, no `tool` — falls back to `type`,
 // ---------------------------------------------------------------------------
 
 test("fs kind check stays on `type`: write with a matching `tool` allowlist entry and an in-scope path allows", async (t) => {
-  const dir = "/tmp";
+  const dir = REAL_SLASH_TMP;
   const gate = new Gate({
     audit: { path: null },
     tools: { allowlist: ["shell_write"] },
@@ -96,7 +97,7 @@ test("fs kind check stays on `type`: `tool` has no bearing on an out-of-scope pa
   const gate = new Gate({
     audit: { path: null },
     tools: { allowlist: ["shell_write"] },
-    fs: { writeScope: ["/tmp"] },
+    fs: { writeScope: [REAL_SLASH_TMP] },
   });
   await gate.init();
   const d = await gate.check({ type: "write", tool: "shell_write", path: "/etc/passwd" });

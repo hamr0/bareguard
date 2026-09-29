@@ -23,6 +23,7 @@ import os from "node:os";
 import path from "node:path";
 import { Gate } from "../src/index.js";
 
+import { REAL_SLASH_TMP } from "./_helpers.js";
 function gateFor(overrides = {}) {
   return new Gate({
     audit: { path: null },
@@ -62,13 +63,13 @@ test("readAudit: returns the same lines readAll() returns, in FILE mode", async 
   try { fs.rmSync(auditPath, { force: true }); } catch {}
   const gate = new Gate({
     audit: { path: auditPath },
-    fs: { readScope: ["/tmp"] },
+    fs: { readScope: [REAL_SLASH_TMP] },
     rwx: { agent: "fixer", agents: { fixer: "rw-" }, tools: { read: "r" } },
     humanChannel: async () => ({ decision: "deny" }),
   });
   try {
     await gate.init();
-    await gate.check({ type: "read", path: "/tmp/x", args: {} });
+    await gate.check({ type: "read", path: REAL_SLASH_TMP + "/x", args: {} });
     const viaReadAll = await gate.audit.readAll();
     const viaReadAudit = await gate.readAudit();
     assert.deepEqual(viaReadAudit, viaReadAll);

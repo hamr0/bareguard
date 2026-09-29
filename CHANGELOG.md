@@ -3,6 +3,23 @@
 All notable changes to bareguard are documented here. Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [SemVer](https://semver.org/).
 
 
+## [0.19.2] - 2026-09-29
+
+### BREAKING (security fix)
+
+- **A symlinked `fs.readScope` / `fs.writeScope` root now throws at `Gate` construction, and denies at check time if a root becomes one later.** Pre-fix, a scope root that was itself a symlink (or had a symlink component) was realpath'd, so the scope silently MOVED to the link's target. With `/x/run/out -> /x/outside`, `writeScope: ["/x/run/out"]` allowed writing `/x/run/out/secret.txt` (the same file `/x/outside/secret.txt` that was denied when named directly), and `readScope: ["/x/run/out"]` allowed reading it. Reported by fwdloop; present in 0.19.0 and 0.19.1 (introduced with the fs symlink resolution in 0.19.0). Now:
+  - **Construct time:** any `readScope`/`writeScope` entry (after `~` expansion) that is a symlink, is dangling, or has a symlink in ANY path component (a not-yet-created root under a symlinked ancestor included) throws `invalid bareguard config: fs.<key>[i] — "<entry>" is or contains a symlink (...); ... List the real (resolved) path instead (resolves to <real path>).` A scope entry that does not exist at all (no symlink on its existing ancestors) is unchanged: accepted, resolved via nearest-existing-ancestor + tail.
+  - **Every check:** every root of the relevant scope (`readScope` for `read`, `writeScope` for `write`/`edit`) is re-verified (lstat walk, no cache); a root that is now a symlink or has a symlink component denies with the NEW rules `fs.readScope.symlinkRoot` / `fs.writeScope.symlinkRoot`. All roots of the scope are re-checked, not only the one that lexically matched, because the resolved-path comparison lets any root grant. This also covers a direct `fsCheck()` call with no `Gate`. A root that cannot be lstat'd (EACCES etc.) also fails closed.
+  - `fs.deny` roots are unchanged (a moved deny root only narrows access).
+  - **Upgrade note / operators:** list the real (resolved) path in scopes, e.g. via `fs.realpathSync(dir)`. **macOS caveat:** `os.tmpdir()` lives under `/var` -> `/private/var`, and `/tmp` and `/etc` are symlinks (`/private/tmp`, `/private/etc`), so a scope rooted at any of them now throws — use `fs.realpathSync(os.tmpdir())`. A config that deliberately aliased a scope through a symlink (the previously-tested "legit alias" shape) must now list the target instead.
+  - New rule strings (SemVer surface): `fs.readScope.symlinkRoot`, `fs.writeScope.symlinkRoot`.
+  - **Known limit (documented):** root re-verification is check-time only — a root swapped between an allowed `check()` and the harness's actual write is not caught. Closing that window (`openat`/`O_NOFOLLOW`, or writing in a directory the agent cannot modify) is the harness's job.
+
+### Docs
+
+- **`fsCheck` cost figures re-measured** (the old ~20-25µs/check figure was stale): with the per-check lstat walk of every scope root, an existing target now costs roughly 100-150µs with one shallow scope root, ~300-360µs at root depth ~13, and ~550-650µs with 20 roots (machine-dependent). Cost grows with scope roots x path depth, uncached by design so a swap is caught. Documented in `bareguard.context.md`.
+- README example scope roots changed from `/tmp` to `/srv/agent` (a `/tmp` root now throws on macOS), plus a note that scope roots must be real paths; `bareguard.context.md` eval-order block gains `.symlinkRoot`, and its "fixed on this branch" wording now reads "fixed in 0.19.1".
+
 ## [0.19.1] - 2026-09-29
 
 ### BREAKING

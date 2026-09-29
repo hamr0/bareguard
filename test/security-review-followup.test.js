@@ -9,7 +9,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { Gate, redact } from "../src/index.js";
-import { makeTmpDir, cleanup, uniquePaths } from "./_helpers.js";
+import { makeTmpDir, cleanup, uniquePaths, REAL_ETC } from "./_helpers.js";
 
 async function gateWith(t, cfg) {
   const dir = await makeTmpDir(); t.after(async () => cleanup(dir));
@@ -27,14 +27,14 @@ test("fs.deny — a trailing-slash entry still denies the directory node itself"
   // CHANGED (0.19.0): fs is deny-by-default — readScope added so the
   // "sibling must NOT be denied" assertion reaches "allow" instead of
   // `fs.readScope.unset` (unrelated to what this test is checking).
-  const gate = await gateWith(t, { fs: { deny: ["/etc/secret/"], readScope: ["/etc"] } });
+  const gate = await gateWith(t, { fs: { deny: [REAL_ETC + "/secret/"], readScope: [REAL_ETC] } });
 
   // the directory node itself (the fail-open case) must be denied
-  assert.equal((await gate.check({ type: "read", path: "/etc/secret" })).outcome, "deny");
+  assert.equal((await gate.check({ type: "read", path: REAL_ETC + "/secret" })).outcome, "deny");
   // children too
-  assert.equal((await gate.check({ type: "read", path: "/etc/secret/key" })).outcome, "deny");
+  assert.equal((await gate.check({ type: "read", path: REAL_ETC + "/secret/key" })).outcome, "deny");
   // and a prefix sibling must NOT be denied
-  assert.equal((await gate.check({ type: "read", path: "/etc/secret-public/x" })).outcome, "allow");
+  assert.equal((await gate.check({ type: "read", path: REAL_ETC + "/secret-public/x" })).outcome, "allow");
 });
 
 test("fs.writeScope — a trailing-slash entry still allows the scope root itself", async (t) => {

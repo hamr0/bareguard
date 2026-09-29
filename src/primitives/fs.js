@@ -28,6 +28,15 @@
 //    Must pass BOTH the lexical check and the resolved check. A dangling
 //    symlink anywhere on the walk, an ELOOP cycle, or EACCES/EPERM along the
 //    way -> deny (not "no opinion", not a crash).
+//  - scope ROOTS themselves must not be, or sit under, a symlink (0.19.2,
+//    fail closed): realpathing a symlinked root would silently MOVE the scope
+//    to the link's target (write scope `/run/out` -> `/outside` granted
+//    `/run/out/x` while `/outside/x` was denied). A root with a symlink
+//    component (or a dangling one) throws at Gate construct
+//    (`assertFsScopeRoots`), and every check re-verifies the roots (a root can
+//    be swapped for a symlink after start) -> deny `fs.<scope>.symlinkRoot`.
+//    Operators list the real (resolved) path. `fs.deny` roots are NOT
+//    restricted: a moved deny root only ever narrows access, never widens it.
 
 import path from "node:path";
 import fsSync from "node:fs";
@@ -176,6 +185,63 @@ function resolveWithSymlinks(absPath) {
 }
 
 /**
+ * Find the first symlink (or unverifiable) component on the way down an
+ * already-normalized absolute path, via lstat of each prefix — so the path
+ * ITSELF being a symlink (even a dangling one) and any symlinked ANCESTOR
+ * both count. A component that doesn't exist ends the walk (nothing below a
+ * missing node can be a symlink), so a not-yet-created root stays legal.
+ * ELOOP / EACCES / any other lstat error is treated as unverifiable, which
+ * also fails closed.
+ * @param {string} absPath already-normalized absolute (posix-style) path
+ * @returns {{at:string,why:string}|null} null = no symlink component found
+ */
+function findSymlinkComponent(absPath) {
+  const root = rootOf(absPath);
+  if (root === null) return { at: absPath, why: "not an absolute path" };
+  const parts = absPath.slice(root.length).split("/").filter((s) => s !== "");
+  let cur = root;
+  for (const part of parts) {
+    cur = cur.endsWith("/") ? cur + part : cur + "/" + part;
+    let lst;
+    try {
+      lst = fsSync.lstatSync(cur);
+    } catch (e) {
+      if (e.code === "ENOENT" || e.code === "ENOTDIR") return null;
+      return { at: cur, why: `could not be verified (${e.code || "error"})` };
+    }
+    if (lst.isSymbolicLink()) return { at: cur, why: "is a symlink" };
+  }
+  return null;
+}
+
+/**
+ * Construct-time guard (Gate constructor): throw if any `fs.readScope` /
+ * `fs.writeScope` entry is a symlink or has a symlink component. Runs AFTER
+ * `resolveFsConfig` (entries already validated + tilde-expanded).
+ * @param {object} [fsCfg]
+ * @throws {Error} `invalid bareguard config: fs.<key>[i] — …` naming the link
+ */
+export function assertFsScopeRoots(fsCfg) {
+  const resolved = resolveFsConfig(fsCfg);
+  for (const key of ["readScope", "writeScope"]) {
+    const list = resolved[key];
+    if (!list) continue;
+    for (let i = 0; i < list.length; i++) {
+      const hit = findSymlinkComponent(norm(list[i]));
+      if (hit) {
+        const rr = resolveWithSymlinks(norm(list[i]));
+        const real = "resolved" in rr ? ` (resolves to ${rr.resolved})` : "";
+        throw new Error(
+          `invalid bareguard config: fs.${key}[${i}] — "${list[i]}" is or contains a symlink ` +
+          `(${hit.at} ${hit.why}); a symlinked scope root would silently move the scope to the link's target. ` +
+          `List the real (resolved) path instead${real}.`,
+        );
+      }
+    }
+  }
+}
+
+/**
  * Resolve a configured scope/deny ROOT, fresh, every call — no cache, no
  * lexical-only fallback for a root that doesn't exist yet (that fallback was
  * considered and rejected: it would silently degrade symlink protection for
@@ -258,6 +324,17 @@ export function fsCheck(action, cfg = {}) {
   const lexicalHit = scopeList.some((s) => within(p, s));
   if (!lexicalHit) {
     return { outcome: "deny", severity: "action", rule: scopeRule, reason: `path ${raw} outside ${scopeKey}` };
+  }
+
+  // Scope-root freshness (fail closed): re-verify EVERY root in this scope on
+  // every check, not only the one that lexically matched — the resolved-path
+  // comparison below lets any root grant, so a swapped-in symlink on a
+  // non-matching root could still move the scope and admit this action.
+  for (const s of scopeList) {
+    const hit = findSymlinkComponent(norm(s));
+    if (hit) {
+      return { outcome: "deny", severity: "action", rule: `${scopeRule}.symlinkRoot`, reason: `${scopeKey} entry ${s} is or contains a symlink (${hit.at} ${hit.why}); list the real (resolved) path` };
+    }
   }
 
   // Symlink/resolved-path check, ON by default, no opt-out.

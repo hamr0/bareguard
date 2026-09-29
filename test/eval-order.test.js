@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { Gate } from "../src/index.js";
-import { makeTmpDir, cleanup, uniquePaths } from "./_helpers.js";
+import { makeTmpDir, cleanup, uniquePaths, REAL_SLASH_TMP } from "./_helpers.js";
 
 test("eval order — first match wins across all 6 steps", async (t) => {
   const dir = await makeTmpDir();
@@ -11,7 +11,7 @@ test("eval order — first match wins across all 6 steps", async (t) => {
   const gate = new Gate({
     audit:  { path: auditPath },
     bash:   { allow: ["git", "ls"], denyPatterns: [/sudo/] },
-    fs:     { writeScope: ["/tmp/agent"], readScope: ["/tmp"], deny: ["/etc/passwd"] },
+    fs:     { writeScope: [REAL_SLASH_TMP + "/agent"], readScope: [REAL_SLASH_TMP], deny: ["/etc/passwd"] },
     net:    { allowDomains: ["api.example.com"], denyPrivateIps: true },
     tools:  {
       allowlist: ["bash", "read", "fetch", "spawn"],

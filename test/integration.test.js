@@ -5,7 +5,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { Gate } from "../src/index.js";
-import { makeTmpDir, cleanup, uniquePaths, makeHumanChannel } from "./_helpers.js";
+import { makeTmpDir, cleanup, uniquePaths, makeHumanChannel, REAL_SLASH_TMP, REAL_ETC, REAL_HOME_ROOT } from "./_helpers.js";
 
 test("simulated agent loop — mixed allow/ask/deny/halt with humanChannel", async (t) => {
   const dir = await makeTmpDir(); t.after(async () => cleanup(dir));
@@ -21,7 +21,7 @@ test("simulated agent loop — mixed allow/ask/deny/halt with humanChannel", asy
     audit:  { path: auditPath },
     budget: { maxCostUsd: 0.20, sharedFile: budgetPath },
     bash:   { allow: ["git", "ls"] },
-    fs:     { writeScope: ["/tmp/agent"], readScope: ["/tmp", "/etc/hostname"], deny: ["/etc/passwd"] },
+    fs:     { writeScope: [REAL_SLASH_TMP + "/agent"], readScope: [REAL_SLASH_TMP, REAL_ETC + "/hostname"], deny: [REAL_ETC + "/passwd"] },
     tools:  { allowlist: ["bash", "read", "write", "fetch"] },
     secrets:{ envVars: ["FAKE_TOKEN"] },
     humanChannel: channel,
@@ -36,7 +36,7 @@ test("simulated agent loop — mixed allow/ask/deny/halt with humanChannel", asy
     await gate.record({ type: "bash", cmd: "git status" }, { costUsd: 0.05, tokens: 100 });
 
     // 2. fs deny
-    dec = await gate.check({ type: "read", path: "/etc/passwd" });
+    dec = await gate.check({ type: "read", path: REAL_ETC + "/passwd" });
     assert.equal(dec.outcome, "deny");
     assert.equal(dec.rule, "fs.deny");
 
@@ -190,17 +190,17 @@ test("fs.deny uses path-segment matching, not substring (m2)", async (t) => {
   // an unset readScope had "no opinion" and allowed by default.
   const gate = new Gate({
     audit: { path: auditPath },
-    fs:    { deny: ["/etc"], readScope: ["/etc", "/home"] },
+    fs:    { deny: [REAL_ETC], readScope: [REAL_ETC, REAL_HOME_ROOT] },
   });
   await gate.init();
 
-  const d1 = await gate.check({ type: "read", path: "/etc/passwd" });
+  const d1 = await gate.check({ type: "read", path: REAL_ETC + "/passwd" });
   assert.equal(d1.outcome, "deny", "/etc/passwd must be denied");
 
-  const d2 = await gate.check({ type: "read", path: "/etc/ssl/cert.pem" });
+  const d2 = await gate.check({ type: "read", path: REAL_ETC + "/ssl/cert.pem" });
   assert.equal(d2.outcome, "deny", "/etc/ssl/cert.pem must be denied");
 
-  const d3 = await gate.check({ type: "read", path: "/home/user/etc-backup/file.txt" });
+  const d3 = await gate.check({ type: "read", path: REAL_HOME_ROOT + "/user/etc-backup/file.txt" });
   assert.equal(d3.outcome, "allow", "/home/user/etc-backup must NOT match deny entry '/etc'");
 });
 

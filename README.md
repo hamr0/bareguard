@@ -53,7 +53,7 @@ import { Gate } from "bareguard";
 const gate = new Gate({
   tools:  { allowlist: ["bash", "read", "write", "fetch"] },
   bash:   { allow: ["git", "ls"], denyPatterns: [/sudo/, /rm\s+-rf/] },
-  fs:     { readScope: ["/tmp"], writeScope: ["/tmp/agent"], deny: ["~/.ssh"] },
+  fs:     { readScope: ["/srv/agent"], writeScope: ["/srv/agent/out"], deny: ["~/.ssh"] },
   budget: { maxCostUsd: 5.00, maxTokens: 100_000 },
   limits: { maxTurns: 50 },
   // event.kind: "ask" | "halt" — your UX decides (TUI, Slack, web, PIN)
@@ -69,7 +69,7 @@ if (decision.outcome === "allow") {
 }
 ```
 
-`fs.readScope` and `fs.writeScope` are separate, deny-by-default lists — a folder listed only in `writeScope` isn't readable, and file actions with neither list configured are denied outright, not left "no opinion." `fs.deny` is an optional extra layer *inside* whatever the scopes already allow, never a substitute for one. Deny-by-default here for the same reason the rest of this file's structure does: an allow-list mistake (a scope you forgot to add) fails **closed**, not open.
+`fs.readScope` and `fs.writeScope` are separate, deny-by-default lists — a folder listed only in `writeScope` isn't readable, and file actions with neither list configured are denied outright, not left "no opinion." `fs.deny` is an optional extra layer *inside* whatever the scopes already allow, never a substitute for one. Deny-by-default here for the same reason the rest of this file's structure does: an allow-list mistake (a scope you forgot to add) fails **closed**, not open. Scope roots must be real paths: a root that is (or sits under) a symlink throws at construct and denies `fs.<scope>.symlinkRoot` at check time, since resolving it would silently move the scope to the link's target. On macOS `os.tmpdir()`, `/tmp` and `/etc` are symlinks — pass `fs.realpathSync(...)` of them.
 
 ## The primitives
 
