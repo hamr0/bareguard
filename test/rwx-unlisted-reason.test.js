@@ -10,6 +10,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { Gate } from "../src/index.js";
 
+import { REAL_SLASH_TMP } from "./_helpers.js";
 const RWX = {
   agents: { researcher: "r--" },
   tools: { read: "r" },
@@ -22,7 +23,7 @@ function gateFor(agent, overrides = {}) {
     // Broad fs scope so a "read"-typed action's fs step (which runs BEFORE
     // the rwx step) passes through on a real path, letting these tests
     // exercise rwx.unlisted reason wording, not fs scoping.
-    fs: { readScope: ["/tmp"] },
+    fs: { readScope: [REAL_SLASH_TMP] },
     rwx: { agent, ...RWX, ...overrides },
     humanChannel: async () => ({ decision: "deny" }),
   });
@@ -31,7 +32,7 @@ function gateFor(agent, overrides = {}) {
 test("rwx.unlisted (agent): reason names bareguard.rwx.json and operator", async () => {
   const gate = gateFor("nobody");
   await gate.init();
-  const d = await gate.check({ type: "read", path: "/tmp/x", args: {} });
+  const d = await gate.check({ type: "read", path: REAL_SLASH_TMP + "/x", args: {} });
   assert.equal(d.outcome, "deny");
   assert.equal(d.rule, "rwx.unlisted");
   assert.match(d.reason, /bareguard\.rwx\.json/);

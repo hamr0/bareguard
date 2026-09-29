@@ -230,7 +230,7 @@ test("fs: gate.allows() returns false for a path-less read (not a silent true)",
 });
 
 test("fs: fsCheck() direct call denies a path-less write regardless of cfg shape", () => {
-  const d1 = fsCheck({ type: "write" }, { writeScope: ["/tmp/agent"] });
+  const d1 = fsCheck({ type: "write" }, { writeScope: [path.join(F, "agent")] });
   assert.equal(d1?.outcome, "deny");
   assert.equal(d1?.rule, "fs.invalidPath");
   const d2 = fsCheck({ type: "write" }, {}); // scope unset too — still denies on the path, not the scope
@@ -270,11 +270,9 @@ test("fs: symlink escape — lexically inside scope, resolves outside it, denies
   assert.equal(d.rule, "fs.readScope.symlinkEscape");
 });
 
-test("fs: a symlinked scope ROOT (legit alias) still allows a real file through it", async (t) => {
+test("fs: a symlinked scope ROOT THROWS at construct (0.19.2 — was: alias silently honored)", async (t) => {
   if (skipIfNoSymlinks(t)) return;
-  const gate = await gateWith(t, { fs: { readScope: [path.join(F, "legit-root-link")] } });
-  const d = await gate.check({ type: "read", path: path.join(F, "legit-root-link", "ok.txt") });
-  assert.equal(d.outcome, "allow");
+  assert.throws(() => new Gate({ fs: { readScope: [path.join(F, "legit-root-link")] } }), /fs\.readScope\[0\].*symlink.*real \(resolved\) path/);
 });
 
 test("fs: dangling symlink as the write target denies", async (t) => {
@@ -430,65 +428,30 @@ test("fs: a not-yet-created scope root is resolved via nearest-existing-ancestor
   assert.equal(d.outcome, "allow");
 });
 
-test("fs: a symlinked ancestor of a not-yet-created scope root is honored", async (t) => {
+test("fs: a symlinked ancestor of a not-yet-created scope root THROWS at construct (0.19.2 — fail closed)", async (t) => {
   if (skipIfNoSymlinks(t)) return;
-  // real-scope/aliased-parent -> symlink to a real dir; the scope root sits
-  // ONE level below that symlink and does not exist yet itself.
   const realParent = path.join(F, "real-parent-for-fresh-root");
   await fsp.mkdir(realParent, { recursive: true });
   const aliasParent = path.join(F, "alias-parent-for-fresh-root");
   await fsp.symlink(realParent, aliasParent, "dir");
   const freshRoot = path.join(aliasParent, "not-created-yet");
-
-  const gate = await gateWith(t, { fs: { writeScope: [freshRoot] } });
-  const d = await gate.check({ type: "write", path: path.join(freshRoot, "out.txt") });
-  assert.equal(d.outcome, "allow");
-
-  // Confirms the ancestor walk actually went THROUGH the symlink (not a
-  // lexical-only fallback that never looks at the disk): retarget the alias
-  // to a DIFFERENT real directory and the same query must now resolve
-  // outside the scope root and deny.
-  const otherReal = path.join(F, "other-real-parent");
-  await fsp.mkdir(otherReal, { recursive: true });
-  await fsp.unlink(aliasParent);
-  await fsp.symlink(otherReal, aliasParent, "dir");
-  const d2 = await gate.check({ type: "write", path: path.join(freshRoot, "out.txt") });
-  assert.equal(d2.outcome, "allow", "still allowed — the SAME live alias, now pointing elsewhere, still resolves target+root together");
+  assert.throws(() => new Gate({ fs: { writeScope: [freshRoot] } }), /fs\.writeScope\[0\].*symlink/);
 });
 
-test("fs: scope roots are resolved FRESH on every check — retargeting a root symlink between two checks is reflected immediately", async (t) => {
+test("fs: a scope root swapped for a symlink AFTER construct denies (fs.readScope.symlinkRoot), not silently retargeted", async (t) => {
   if (skipIfNoSymlinks(t)) return;
-  // Both the checked path and the scope root go through the SAME live
-  // symlink, so a STALE cached root resolution (resolved once, reused) would
-  // disagree with the target's always-fresh realpath after a retarget — the
-  // exact regression "resolve scope roots fresh on every check" defends
-  // against. Querying the identical literal path (`rootLink/f.txt`) both
-  // times isolates that: a caching bug denies the second call (fresh target
-  // vs stale root mismatch); fresh resolution allows it again.
-  const targetA = path.join(F, "retarget-a");
   const targetB = path.join(F, "retarget-b");
-  await fsp.mkdir(targetA, { recursive: true });
   await fsp.mkdir(targetB, { recursive: true });
-  await fsp.writeFile(path.join(targetA, "f.txt"), "a");
   await fsp.writeFile(path.join(targetB, "f.txt"), "b");
-
-  const rootLink = path.join(F, "retarget-root");
-  await fsp.symlink(targetA, rootLink, "dir");
-
-  const gate = await gateWith(t, { fs: { readScope: [rootLink] } });
-  const queryPath = path.join(rootLink, "f.txt");
-
-  // First check: root points at targetA — allow.
-  const d1 = await gate.check({ type: "read", path: queryPath });
-  assert.equal(d1.outcome, "allow");
-
-  // Retarget the root symlink to targetB, no gate reconstruction, no config change.
-  await fsp.unlink(rootLink);
-  await fsp.symlink(targetB, rootLink, "dir");
-
-  // Second check: SAME literal query path, same gate, same config object —
-  // must still allow (both root and target resolve fresh through the
-  // retargeted symlink together). A cached root would deny here instead.
-  const d2 = await gate.check({ type: "read", path: queryPath });
-  assert.equal(d2.outcome, "allow");
+  const root = path.join(F, "retarget-root");
+  await fsp.mkdir(root, { recursive: true });
+  await fsp.writeFile(path.join(root, "f.txt"), "a");
+  const gate = await gateWith(t, { fs: { readScope: [root] } });
+  const q = path.join(root, "f.txt");
+  assert.equal((await gate.check({ type: "read", path: q })).outcome, "allow");
+  await fsp.rm(root, { recursive: true });
+  await fsp.symlink(targetB, root, "dir");
+  const d2 = await gate.check({ type: "read", path: q });
+  assert.equal(d2.outcome, "deny");
+  assert.equal(d2.rule, "fs.readScope.symlinkRoot");
 });

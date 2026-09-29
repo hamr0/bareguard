@@ -143,6 +143,9 @@ hardening (fail-loud on corrupt read) (bareguard-prd.md:995-999).
   never cached, so a root retargeted between two checks is honored on the next one). A symlink
   escape, a dangling symlink anywhere on the walk, or a genuine ELOOP cycle now denies; a
   brand-new file/dir still checks cleanly.
+  *Note: the "a root retargeted between two checks is honored" part was reversed in the next
+  release — a symlinked scope root now throws at construct and denies `fs.<scope>.symlinkRoot`
+  at check time.*
 - **Config entries accept `~`/`~/x`, expanded once via `os.homedir()` at construct** (previously
   a dead literal). `~user`, relative, empty, and non-string entries throw at construct. Agent-
   supplied paths are never canonicalized by the gate — non-string/`~`-prefixed/relative/empty all

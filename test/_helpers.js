@@ -2,11 +2,26 @@
 
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { realpathSync } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 
+// Scope roots must not be (or sit under) a symlink (0.19.2), and os.tmpdir()
+// is one on macOS (/var -> /private/var) — so every tmp dir used as an fs scope
+// root is created under the REAL tmpdir.
+export const REAL_TMPDIR = realpathSync(tmpdir());
+
+// A real (non-symlink) path for the system temp dir, for tests that scope to
+// "/tmp" literally: /tmp itself is a symlink on macOS (-> /private/tmp).
+export const REAL_SLASH_TMP = realpathSync("/tmp");
+
+// Same for "/etc" (-> /private/etc on macOS) and "/home".
+function realOr(p) { try { return realpathSync(p); } catch { return p; } }
+export const REAL_ETC = realOr("/etc");
+export const REAL_HOME_ROOT = realOr("/home");
+
 export async function makeTmpDir(prefix = "bareguard-test-") {
-  return await mkdtemp(path.join(tmpdir(), prefix));
+  return await mkdtemp(path.join(REAL_TMPDIR, prefix));
 }
 
 export async function cleanup(dir) {

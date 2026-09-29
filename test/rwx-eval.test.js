@@ -6,6 +6,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { Gate } from "../src/index.js";
 
+import { REAL_SLASH_TMP } from "./_helpers.js";
 const RWX = {
   agents: { researcher: "r--", fixer: "rw-", deployer: "rwx" },
   tools: {
@@ -27,7 +28,7 @@ function gateFor(agent, overrides = {}) {
     // Broad fs scope so a "read"/"write"/"edit"-typed action's fs step
     // (which runs BEFORE the rwx step) passes through on a real path,
     // letting these tests exercise rwx letter matching, not fs scoping.
-    fs: { readScope: ["/tmp"], writeScope: ["/tmp"] },
+    fs: { readScope: [REAL_SLASH_TMP], writeScope: [REAL_SLASH_TMP] },
     rwx: { agent, ...RWX, ...overrides },
     humanChannel: async () => ({ decision: "deny" }),
   });
@@ -38,7 +39,7 @@ function gateFor(agent, overrides = {}) {
 // unaffected by fs and ignores this extra field.
 const FS_TYPES = new Set(["read", "write", "edit"]);
 function actionFor(type, rest = {}) {
-  return FS_TYPES.has(type) ? { type, path: "/tmp/x", ...rest } : { type, ...rest };
+  return FS_TYPES.has(type) ? { type, path: REAL_SLASH_TMP + "/x", ...rest } : { type, ...rest };
 }
 
 // ─── E-rwx-1: adversarial bash under r-- (researcher) ────────────────────────

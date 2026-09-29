@@ -9,7 +9,7 @@ import { Limits } from "./primitives/limits.js";
 import { redact, makeRedactor } from "./primitives/secrets.js";
 import { bashCheck } from "./primitives/bash.js";
 import { bashClassifyCheck } from "./primitives/classify.js";
-import { fsCheck, resolveFsConfig } from "./primitives/fs.js";
+import { fsCheck, assertFsScopeRoots } from "./primitives/fs.js";
 import { netCheck } from "./primitives/net.js";
 import {
   toolsDenylistCheck, toolsDenyArgsCheck, toolsAllowlistCheck,
@@ -636,7 +636,7 @@ export class Gate {
     // one fsCheck() calls at eval time — throws loudly at construct on any
     // bad entry (non-string, "~user" form, relative path, …) instead of
     // waiting for the first action to surface it as a runtime deny.
-    if (config.fs !== undefined && config.fs !== null) resolveFsConfig(config.fs);
+    if (config.fs !== undefined && config.fs !== null) assertFsScopeRoots(config.fs);
     assertRwxConfig(config); // §23.2: rwx is a second mode, mutually exclusive with tools.allowlist/bash.allow
     // §23.21: the gate copies `rwx` at construct time, deep and decoupled —
     // every other section is still held by reference (unchanged), but rwx

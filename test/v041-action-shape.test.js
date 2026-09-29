@@ -7,6 +7,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { Gate } from "../src/index.js";
 
+import { REAL_SLASH_TMP, REAL_ETC } from "./_helpers.js";
 // ────────────────────────────────────────────────────────────────────────
 // bash
 // ────────────────────────────────────────────────────────────────────────
@@ -72,13 +73,13 @@ test("bash — flat .cmd wins over nested args.cmd when both present", async () 
 test("fs — nested action.args.path is honored by fs.readScope", async () => {
   const gate = new Gate({
     audit: { path: null },
-    fs:    { readScope: ["/tmp/agent"] },
+    fs:    { readScope: [REAL_SLASH_TMP + "/agent"] },
   });
   await gate.init();
-  const decAllow = await gate.check({ type: "read", args: { path: "/tmp/agent/file.txt" } });
+  const decAllow = await gate.check({ type: "read", args: { path: REAL_SLASH_TMP + "/agent/file.txt" } });
   assert.equal(decAllow.outcome, "allow");
 
-  const decDeny = await gate.check({ type: "read", args: { path: "/etc/passwd" } });
+  const decDeny = await gate.check({ type: "read", args: { path: REAL_ETC + "/passwd" } });
   assert.equal(decDeny.outcome, "deny");
   assert.equal(decDeny.rule, "fs.readScope");
 });
@@ -86,11 +87,11 @@ test("fs — nested action.args.path is honored by fs.readScope", async () => {
 test("fs — nested action.args.path is honored by fs.deny", async () => {
   const gate = new Gate({
     audit: { path: null },
-    fs:    { deny: ["/etc"], readScope: ["/etc"] },
+    fs:    { deny: [REAL_ETC], readScope: [REAL_ETC] },
   });
   await gate.init();
   // Scoped to /etc but explicitly denied — deny wins
-  const dec = await gate.check({ type: "read", args: { path: "/etc/passwd" } });
+  const dec = await gate.check({ type: "read", args: { path: REAL_ETC + "/passwd" } });
   assert.equal(dec.outcome, "deny");
   assert.equal(dec.rule, "fs.deny");
 });
@@ -98,10 +99,10 @@ test("fs — nested action.args.path is honored by fs.deny", async () => {
 test("fs — flat action.path still works (regression)", async () => {
   const gate = new Gate({
     audit: { path: null },
-    fs:    { writeScope: ["/tmp"] },
+    fs:    { writeScope: [REAL_SLASH_TMP] },
   });
   await gate.init();
-  const dec = await gate.check({ type: "write", path: "/tmp/foo.txt" });
+  const dec = await gate.check({ type: "write", path: REAL_SLASH_TMP + "/foo.txt" });
   assert.equal(dec.outcome, "allow");
 });
 

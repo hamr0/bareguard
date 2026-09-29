@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { Gate } from "../src/index.js";
 
+import { REAL_SLASH_TMP } from "./_helpers.js";
 // ---------------------------------------------------------------------------
 // Prototype-pollution hardening (grounded by a /security pass, 2026-06-14).
 //
@@ -17,7 +18,7 @@ const CFG = () => ({
   audit: { path: null },
   tools: { allowlist: ["bash", "fetch", "read", "memory.write"] },
   bash: { denyPatterns: [/rm\s+-rf/] },
-  fs: { readScope: ["/tmp"] },
+  fs: { readScope: [REAL_SLASH_TMP] },
   net: { allowDomains: ["safe.com"] },
   flags: { provenance: { web: "ask" } },
   content: { denyPatterns: [] },
@@ -46,7 +47,7 @@ test("pollution: an inherited cmd/path/url cannot inject a denied action (flat +
   // that outcome.
   const flat = await withPollution({ cmd: "rm -rf /tmp", path: "/etc/passwd", url: "http://evil.com/x" }, async () => [
     await gate.check({ type: "bash" }),
-    await gate.check({ type: "read", path: "/tmp/own.txt" }),
+    await gate.check({ type: "read", path: REAL_SLASH_TMP + "/own.txt" }),
     await gate.check({ type: "fetch" }),
   ]);
   for (const d of flat) assert.equal(d.outcome, "allow", `${d.rule} should stay allow under pollution`);

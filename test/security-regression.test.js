@@ -6,7 +6,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { Gate } from "../src/index.js";
-import { makeTmpDir, cleanup, uniquePaths } from "./_helpers.js";
+import { makeTmpDir, cleanup, uniquePaths, REAL_ETC } from "./_helpers.js";
 
 async function gateWith(t, cfg) {
   const dir = await makeTmpDir(); t.after(async () => cleanup(dir));
@@ -24,14 +24,14 @@ test("fs.deny — `.` and `..` segments cannot bypass a deny entry", async (t) =
   // CHANGED (0.19.0): fs is deny-by-default — readScope added so the
   // "sibling must NOT be denied" assertion reaches "allow" instead of
   // `fs.readScope.unset` (unrelated to what this test is checking).
-  const gate = await gateWith(t, { fs: { deny: ["/etc/secrets"], readScope: ["/etc"] } });
+  const gate = await gateWith(t, { fs: { deny: [REAL_ETC + "/secrets"], readScope: [REAL_ETC] } });
 
   for (const path of [
-    "/etc/./secrets/key",
-    "/etc/secrets/../secrets/key",
-    "/var/../etc/secrets/key",
-    "/etc/secrets",
-    "/etc/secrets/sub/key",
+    REAL_ETC + "/./secrets/key",
+    REAL_ETC + "/secrets/../secrets/key",
+    "/var/.." + REAL_ETC + "/secrets/key",
+    REAL_ETC + "/secrets",
+    REAL_ETC + "/secrets/sub/key",
   ]) {
     const d = await gate.check({ type: "read", path });
     assert.equal(d.outcome, "deny", `${path} must be denied`);
@@ -39,7 +39,7 @@ test("fs.deny — `.` and `..` segments cannot bypass a deny entry", async (t) =
   }
 
   // legit: a sibling that merely shares a prefix is NOT under the deny entry
-  const ok = await gate.check({ type: "read", path: "/etc/secrets-public/readme" });
+  const ok = await gate.check({ type: "read", path: REAL_ETC + "/secrets-public/readme" });
   assert.equal(ok.outcome, "allow", "/etc/secrets-public must not match deny /etc/secrets");
 });
 

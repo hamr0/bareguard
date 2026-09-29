@@ -8,6 +8,7 @@ import assert from "node:assert/strict";
 import { Gate } from "../src/index.js";
 import { clampLetters } from "../src/primitives/rwx.js";
 
+import { REAL_SLASH_TMP } from "./_helpers.js";
 test("rwx clamp: pure clampLetters is per-letter min(parent, requested)", () => {
   assert.equal(clampLetters("rwx", "rwx"), "rwx");
   assert.equal(clampLetters("r-x", "rwx"), "r-x"); // child asks for everything, parent caps it
@@ -64,7 +65,7 @@ test("rwx clamp: an r-x parent cannot produce a w-holding child, chained through
     // no `agents` lookup needed for a spawned child.
     const childGate = new Gate({
       audit: { path: null },
-      fs: { readScope: ["/tmp"] },
+      fs: { readScope: [REAL_SLASH_TMP] },
       spawnDepth: depth,
       parentRunId: parentGate.runId,
       rwx: { letters: childLetters },
@@ -73,7 +74,7 @@ test("rwx clamp: an r-x parent cannot produce a w-holding child, chained through
 
     // The child cannot verify (or widen) its own letters — check() reflects
     // exactly the clamped grant it was handed, nothing more.
-    const dRead = await childGate.check({ type: "read", path: "/tmp/x", args: {} });
+    const dRead = await childGate.check({ type: "read", path: REAL_SLASH_TMP + "/x", args: {} });
     // "read" is unlisted in the child's tools map (none was configured for
     // the child) — still correctly denies (deny-by-absence), not a false
     // allow from "it holds r".

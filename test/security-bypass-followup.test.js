@@ -18,7 +18,8 @@ import { Gate, globToRegex, matchAny } from "../src/index.js";
 import { fsCheck } from "../src/primitives/fs.js";
 import { netCheck } from "../src/primitives/net.js";
 import { bashCheck } from "../src/primitives/bash.js";
-import { makeTmpDir, cleanup, uniquePaths } from "./_helpers.js";
+import { makeTmpDir, cleanup, uniquePaths, REAL_SLASH_TMP, REAL_ETC } from "./_helpers.js";
+const T = REAL_SLASH_TMP;
 
 async function gateWith(t, cfg) {
   const dir = await makeTmpDir(); t.after(async () => cleanup(dir));
@@ -40,7 +41,7 @@ const NON_STRINGS = [
 
 for (const [label, value] of NON_STRINGS) {
   test(`fs — non-string path (${label}) is denied, not waved through`, () => {
-    const cfg = { writeScope: ["/tmp/agent"], deny: ["/etc"] };
+    const cfg = { writeScope: [T + "/agent"], deny: [REAL_ETC] };
     const d = fsCheck({ type: "write", path: value }, cfg);
     assert.equal(d?.outcome, "deny");
     assert.equal(d?.rule, "fs.invalidPath");
@@ -48,7 +49,7 @@ for (const [label, value] of NON_STRINGS) {
 }
 
 test("fs — non-string nested args.path is denied", () => {
-  const d = fsCheck({ type: "write", args: { path: ["/etc/passwd"] } }, { writeScope: ["/tmp/agent"] });
+  const d = fsCheck({ type: "write", args: { path: [REAL_ETC + "/passwd"] } }, { writeScope: [T + "/agent"] });
   assert.equal(d?.rule, "fs.invalidPath");
 });
 
@@ -56,7 +57,7 @@ test("fs — absent path is denied (0.19.1: deny-by-default; was a no-op pre-0.1
   // Flipped from a no-op to fs.invalidPath: this was the v0.5.0 contract, when
   // an unset scope meant allow; 0.19.0's deny-by-default replaced that, and
   // 0.19.1 closed the last gap that let a path-less action skip the fs step.
-  const d = fsCheck({ type: "write" }, { writeScope: ["/tmp/agent"] });
+  const d = fsCheck({ type: "write" }, { writeScope: [T + "/agent"] });
   assert.equal(d?.outcome, "deny");
   assert.equal(d?.rule, "fs.invalidPath");
 });
@@ -77,15 +78,15 @@ test("bash — non-string cmd is denied, not crashed, on the allow path", () => 
 test("H1 — full Gate denies the array-path write that used to be allowed", async (t) => {
   const gate = await gateWith(t, {
     tools: { allowlist: ["write", "fetch", "bash"] },
-    fs: { writeScope: ["/tmp/agent"], deny: ["/etc"] },
+    fs: { writeScope: [T + "/agent"], deny: [REAL_ETC] },
     net: { denyPrivateIps: true, allowDomains: ["example.com"] },
   });
-  assert.equal((await gate.check({ type: "write", path: ["/etc/passwd"] })).outcome, "deny");
+  assert.equal((await gate.check({ type: "write", path: [REAL_ETC + "/passwd"] })).outcome, "deny");
   assert.equal((await gate.check({ type: "write", path: { toString: () => "/etc/passwd" } })).outcome, "deny");
   assert.equal((await gate.check({ type: "fetch", url: ["http://127.0.0.1"] })).outcome, "deny");
   assert.equal((await gate.check({ type: "bash", cmd: ["rm -rf /"] })).outcome, "deny");
   // sanity: the legitimate string forms still behave as before
-  assert.equal((await gate.check({ type: "write", path: "/tmp/agent/ok.txt" })).outcome, "allow");
+  assert.equal((await gate.check({ type: "write", path: T + "/agent/ok.txt" })).outcome, "allow");
 });
 
 // ---------------------------------------------------------------------------
@@ -93,14 +94,14 @@ test("H1 — full Gate denies the array-path write that used to be allowed", asy
 // ---------------------------------------------------------------------------
 
 test("fs — backslash traversal is collapsed and caught by deny", () => {
-  const cfg = { writeScope: ["/tmp/agent"], deny: ["/etc"] };
-  const d = fsCheck({ type: "write", path: "/tmp/agent/..\\..\\etc\\passwd" }, cfg);
+  const cfg = { writeScope: [T + "/agent"], deny: [REAL_ETC] };
+  const d = fsCheck({ type: "write", path: T + "/agent/..\\..\\etc\\passwd" }, cfg);
   assert.equal(d?.outcome, "deny");
   assert.equal(d?.rule, "fs.deny");
 });
 
 test("fs — backslash traversal that leaves writeScope is denied by scope", () => {
-  const d = fsCheck({ type: "write", path: "/tmp/agent/..\\..\\var\\x" }, { writeScope: ["/tmp/agent"] });
+  const d = fsCheck({ type: "write", path: T + "/agent/..\\..\\var\\x" }, { writeScope: [T + "/agent"] });
   assert.equal(d?.outcome, "deny");
   assert.equal(d?.rule, "fs.writeScope");
 });
