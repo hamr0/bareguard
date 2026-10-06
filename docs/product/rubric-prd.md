@@ -8,7 +8,8 @@ status: draft
 
 *2026-10-06. Designed over four rounds by guard (bareguard) and tree-ab (bareloop), with live
 evidence from fwd (fwdloop) and loop (bareloop runtime). Replaces this file's first draft
-(9a3996f). Nothing is built. **OPEN** marks what is undecided, with options. No versions picked.
+(9a3996f). Nothing is built. Every point once left undecided was ruled by hamr on 2026-10-06 and
+is marked RULED in place (summary in §11). No versions picked.
 Evidence references: `F<n>` = bareloop `docs/logs/FINDINGS.md`; "fwd" = fwdloop live runs as
 reported by the fwd session; "loop" = bareloop runtime as reported by the loop session.*
 
@@ -29,7 +30,8 @@ cadence, caps) stays outside bareguard.
 compute the fact." New: **"bareguard never runs an LLM; it checks deterministic facts against
 declared, enumerated rules."**
 
-**Red denies "done" (PROPOSED — guard taking to hamr).** It narrows the stated law "a guess never
+**Red denies "done" — RULED (hamr, 2026-10-06): YES.** Any red, deterministic or judge, denies
+the advance at a gating checkpoint, bounded by Law 9 (it only ever adds a deny). It narrows the stated law "a guess never
 drives a deny". Argument: denying an *advance* is not an action on the world; a false red costs a
 retry, a false green ships a wrong result. So at a gating checkpoint any red denies the advance,
 deterministic or judge.
@@ -71,11 +73,12 @@ deterministic or judge.
 | `docs/product/bareguard-prd.md` | 79–80, 197–217 | §0 "the one boundary", Part 1 §6 action-vs-content |
 | `docs/wiki/axis-b.md` | 139, 164–166 | "the check stays the caller's"; "no text scan" |
 
-**§6 tension (OPEN).** Part 1 §6 says bareguard never constrains words the model produces. Shape
-checks (`maxWords`, `sections`) and `quoteIn` read output text. Options: **A.** amend §6 to
-"bareguard may measure declared, deterministic properties of an output; it never interprets
-meaning"; **B.** keep §6 and put rubric in a separate entry point (`bareguard/rubric`) that the
-action gate only consumes verdicts from. Lean **A** — B is the same code with a fence of words.
+**§6 amendment — RULED (hamr, 2026-10-06): A.** Part 1 §6 said bareguard never constrains words
+the model produces, but shape checks (`maxWords`, `sections`) and `quoteIn` read output text. §6
+is amended to: **"bareguard may measure declared, deterministic properties of an output; it never
+interprets meaning."** The rubric code lives in its own module, and the Axis A floor never
+imports judge code. (Rejected: B, keeping §6 and fencing rubric behind a separate entry point —
+the same code with a fence of words.)
 
 ## 2. The rubric object
 
@@ -136,14 +139,14 @@ evidence. Substring, not line-wise: a CV summary is one line. Empty quote = red.
 **`numbersInQuote(claim, quote)`** — number tokens are `/\d+(?:\.\d+)?/g`; every token in the claim
 must appear as a token in the quote (token match: `8` does not match `2018`). `8x`→8, `1.2k`→1.2,
 `50%`→50, `2 weeks`→2. Number words ("three") are deliberately unchecked — a documented gap.
-Known false red: `1,200` vs `1200`. **OPEN:** strip thousands separators first (no evidence either
-way).
+Known false red: `1,200` vs `1200`. **Thousands separators — RULED (hamr, 2026-10-06): not
+stripped.** The false red stays as a documented gap (Law 4: never widen to turn red green).
 
-**`notWorse` baseline (OPEN).** bareguard never runs the command and never parses its output; the
-caller measures and passes an integer. Options for the baseline: **A.** a literal in the signed
-rubric (`baseline: 0`); **B.** `"seed"` — the caller measures once before signing and the seed
-value is written into the rubric, so it is hashed; **C.** passed per call. Lean **A + B**; reject C
-(an unsigned baseline is a tamper path). `direction` (`lower-is-better` / `higher-is-better`) is
+**`notWorse` baseline — RULED (hamr, 2026-10-06): A + B; C rejected.** bareguard never runs the command and never parses its output; the
+caller measures and passes an integer. The baseline is either **A.** a literal in the signed
+rubric (`baseline: 0`) or **B.** `"seed"` — the caller measures once before signing and the seed
+value is written into the rubric, so it is hashed. Both are signed. **C.** (passed per call) is
+rejected: an unsigned baseline is a tamper path. `direction` (`lower-is-better` / `higher-is-better`) is
 a signed field, never inferred (bareloop v1.82).
 
 **Unknown rule** — construct-time throw naming the key; a post-construction swap to an invalid
@@ -151,11 +154,11 @@ shape denies at the gate with `rubric.invalid` (the `<key>.invalid` family).
 
 **Which checks are always on** — see §3a.
 
-**Code-job checks (OPEN).** loop's other repeat winner is `no-suppressions` (F87/F81/F99/F134:
-added `any`/casts/disables caught after the step was green). It is language-specific pattern
-matching over a diff. Options: **A.** caller computes it and passes a count → it is just
-`notWorse` with baseline 0; **B.** a built-in rule with a signed, enumerated pattern set. Lean
-**A** — it keeps bareguard out of language syntax and no user regex.
+**Code-job checks — RULED (hamr, 2026-10-06): A.** loop's other repeat winner is
+`no-suppressions` (F87/F81/F99/F134: added `any`/casts/disables caught after the step was green).
+It is language-specific pattern matching over a diff, so the caller computes it and passes a
+count: it is `notWorse` with baseline 0. This keeps bareguard out of language syntax and free of
+user regex. (Rejected: B, a built-in rule with a signed, enumerated pattern set.)
 
 ## 3a. Foundational vs opt-in checks (V2)
 
@@ -194,8 +197,8 @@ with; one asked "quote me the line" cannot.
 
 **Call hygiene (loop, F148/F152/F154; ~1 in 6 malformed on haiku):**
 - `deadlineMs` is **required** whenever a judge is passed; missing → `checkStep` throws (a
-  programming error, not a red). bareguard passes an `AbortSignal`. **OPEN:** a default deadline
-  instead of a throw.
+  programming error, not a red). bareguard passes an `AbortSignal`. **RULED (hamr, 2026-10-06):**
+  required, no default — missing = throw; at the gate, unset = deny.
 - Exactly **one retry** on malformed reply or timeout. **Never repair** a reply.
 - Unpriced → red, never retried (bareloop's `pricing-red`).
 - What the judge said is kept: the quote's start (clipped), its original length and the sha256
@@ -221,10 +224,9 @@ with; one asked "quote me the line" cannot.
   is never green alone, `reads` matters mainly for their reds.
 - Cost = N × judge calls, each reported through the existing budget path; the minted record says
   how many reads ran.
-- **Default N — OPEN.** Options: **1** (no repetition; cheapest); **2** at gating checkpoints with
-  a judge, 1 elsewhere; **3** for majority-free unanimity with more power. **Lean 2 at gating
-  checkpoints, 1 elsewhere**: it doubles cents-level cost only where a wrong green would ship, and
-  2 is the smallest N that can disagree at all.
+- **Default N — RULED (hamr, 2026-10-06): 2 at gating checkpoints with a judge, 1 elsewhere.**
+  It doubles cents-level cost only where a wrong green would ship, and 2 is the smallest N that
+  can disagree at all.
 
 **Repetition vs calibration.** They measure different failures and neither replaces the other.
 Calibration = **accuracy** against known answers, once, before signing — it catches a judge that
@@ -297,7 +299,7 @@ Axis B routing.
 **Security.** No user regex anywhere (no ReDoS). Config read as own keys on a null-prototype copy;
 `__proto__`/`constructor`/`prototype` field names refused at construct. Never throws because of
 the output (any shape, any getter) — a read failure is a red. An audit write failure still
-propagates. `quoteIn` is linear in source size with a size cap (**OPEN:** the cap; over it = red).
+propagates. `quoteIn` is linear in source size with a size cap: **5 MB** (RULED, hamr, 2026-10-06); over it = red "source too large".
 
 ## 7. Axis B cleanup (U5)
 
@@ -323,7 +325,7 @@ Unaffected adopters: litectx gates through `flags` (Axis A), not Axis B. bareloo
 | exports | `createRubric(spec)`, `rubricSha(spec)`, `checkStep(rubric, checkpointId, output, opts)`, `quoteIn(quote, source)`, `numbersInQuote(claim, quote)` |
 | gate methods | `drainGaps()` |
 | config keys | `rubric: { spec, sha256 }`, `rubric.advanceOn`, `onExhausted`, `maxReds` |
-| rule strings | the §3 table; deny rules `rubric.invalid`, `rubric.red`, `rubric.unminted`, `rubric.output-mismatch`, `rubric.exhausted` (names **OPEN**) |
+| rule strings | the §3 table; deny rules `rubric.invalid`, `rubric.red`, `rubric.unminted`, `rubric.output-mismatch`, `rubric.exhausted` (names RULED, hamr, 2026-10-06) |
 | audit | a `rubric` phase carrying `rubricSha`, `checkpoint`, `verdict`, `outputSha`, bounded `gaps` |
 | types | `Rubric`, `Check`, `Gap`, `LocateJudge`, `VerdictJudge` (JSDoc typedefs) |
 | primitives.json | entries for the five exports + `drainGaps` |
@@ -361,14 +363,23 @@ Name: **rubric** (avoids bareloop's "close").
 | Next | `locate` judge in `checkStep` (deadline, one retry, clipped quote) · foundational `clean` / `quoteIn` / `numbersInQuote` on judge quotes · `cited` / `complete` · soft-green + ACCEPT fail-closed · `reads: N` + `agree` |
 | Later | `verdict` judge · `agree` · calibration in the hash · `onExhausted: "ask"` |
 
-## 11. Still OPEN (summary)
+## 11. Rulings (hamr, 2026-10-06)
 
-1. §6 amendment (A) vs a separate entry point (B).
-2. hamr's ruling on "red denies done".
-3. `notWorse` baseline: literal + seed (lean) vs per call.
-4. `no-suppressions`: caller-computed count (lean) vs built-in pattern set.
-5. Judge deadline: required (lean) vs a default.
-6. Thousands separators in `numbersInQuote`.
-7. `quoteIn` source size cap.
-8. Deny rule names.
-9. Default `judge.reads` (lean 2 at gating checkpoints with a judge, 1 elsewhere).
+Nothing in this design is undecided.
+
+1. §6 → **A**: amended to "bareguard may measure declared, deterministic properties of an output;
+   it never interprets meaning". Rubric code in its own module; the Axis A floor never imports
+   judge code.
+2. Red denies done → **YES**: any red (deterministic or judge) denies the advance at a gating
+   checkpoint, bounded by Law 9.
+3. `notWorse` baseline → **A + B** (literal or seed, both signed); C rejected.
+4. `no-suppressions` → **A** (caller-computed count → `notWorse` baseline 0).
+5. Judge deadline → **required**; missing = throw; no default (unset = deny).
+6. Thousands separators → **not stripped**; "1,200" vs "1200" stays a documented gap (Law 4).
+7. `quoteIn` source cap → **5 MB**; over = red "source too large".
+8. Deny rule names → as proposed: `rubric.invalid`, `rubric.red`, `rubric.unminted`,
+   `rubric.output-mismatch`, `rubric.exhausted`.
+9. `judge.reads` default → **2** at gating checkpoints with a judge, **1** elsewhere.
+
+Also ruled the same day: soft-green with no ACCEPT moment fails closed; `onExhausted` defaults to
+`"fail"`; Laws 8 (decisive binary) and 9 (floor is the ceiling) kept from Axis B.
