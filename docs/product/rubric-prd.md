@@ -47,6 +47,16 @@ deterministic or judge.
    prose broke).
 6. **Text explains a red, never decides one.** Every check's `text` is the signer's words.
 7. **Tamper = deny.** An unsigned or hash-mismatched rubric is refused at load (F132).
+8. **Decisive binary, never a score.** Every answer that decides is binary: a `verdict` judge
+   returns `honored` / `broke`; a `locate` judge's quotes feed a deterministic decide that is also
+   binary. No confidence, no 1–10, no probability anywhere in the rubric contract — models hedge
+   near a threshold, and over-surfacing is fixed with stronger decisive buckets, never carve-outs.
+   A judge reply that carries a score instead of the verb is **malformed = red** (`clean`).
+9. **The floor is the ceiling.** The rubric can only ADD a deny. It never allows what Axis A
+   (deny / ask / allowlist / rwx / budget / fs / net) denies or asks: a green or soft-green verdict
+   never turns an Axis A deny or ask into an allow. Order at `gate.check` on an advance action:
+   the Axis A floor runs first; the rubric verdict runs after it and can only deny. The same holds
+   for config: a rubric cannot widen an fs/net scope, raise a budget, or add an allowlist entry.
 
 ### Where the old line is stated (to update)
 
@@ -335,6 +345,12 @@ Name: **rubric** (avoids bareloop's "close").
   gating checkpoint; `maxReds` reached → `onExhausted` honored; count resets on re-sign.
 - Hostile output: throwing getter, Proxy, `__proto__` keys, 10 MB value → red / bounded line,
   never a throw.
+- Floor is the ceiling: an advance action the Axis A floor denies (and one it asks on) stays
+  denied / asked with a green verdict minted for it — falsify-by-revert (let the verdict run
+  first, the test must fail). A rubric config that tries to widen fs/net, raise a budget or add an
+  allowlist entry is refused.
+- A judge reply carrying a score (`{score: 8}`, `{confidence: 0.9}`) in place of the verb → red
+  (`clean`), never mapped to a verdict.
 - Byte-identical decision path when `rubric` is unset.
 
 ## 10. Day 1 vs later
