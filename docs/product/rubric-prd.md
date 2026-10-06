@@ -105,7 +105,7 @@ end -> human ACCEPT
 ```js
 // signed spec (hash covers all of it, judge identity included)
 const spec = { schema: 1, goal: "Write the résumé", inputs: [],
-  judge: { provider: "jev", model: "jev-latest", cutoff: 0.5, band: 0.1 },
+  judge: { provider: "jev", model: "jev-1.13.0", cutoff: 0.5, band: 0.1 },
   checkpoints: { resume: { gating: true, checks: [
     { rule: "maxWords", field: "text", value: 600 },
     { rule: "sections", field: "text", names: ["Summary", "Skills"] },
@@ -113,7 +113,7 @@ const spec = { schema: 1, goal: "Write the résumé", inputs: [],
   onExhausted: "fail", maxReds: 3 };
 const rubric = createRubric(spec);          // human signs rubricSha(spec)
 const r = await checkStep(rubric, "resume", output,
-  { judge: jevVerdictJudge({ jev, cutoff: 0.5, band: 0.1 }), deadlineMs: 20000 });
+  { judge: jevVerdictJudge({ jev }), deadlineMs: 20000 });
 // 633 words -> { verdict: "red",
 //   gaps: [{ checkpoint: "resume", check: "maxWords", field: "text", measured: 633, limit: 600 }] }
 // trimmed to 580 words, jev says "honored" -> { verdict: "soft-green" }  (final only after ACCEPT)
@@ -288,8 +288,8 @@ verdict judge does return is still checked with `quoteIn`.
 
 | Kind | Contract | Who decides | Its green |
 |---|---|---|---|
-| `locate` (default) | `judge(input, check, {signal}) → { quotes:[…], facts:{…} }` | bareguard's deterministic rule over the quotes (`quoteIn`, `numbersInQuote`, `complete`) | counts as **soft-green** |
-| `verdict` (escape hatch) | `judge(…) → { verdict: "honored"|"broke", raw, quote?, why? }` | the judge | **never green alone** — at best soft-green, and its red denies |
+| `locate` (default) | `judge(input, check, { signal, identity }) → { quotes:[…], facts:{…} }` | bareguard's deterministic rule over the quotes (`quoteIn`, `numbersInQuote`, `complete`) | counts as **soft-green** |
+| `verdict` (escape hatch) | `judge(input, check, { signal, identity }) → { verdict: "honored"|"broke", raw, quote?, why? }` (`identity` = the signed `{ provider, model, cutoff?, band? }`, handed in by `checkStep`) | the judge | **never green alone** — at best soft-green, and its red denies |
 
 Why locate is the default: bareguard's own A/B (quoted in bareloop `src/judged.js`'s header) —
 "`judgeVerdict` is injectable, `judgeLocate` is not". A model asked "did it pass?" can be argued
@@ -348,12 +348,17 @@ Next.*
 - **Structural only.** bareguard never names or calls jev; the caller passes a judge function.
   bareguard does not import bareagent and bareagent does not require bareguard.
 - **The adapter lives in bareagent.** A small adapter, named here as an example only:
-  `jevVerdictJudge({ jev, cutoff, band })`. It asks jev a `noul` question about the output and
+  `jevVerdictJudge({ jev })`. It takes `cutoff` and `band` from the `identity` that `checkStep`
+  passes in the call (the SIGNED values), never from its own arguments. It asks jev a `noul` question about the output and
   maps the probability: `>= cutoff + band` -> `"honored"`, `<= cutoff - band` -> `"broke"`, inside
   the band -> unsure -> red. It returns the raw jev answer for the record (F192 lesson). The
   probability is **never** part of the decision contract (Law 8): only the verb decides.
 - **Identity in the hash.** The signed judge identity includes provider, model, cutoff and band;
-  any change forces a re-sign.
+  any change forces a re-sign. The signed model must be a pinned version (e.g. `jev-1.13.0`),
+  never a moving alias like `jev-latest` / `jev-preview`.
+- **Signed = running.** `checkStep` hands the judge the signed identity in every call. The adapter
+  refuses (red, `clean`) if `identity.model` differs from the jev model it is actually configured
+  with, so the cutoff that runs is always the signed one.
 - **Admission before signing.** bareagent's `calibrateJev` must have admitted that jev model tier
   (bareagent's job). bareguard's own calibration stays Later and should borrow `calibrateJev`'s
   design: frozen known-answer cases, an injection battery, and a negative control that must fail.
@@ -483,6 +488,8 @@ Name: **rubric** (avoids bareloop's "close").
   cannot ship undocumented and the list cannot name a rule that does not exist).
 - Quote rule: `locate` judge returning no quotes -> red; `verdict` judge returning a verb and raw
   answer but no quote -> accepted; `verdict` judge returning no verb, or a score -> red.
+- An adapter whose model != the signed identity's model -> red (`clean`); cutoff/band come from the
+  signed identity, not the adapter's own configuration.
 - Verdict judge past `deadlineMs` (never settles, no AbortSignal) -> timeout red without waiting.
 - Byte-identical decision path when `rubric` is unset.
 
