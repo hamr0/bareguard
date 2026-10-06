@@ -9,7 +9,7 @@ status: draft
 *2026-10-06. Designed over four rounds by guard (bareguard) and tree-ab (bareloop), with live
 evidence from fwd (fwdloop) and loop (bareloop runtime). Replaces this file's first draft
 (9a3996f). Nothing is built. Every point once left undecided was ruled by hamr on 2026-10-06 and
-is marked RULED in place (summary in §11). No versions picked.
+is marked RULED in place (summary in §12). No versions picked.
 Evidence references: `F<n>` = bareloop `docs/logs/FINDINGS.md`; "fwd" = fwdloop live runs as
 reported by the fwd session; "loop" = bareloop runtime as reported by the loop session.*
 
@@ -24,7 +24,102 @@ the caller passes in, which may only locate quotes (default) or, as an escape ha
 verdict that can never make the result green alone. The loop (order, retries, replanning,
 cadence, caps) stays outside bareguard.
 
-## 1. Boundary and laws
+## 1. How it works
+
+*For a reader who forgot everything. Detail lives in the sections named below.*
+
+**Three roles.**
+- The **runner** (bareloop, fwdloop, any harness) writes the rubric draft, drives the agent and calls bareguard.
+- The **human** signs the rubric before the work and accepts the result after.
+- **bareguard** grades and gates. It never runs a model.
+
+**The flow.**
+1. A drafting LLM (the caller's) reads `rubricVocabulary` and drafts a rubric spec from the goal,
+   using only the listed check types.
+2. `createRubric(spec)` validates it. An unknown check type, or a line that maps to no check, is
+   refused at draft time — never bent onto the nearest rule (bareloop F159).
+3. The human signs. `rubricSha(spec)` is the fingerprint both sides compute. A model or cutoff
+   change means re-sign.
+4. The agent works. It never sees the rubric.
+5. The runner calls `checkStep(rubric, checkpoint, output, { judge?, deadlineMs })`: the fixed
+   checks run, then the judge if any. It mints green / soft-green / red plus a structured gap.
+6. The agent or runner sends the advance action `{ type: <advanceOn>, checkpoint, outputSha }`
+   through `gate.check`. The Axis A floor runs first (Law 9); then the advance is denied if there
+   is no minted verdict, the verdict is red, or the sha does not match.
+7. On red, the loop retries and is fed ONLY the gap (`gate.drainGaps()`). After `maxReds` the
+   `onExhausted: "fail"` rule applies.
+8. At the end the human ACCEPTs. A soft-green is only final after ACCEPT; with no accept moment
+   configured it fails closed.
+
+```
+goal -> drafter reads rubricVocabulary -> spec -> createRubric -> human signs (rubricSha)
+agent works -> output -> checkStep -> green | soft-green | red + gap
+   advance action -> gate.check: floor -> verdict lookup -> allow | deny
+   red -> retry with gap only (drainGaps) ... maxReds -> onExhausted
+end -> human ACCEPT
+```
+
+**The parts.**
+
+| Part | What it is |
+|---|---|
+| `createRubric(spec)` | validates a spec; throws on an unknown check type or bad shape (§3, §4) |
+| `rubricSha(spec)` | sha256 over the canonical spec; the signed fingerprint (§3) |
+| `checkStep(rubric, checkpoint, output, opts)` | runs the checks (and the judge), mints the verdict and gap (§7) |
+| `quoteIn(quote, source)` | pure: is the quote in the source, whitespace and `**` forgiven (§4) |
+| `numbersInQuote(claim, quote)` | pure: does every number in the claim appear in the quote (§4) |
+| `rubricVocabulary` | frozen, machine-readable list of every check type, its fields and meaning — what a drafter reads (§9) |
+| `gate.drainGaps()` | read-and-clear the gap view for the retry (§7) |
+| config `rubric` | `{ spec, sha256 }` — the signed rubric the gate holds (§9) |
+| config `advanceOn` | the action type(s) that count as "advance" (`rubric.advanceOn`, §7) |
+| config `onExhausted` | `"fail"` (default) or `"ask"` when reds run out (§6) |
+| config `maxReds` | gate-side cap on reds per `(rubricSha, checkpoint)` (§6) |
+
+**The check shapes.** Every type, one line; exact rules in §4 and §4a.
+
+*Foundational (always on, cannot be switched off):*
+- `happened` — the output exists and is readable.
+- `clean` — no judge crash, timeout, malformed reply or unpriced call; a `locate` judge returned quotes.
+- `quoteIn` on every judge quote — the quote is really in the frozen input.
+- `numbersInQuote` on every claim–quote pair — the claim's numbers are in its quote.
+- `agree` — when `reads > 1`, every read decided the same.
+- `signed` — at load, the rubric is signed and its sha matches.
+
+*Opt-in (only when listed):*
+- `nonEmpty` — field has content.
+- `maxWords` / `minWords` — word count bound.
+- `maxLines` — non-empty line count bound.
+- `sections` — each named heading is present.
+- `sectionOrder` — those headings appear in order.
+- `mustCarry` — an exact substring is present.
+- `in` / `notIn` — value is / is not one of a list.
+- `atMost` — ordered-enum rank at or below a value.
+- `max` / `min` — number bound.
+- `notWorse` — caller-measured count not worse than a signed baseline.
+- `cited` — every claim's quote is in the frozen input with its numbers.
+- `complete` — every item of a signed list is covered by a claim.
+- `judged` — `locate` or `verdict` judge question (§5).
+
+**Worked example.** A résumé step: at most 600 words, two headings, one judged question.
+
+```js
+// signed spec (hash covers all of it, judge identity included)
+const spec = { schema: 1, goal: "Write the résumé", inputs: [],
+  judge: { provider: "jev", model: "jev-1.13.0", cutoff: 0.5, band: 0.1 },
+  checkpoints: { resume: { gating: true, checks: [
+    { rule: "maxWords", field: "text", value: 600 },
+    { rule: "sections", field: "text", names: ["Summary", "Skills"] },
+    { rule: "judged", kind: "verdict", ask: "Does the skills section list only skills?" } ] } },
+  onExhausted: "fail", maxReds: 3 };
+const rubric = createRubric(spec);          // human signs rubricSha(spec)
+const r = await checkStep(rubric, "resume", output,
+  { judge: jevVerdictJudge({ jev }), deadlineMs: 20000 });
+// 633 words -> { verdict: "red",
+//   gaps: [{ checkpoint: "resume", check: "maxWords", field: "text", measured: 633, limit: 600 }] }
+// trimmed to 580 words, jev says "honored" -> { verdict: "soft-green" }  (final only after ACCEPT)
+```
+
+## 2. Boundary and laws
 
 **Boundary (RULED — hamr, 2026-10-06).** Old: "bareguard never runs an LLM and never judges: you
 compute the fact." New: **"bareguard never runs an LLM; it checks deterministic facts against
@@ -40,7 +135,7 @@ deterministic or judge.
 1. **Unsure = red.** A missing field, wrong type, throwing getter, judge crash, malformed judge
    reply, timeout or unknown price is red, never green.
 2. **Checks sit outside the agent.** The worker never sees its rubric; a retry gets only the gap
-   (fwd; loop). Enforced by construction (§6).
+   (fwd; loop). Enforced by construction (§7).
 3. **Checks are derived from the signed rubric, never hand-authored beside it** (F58: a
    separately written check drifted lenient).
 4. **Never widen a check to turn red green** (fwd). Exact headings are case-sensitive;
@@ -73,26 +168,26 @@ deterministic or judge.
 | `docs/product/bareguard-prd.md` | 79–80, 197–217 | §0 "the one boundary", Part 1 §6 action-vs-content |
 | `docs/wiki/axis-b.md` | 139, 164–166 | "the check stays the caller's"; "no text scan" |
 
-**§6 amendment — RULED (hamr, 2026-10-06): A.** Part 1 §6 said bareguard never constrains words
+**Part 1 §6 amendment (bareguard-prd) — RULED (hamr, 2026-10-06): A.** Part 1 §6 said bareguard never constrains words
 the model produces, but shape checks (`maxWords`, `sections`) and `quoteIn` read output text. §6
 is amended to: **"bareguard may measure declared, deterministic properties of an output; it never
 interprets meaning."** The rubric code lives in its own module, and the Axis A floor never
 imports judge code. (Rejected: B, keeping §6 and fencing rubric behind a separate entry point —
 the same code with a fence of words.)
 
-## 2. The rubric object
+## 3. The rubric object
 
 ```js
 {
   schema: 1,
   goal: "<the signed goal line, verbatim>",          // set by the machine from the signed text (fwd F50)
   inputs: [{ name: "resume", sha256: "…" }, …],       // frozen sources the checks may cite
-  judge: { provider: "…", model: "…" } | null,        // identity; a model bump forces a re-sign
+  judge: { provider, model, cutoff?, band? } | null,   // identity; any change forces a re-sign
   checkpoints: {
     "<id>": { gating: true|false, checks: [ Check, … ] },
   },
   onExhausted: "fail" | "ask",                        // default "fail"
-  maxReds: <int>,                                     // gate-side backstop count (§5)
+  maxReds: <int>,                                     // gate-side backstop count (§6)
 }
 ```
 
@@ -106,7 +201,7 @@ A drafted line that maps to no owned rule is **red at drafting**, never bent ont
 rule (F159). A check that contradicts its own goal line is red at drafting (fwd amendment 6;
 e.g. "under 600 words" with three "250ish" sections).
 
-## 3. Checks — the v1 vocabulary
+## 4. Checks — the v1 vocabulary
 
 All deterministic checks are bareguard's own code. Each reads a declared field of the output or a
 value the caller passes; none parses prose in general.
@@ -125,7 +220,7 @@ value the caller passes; none parses prose in general.
 | `notWorse` | `value` (caller-measured count), `baseline`, `direction` | not worse than baseline in the signed direction | loop: the repeat live winner (F99 67→8→1→0, F198) |
 | `cited` | `claims` field, `source` input name | every claim's quote passes `quoteIn` against the frozen input AND `numbersInQuote` | F161 |
 | `complete` | `items` (signed list) or `split` (declared: `"line"` / `"heading"`) | every item is covered by a claim | F155 |
-| `judged` | `kind: "locate"|"verdict"`, `ask` | see §4 | — |
+| `judged` | `kind: "locate"|"verdict"`, `ask` | see §5 | — |
 
 **Headings** = ATX only: a line matching `^#{1,6} +(.+?) *#*$`, the capture compared exactly and
 case-sensitively. No setext, no HTML, no bold-as-heading. No ATX heading in the output → red "no
@@ -152,7 +247,7 @@ a signed field, never inferred (bareloop v1.82).
 **Unknown rule** — construct-time throw naming the key; a post-construction swap to an invalid
 shape denies at the gate with `rubric.invalid` (the `<key>.invalid` family).
 
-**Which checks are always on** — see §3a.
+**Which checks are always on** — see §4a.
 
 **Code-job checks — RULED (hamr, 2026-10-06): A.** loop's other repeat winner is
 `no-suppressions` (F87/F81/F99/F134: added `any`/casts/disables caught after the step was green).
@@ -160,17 +255,17 @@ It is language-specific pattern matching over a diff, so the caller computes it 
 count: it is `notWorse` with baseline 0. This keeps bareguard out of language syntax and free of
 user regex. (Rejected: B, a built-in rule with a signed, enumerated pattern set.)
 
-## 3a. Foundational vs opt-in checks (V2)
+## 4a. Foundational vs opt-in checks (V2)
 
 **Foundational — run at EVERY checkpoint, whether or not the rubric lists them:**
 
 | Check | Red when |
 |---|---|
 | `happened` | the output is missing, `null`, empty, or unreadable (throwing getter / Proxy) |
-| `clean` | a judge call threw, timed out, returned a malformed reply (after its one retry), or was unpriced |
-| `quoteIn` on every judge quote | a quote the judge returned is not in the frozen input it names |
+| `clean` | a judge call threw, timed out, returned a malformed reply (after its one retry), or was unpriced; a `locate` judge returned no quotes; a `verdict` judge returned no verb or no raw answer |
+| `quoteIn` on every judge quote | a quote the judge returned is not in the frozen input it names (a verdict judge may return none; a locate judge may not) |
 | `numbersInQuote` on every claim–quote pair | a number in a claim is missing from the quote cited for it (applies only where the judge pairs a quote with a claim, e.g. not to a bare doc-comment locate) |
-| `agree` | `reads > 1` and the reads' decided outcomes differ (§4) |
+| `agree` | `reads > 1` and the reads' decided outcomes differ (§5) |
 | `signed` | (at load) the rubric is unsigned or its sha mismatches |
 
 **Opt-in — run only when listed:** the shape set (`maxWords`, `minWords`, `maxLines`,
@@ -182,14 +277,19 @@ checks, never remove these. A checkpoint whose legitimate output is "nothing fou
 return a non-empty, declared shape (e.g. `{ found: [] }` with `nonEmpty` read on the object, not
 the list) — "empty because done" and "empty because it never ran" must not look the same.
 
-## 4. Judges
+## 5. Judges
 
 bareguard owns no model. The caller passes `judge` per call. Two kinds:
 
+**Quote rule (RULED, hamr, 2026-10-06).** A `locate` judge MUST return quotes; none = red. A
+`verdict` judge's quote is OPTIONAL (a classifier such as jev cannot quote), but it must return a
+decisive verb and its raw answer; no verb, or a score instead of a verb, is malformed = red. A quote a
+verdict judge does return is still checked with `quoteIn`.
+
 | Kind | Contract | Who decides | Its green |
 |---|---|---|---|
-| `locate` (default) | `judge(input, check, {signal}) → { quotes:[…], facts:{…} }` | bareguard's deterministic rule over the quotes (`quoteIn`, `numbersInQuote`, `complete`) | counts as **soft-green** |
-| `verdict` (escape hatch) | `judge(…) → { verdict: "honored"|"broke", quote, why }` | the judge | **never green alone** — at best soft-green, and its red denies |
+| `locate` (default) | `judge(input, check, { signal, identity }) → { quotes:[…], facts:{…} }` | bareguard's deterministic rule over the quotes (`quoteIn`, `numbersInQuote`, `complete`) | counts as **soft-green** |
+| `verdict` (escape hatch) | `judge(input, check, { signal, identity }) → { verdict: "honored"|"broke", raw, quote?, why? }` (`identity` = the signed `{ provider, model, cutoff?, band? }`, handed in by `checkStep`) | the judge | **never green alone** — at best soft-green, and its red denies |
 
 Why locate is the default: bareguard's own A/B (quoted in bareloop `src/judged.js`'s header) —
 "`judgeVerdict` is injectable, `judgeLocate` is not". A model asked "did it pass?" can be argued
@@ -235,11 +335,41 @@ on *this* live input, every run — it catches a judge that is right on the cali
 flaky here, which calibration cannot. When calibration lands, it should grade each case `reads`
 times and require all N correct, so the signed set certifies the same configuration that runs.
 
-**Calibration — later.** It has never passed live (F159 1/10, F192 6/10). The judge identity is in
-the hash now, so a model bump forces a re-sign. Consequence: an uncalibrated judge's soft-green is
-acceptable only because the final ACCEPT exists (§5).
+**Calibration — later (bareguard's own).** It has never passed live (F159 1/10, F192 6/10). The judge identity is in
+the hash now, so a model bump forces a re-sign. The one already-calibrated judge is jev, admitted by
+bareagent's `calibrateJev` (below). Consequence: an uncalibrated judge's soft-green is
+acceptable only because the final ACCEPT exists (§6).
 
-## 5. Verdicts, the advance and the two human moments
+### Using bareagent's jev as a verdict judge
+
+*RULED (hamr, 2026-10-06): jev is a real, already-calibrated user, so the `verdict` judge moves to
+Next.*
+
+- **Structural only.** bareguard never names or calls jev; the caller passes a judge function.
+  bareguard does not import bareagent and bareagent does not require bareguard.
+- **The adapter lives in bareagent.** A small adapter, named here as an example only:
+  `jevVerdictJudge({ jev })`. It takes `cutoff` and `band` from the `identity` that `checkStep`
+  passes in the call (the SIGNED values), never from its own arguments. It asks jev a `noul` question about the output and
+  maps the probability: `>= cutoff + band` -> `"honored"`, `<= cutoff - band` -> `"broke"`, inside
+  the band -> unsure -> red. It returns the raw jev answer for the record (F192 lesson). The
+  probability is **never** part of the decision contract (Law 8): only the verb decides.
+- **Identity in the hash.** The signed judge identity includes provider, model, cutoff and band;
+  any change forces a re-sign. The signed model must be a pinned version (e.g. `jev-1.13.0`),
+  never a moving alias like `jev-latest` / `jev-preview`.
+- **Signed = running.** `checkStep` hands the judge the signed identity in every call. The adapter
+  refuses (red, `clean`) if `identity.model` differs from the jev model it is actually configured
+  with, so the cutoff that runs is always the signed one.
+- **Admission before signing.** bareagent's `calibrateJev` must have admitted that jev model tier
+  (bareagent's job). bareguard's own calibration stays Later and should borrow `calibrateJev`'s
+  design: frozen known-answer cases, an injection battery, and a negative control that must fail.
+- **Deadline.** `JevProvider` has no AbortSignal and its own timeout option. bareguard enforces
+  `deadlineMs` by no longer waiting (a race) and records a timeout red; jev's own timeout is a
+  second backstop.
+- **Cost** flows through bareagent's existing `onLlmResult` / budget path.
+- **Who builds what.** bareguard = the verdict-judge slot in `checkStep`; bareagent = the adapter
+  (about 30 lines).
+
+## 6. Verdicts, the advance and the two human moments
 
 **Three verdicts (U2):**
 - **green** — every check deterministic and green.
@@ -263,7 +393,7 @@ bareloop calls it `escalated`, and the human still sees it at the end door) or `
 with no end door). The machine never adds an ask by default (fwd: asks sit only at signed
 positions).
 
-## 6. Mechanics
+## 7. Mechanics
 
 **Checkpoints (U6).** bareguard knows neither "close" nor "step". The operator names checkpoints
 and marks which gate the advance; bareloop maps its close → gating, step exits → non-gating.
@@ -301,7 +431,7 @@ Axis B routing.
 the output (any shape, any getter) — a read failure is a red. An audit write failure still
 propagates. `quoteIn` is linear in source size with a size cap: **5 MB** (RULED, hamr, 2026-10-06); over it = red "source too large".
 
-## 7. Axis B cleanup (U5)
+## 8. Axis B cleanup (U5)
 
 | Item | Status | Note |
 |---|---|---|
@@ -318,21 +448,21 @@ propagates. `quoteIn` is linear in source size with a size cap: **5 MB** (RULED,
 Unaffected adopters: litectx gates through `flags` (Axis A), not Axis B. bareloop does not call
 `annotate` (deliberately unwired, `src/kinds.js:1741`, because it never buys a verdict).
 
-## 8. Exports and SemVer surface
+## 9. Exports and SemVer surface
 
 | Kind | Added |
 |---|---|
-| exports | `createRubric(spec)`, `rubricSha(spec)`, `checkStep(rubric, checkpointId, output, opts)`, `quoteIn(quote, source)`, `numbersInQuote(claim, quote)` |
+| exports | `createRubric(spec)`, `rubricSha(spec)`, `checkStep(rubric, checkpointId, output, opts)`, `quoteIn(quote, source)`, `numbersInQuote(claim, quote)`, `rubricVocabulary` (frozen, machine-readable: every check type with its fields, field types and a one-line meaning; a drafting LLM reads it to draft only real checks — same idea as `primitives.json` for the gate) |
 | gate methods | `drainGaps()` |
 | config keys | `rubric: { spec, sha256 }`, `rubric.advanceOn`, `onExhausted`, `maxReds` |
-| rule strings | the §3 table; deny rules `rubric.invalid`, `rubric.red`, `rubric.unminted`, `rubric.output-mismatch`, `rubric.exhausted` (names RULED, hamr, 2026-10-06) |
+| rule strings | the §4 table; deny rules `rubric.invalid`, `rubric.red`, `rubric.unminted`, `rubric.output-mismatch`, `rubric.exhausted` (names RULED, hamr, 2026-10-06) |
 | audit | a `rubric` phase carrying `rubricSha`, `checkpoint`, `verdict`, `outputSha`, bounded `gaps` |
 | types | `Rubric`, `Check`, `Gap`, `LocateJudge`, `VerdictJudge` (JSDoc typedefs) |
-| primitives.json | entries for the five exports + `drainGaps` |
+| primitives.json | entries for the six exports + `drainGaps` |
 
 Name: **rubric** (avoids bareloop's "close").
 
-## 9. Test plan
+## 10. Test plan
 
 - Every rule: green, red, and **falsify-by-revert** (flip the comparison, the test must fail).
 - Thresholds: AT / UNDER / OVER (`600` words vs `maxWords 600` green; `601` red).
@@ -353,21 +483,29 @@ Name: **rubric** (avoids bareloop's "close").
   allowlist entry is refused.
 - A judge reply carrying a score (`{score: 8}`, `{confidence: 0.9}`) in place of the verb → red
   (`clean`), never mapped to a verdict.
+- `rubricVocabulary`: frozen (mutation throws or is a no-op); every check type `createRubric`
+  implements appears in it and every entry in it is implemented (both directions, so a new rule
+  cannot ship undocumented and the list cannot name a rule that does not exist).
+- Quote rule: `locate` judge returning no quotes -> red; `verdict` judge returning a verb and raw
+  answer but no quote -> accepted; `verdict` judge returning no verb, or a score -> red.
+- An adapter whose model != the signed identity's model -> red (`clean`); cutoff/band come from the
+  signed identity, not the adapter's own configuration.
+- Verdict judge past `deadlineMs` (never settles, no AbortSignal) -> timeout red without waiting.
 - Byte-identical decision path when `rubric` is unset.
 
-## 10. Day 1 vs later
+## 11. Day 1 vs later
 
 | | What |
 |---|---|
-| **Day 1** | `quoteIn`, `numbersInQuote` (pure; agents use them now) · shape rules + `nonEmpty` + `notWorse` in `checkStep` · `createRubric` / `rubricSha` · gating checkpoint + `outputSha` match · gap view · `onExhausted: "fail"` |
-| Next | `locate` judge in `checkStep` (deadline, one retry, clipped quote) · foundational `clean` / `quoteIn` / `numbersInQuote` on judge quotes · `cited` / `complete` · soft-green + ACCEPT fail-closed · `reads: N` + `agree` |
-| Later | `verdict` judge · `agree` · calibration in the hash · `onExhausted: "ask"` |
+| **Day 1** | `quoteIn`, `numbersInQuote` (pure; agents use them now) · shape rules + `nonEmpty` + `notWorse` in `checkStep` · `createRubric` / `rubricSha` · `rubricVocabulary` · gating checkpoint + `outputSha` match · gap view · `onExhausted: "fail"` |
+| Next | `locate` judge in `checkStep` (deadline, one retry, clipped quote) · foundational `clean` / `quoteIn` / `numbersInQuote` on judge quotes · `cited` / `complete` · soft-green + ACCEPT fail-closed · `reads: N` + `agree` · `verdict` judge in `checkStep` (jev, via a caller-passed adapter; quote optional) |
+| Later | bareguard's own judge calibration (in the hash) · `onExhausted: "ask"` |
 
-## 11. Rulings (hamr, 2026-10-06)
+## 12. Rulings (hamr, 2026-10-06)
 
 Nothing in this design is undecided.
 
-1. §6 → **A**: amended to "bareguard may measure declared, deterministic properties of an output;
+1. bareguard-prd Part 1 §6 → **A**: amended to "bareguard may measure declared, deterministic properties of an output;
    it never interprets meaning". Rubric code in its own module; the Axis A floor never imports
    judge code.
 2. Red denies done → **YES**: any red (deterministic or judge) denies the advance at a gating
@@ -380,6 +518,11 @@ Nothing in this design is undecided.
 8. Deny rule names → as proposed: `rubric.invalid`, `rubric.red`, `rubric.unminted`,
    `rubric.output-mismatch`, `rubric.exhausted`.
 9. `judge.reads` default → **2** at gating checkpoints with a judge, **1** elsewhere.
+10. `verdict` judge (jev) → moved from Later to **Next**; bareguard's own calibration stays Later;
+    `agree` is in Next only.
+11. Quote rule → a `locate` judge must return quotes (none = red); a `verdict` judge's quote is
+    **optional**, but it must return a decisive verb and its raw answer.
+12. `rubricVocabulary` → a new frozen, machine-readable export listing every check type.
 
 Also ruled the same day: soft-green with no ACCEPT moment fails closed; `onExhausted` defaults to
 `"fail"`; Laws 8 (decisive binary) and 9 (floor is the ceiling) kept from Axis B.
