@@ -145,6 +145,7 @@ bareguard session; "tree-ab" = the bareloop design session.
 - Axis B cleanup: the trial-first dry-run lane was proposed and never built; hamr: will never happen.
   `harness-code-mode/` is archived as POC evidence (E1-E6), not deleted. D8 harness selection is a
   runner concern. OQ3 shipped 0.7.0 as Axis A budget.
+- F190 (bareloop run `mu4hec9u`): calibration graded 0/10 because the judge provider was built without a `baseUrl`: a wiring bug, not judge skill. With F159 and F192, most live judge wrongness was wrong ruler or wrong wiring, not judge opinion.
 - F192: raw judge facts were not kept. 2026-10-07: the full raw facts are the caller's to keep;
   bareguard records only the bounded form.
 

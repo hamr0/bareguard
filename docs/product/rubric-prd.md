@@ -154,7 +154,7 @@ checkpoint, bounded by Law 9 (it only ever adds a deny). `stopped` denies the sa
 | `src/gate.js` | 189 | `routeAnnotation` "No LLM, no side effects" (still true) |
 | `types/gate.d.ts` | 3, 352 | generated from the two above |
 | `primitives.json` | `annotate`, `routeAnnotation` entries | generated `when`/`fails` text |
-| `docs/archive/bareguard-prd.md` | 79-80, 197-217 | §0 "the one boundary", Part 1 §6 action-vs-content |
+| `docs/product/bareguard-prd.md` | 79-80, 197-217 | §0 "the one boundary", Part 1 §6 action-vs-content |
 | `docs/wiki/axis-b.md` | 139, 164-166 | "the check stays the caller's"; "no text scan" |
 
 **Part 1 §6 amendment (RULED: A).** Part 1 §6 becomes: "bareguard may measure declared,
