@@ -17,6 +17,7 @@ import {
 import { assertRwxConfig, rwxCheck, matchRwxLetter, resolveAgentLetters, clampLetters, normalizeEntry } from "./primitives/rwx.js";
 import { looseIdentity } from "./primitives/tool-identity.js";
 import { isPlainObject } from "./primitives/plain-object.js";
+import { clipKey } from "./primitives/clip-key.js";
 import { assertArrayElementTypes, findInvalidIndex, findBlankStringIndex } from "./primitives/config-validate.js";
 import { contentDenyCheck, contentAskCheck } from "./primitives/content.js";
 import { flagsDenyCheck, flagsAskCheck } from "./primitives/flags.js";
@@ -446,17 +447,6 @@ const ARRAY_SHAPED_CONFIG = Object.freeze([
   ["secrets", "keys"], ["secrets", "patterns"], ["secrets", "envVars"],
   ["axisB", "reversible"],
 ]);
-
-/**
- * Bound a caller-supplied config key before it is interpolated into an error
- * message. Errors are not redacted and not size-capped by anything downstream.
- * @param {string} k config key
- * @returns {string} the key, clipped
- */
-function clipKey(k) {
-  const s = String(k);
-  return s.length > 64 ? s.slice(0, 64) + "…" : s;
-}
 
 /**
  * Throw if any array-shaped config key is present but not an array.
