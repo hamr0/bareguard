@@ -205,10 +205,16 @@ fs.mkdirSync(outside);
 fs.writeFileSync(path.join(inside, "a.txt"), "a");
 fs.writeFileSync(path.join(inside, "sub", "b.txt"), "b");
 fs.writeFileSync(path.join(outside, "secret.txt"), "s");
-fs.symlinkSync(outside, path.join(inside, "escape"));                 // inside/escape -> outside
-fs.symlinkSync(path.join(inside, "sub"), path.join(inside, "alias")); // inside/alias  -> inside/sub (stays inside)
-fs.symlinkSync(path.join(root, "nowhere"), path.join(inside, "dangling"));
-fs.symlinkSync(inside, path.join(root, "link-to-inside"));            // a symlinked PREFIX
+// Windows without admin/Developer Mode cannot create symlinks (EPERM): only the symlink-dependent tests skip.
+let symlinkSkip = null;
+try {
+  fs.symlinkSync(outside, path.join(inside, "escape"));                 // inside/escape -> outside
+  fs.symlinkSync(path.join(inside, "sub"), path.join(inside, "alias")); // inside/alias  -> inside/sub (stays inside)
+  fs.symlinkSync(path.join(root, "nowhere"), path.join(inside, "dangling"));
+  fs.symlinkSync(inside, path.join(root, "link-to-inside"));            // a symlinked PREFIX
+} catch (e) {
+  symlinkSkip = `symlink creation unsupported (${e.code || e.message})`;
+}
 test.after(() => fs.rmSync(root, { recursive: true, force: true }));
 
 const fc = (paths, over = {}, exit = 0, pre = 5) =>
@@ -233,22 +239,28 @@ test("filesChanged: empty paths + requireNonEmpty is red 'empty'; empty without 
   assert.equal((await fc([], { requireNonEmpty: false })).verdict, "green");
 });
 
-test("filesChanged: a symlink spelled INSIDE the prefix but resolving OUTSIDE is red (physical resolution)", async () => {
+test("filesChanged: a symlink spelled INSIDE the prefix but resolving OUTSIDE is red (physical resolution)", async (t) => {
+  if (symlinkSkip) return t.skip(symlinkSkip);
   const r = await fc([path.join(inside, "escape", "secret.txt")]);
   assert.equal(r.verdict, "red");
   assert.deepEqual(gap(r).items, [path.join(inside, "escape", "secret.txt")]);
   assert.equal((await fc([path.join(inside, "escape", "not-yet.txt")])).verdict, "red", "a new file under an escaping symlink");
 });
 
-test("filesChanged: a symlink that stays inside resolves green; a dangling symlink and unsafe spellings are red", async () => {
+test("filesChanged: a symlink that stays inside resolves green; a dangling symlink is red", async (t) => {
+  if (symlinkSkip) return t.skip(symlinkSkip);
   assert.equal((await fc([path.join(inside, "alias", "b.txt")])).verdict, "green");
   assert.equal((await fc([path.join(inside, "dangling")])).verdict, "red");
+});
+
+test("filesChanged: unsafe path spellings are red", async () => {
   for (const bad of ["relative/path.txt", "./a.txt", "", "~/x", 5, null, { path: "x" }]) {
     assert.equal((await fc([bad])).verdict, "red", JSON.stringify(bad));
   }
 });
 
-test("filesChanged: a prefix that is, or sits under, a symlink would move the scope: STOPPED (instrument), never a silent widen", async () => {
+test("filesChanged: a prefix that is, or sits under, a symlink would move the scope: STOPPED (instrument), never a silent widen", async (t) => {
+  if (symlinkSkip) return t.skip(symlinkSkip);
   stopped(await fc([path.join(inside, "a.txt")], { allowPrefixes: [path.join(root, "link-to-inside")] }), "exception");
   assert.equal((await fc([path.join(inside, "a.txt")], { allowPrefixes: [path.join(outside), inside] })).verdict, "green", "any one of several prefixes");
 });

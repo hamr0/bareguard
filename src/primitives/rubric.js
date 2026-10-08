@@ -895,6 +895,7 @@ function validateCheck(c, where, inputNames) {
   checkKeys(c, ["id", "rule", ...Object.keys(def.fields)], where);
   checkName(c.id, `${where}.id`);
   if (c.id.includes(":") || FOUNDATIONAL_IDS.has(c.id)) throw fail(`${where}.id`, 'must not contain ":" or be a reserved foundational name');
+  if (c.id.includes("\0")) throw fail(`${where}.id`, "must not contain a NUL character (it joins the gate's baseline keys)");
   for (const [name, d] of Object.entries(def.fields)) {
     const v = c[name];
     if (v === undefined) {
@@ -982,6 +983,7 @@ export function createRubric(spec, opts) {
     const w = `spec.checkpoints.${id}`;
     checkName(id, w, "has a blank checkpoint id");
     if (id.includes(":")) throw fail(w, 'checkpoint ids must not contain ":"');
+    if (id.includes("\0")) throw fail(w, "checkpoint ids must not contain a NUL character (it joins the gate's accept and baseline keys)");
     const cp = cps[id];
     if (cp === null || typeof cp !== "object" || Array.isArray(cp)) throw fail(w, "must be an object");
     checkKeys(cp, ["gating", "requiresHuman", "accept", "checks"], w);

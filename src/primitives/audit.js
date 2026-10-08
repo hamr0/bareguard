@@ -117,7 +117,7 @@ const PAYLOAD_KEYS = Object.freeze(LINE_FIELDS.filter((f) => f.bound === "perKey
  *     is written but never read back, so it is not included — it is safe to
  *     drop.)
  *   - rubric state carriers: `rubricSha`, `checkpoint`, `outputSha`, `checkId`,
- *     `verdict`, `baseline`, read by `gate.js`'s `_rebuildRubricFromAudit`.
+ *     `verdict`, `baseline`, read by `rebuildRubricState` in `src/primitives/rubric-state.js`.
  * The markers this file stamps (`_truncated`, `_dropped`, `_dropped_carriers`,
  * `_dropped_keys`, `_dropped_bytes`) are protected separately, by their `_`
  * prefix, so they don't need a place in this list.
@@ -134,7 +134,7 @@ const MUST_KEEP_KEYS = Object.freeze([
   "phase", "decision", "severity", "rule", "aid",
   "dimension", "newCap",
   // Rubric state carriers (Module 2): the cold-start rebuild of minted verdicts,
-  // red counts, ACCEPTs and seed baselines (`_rebuildRubricFromAudit` in gate.js)
+  // red counts, ACCEPTs and seed baselines (`rebuildRubricState` in rubric-state.js)
   // reads exactly these. Losing one on a `rubric*` line silently resets a count.
   "rubricSha", "checkpoint", "outputSha", "checkId", "verdict", "baseline",
 ]);

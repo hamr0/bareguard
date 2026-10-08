@@ -316,3 +316,15 @@ test("a section name ending in ':' (after trim) is refused at createRubric and t
   }
   assert.doesNotThrow(() => createRubric(spec([{ id: "a", rule: "mustCarry", field: "text", phrases: ["Total:"] }])), "a phrase may end in ':'");
 });
+
+test("a NUL in a check id or a checkpoint name is refused at createRubric (it joins the gate's accept/baseline keys)", () => {
+  assert.throws(
+    () => createRubric(spec([mw({ id: "n\0x" })])),
+    (e) => e.path === "spec.checkpoints.resume.checks[0].id" && /NUL/.test(e.message),
+  );
+  assert.throws(
+    () => createRubric({ schema: 1, goal: "g", checkpoints: { "re\0sume": { gating: true, checks: [mw()] } } }),
+    (e) => e.path === "spec.checkpoints.re\0sume" && /NUL/.test(e.message),
+  );
+  assert.doesNotThrow(() => createRubric(spec([mw({ id: "n-x" })])));
+});

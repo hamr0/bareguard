@@ -467,3 +467,12 @@ test("concurrent checkStep + advance checks: audit line order = decision order",
   const byAid = new Map(decisions.map((l) => [l.aid, l]));
   for (const d of ds) assert.equal(byAid.get(d.aid).decision, d.outcome);
 });
+
+test("construct: a rubric spec with a NUL in a check id or checkpoint name throws (no silently re-seeded baseline)", () => {
+  const seed = { rule: "notWorse", direction: "lower-is-better", baseline: "seed" };
+  const badId = { schema: 1, goal: "g", checkpoints: { seeded: { gating: true, checks: [{ id: "n\0x", ...seed }] } } };
+  const badCp = { schema: 1, goal: "g", checkpoints: { "se\0eded": { gating: true, checks: [{ id: "n", ...seed }] } } };
+  for (const spec of [badId, badCp]) {
+    assert.throws(() => new Gate({ rubric: rubricCfg(spec) }), /NUL/);
+  }
+});
