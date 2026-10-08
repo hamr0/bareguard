@@ -8,7 +8,7 @@ status: draft
 
 Evidence, rationale and history: docs/logs/rubric-learnings.md.
 
-*Specs only. Nothing is built. No versions picked. Last updated 2026-10-07. Every decision is
+*Specs only. Nothing is built. No versions picked. Last updated 2026-10-08. Every decision is
 RULED by hamr and listed in §12.*
 
 ## 0. In one paragraph
@@ -64,6 +64,7 @@ end -> human ACCEPT
 | `createRubric(spec)` | validates a spec; throws on an unknown check type or bad shape (§3, §4) |
 | `rubricSha(spec)` | sha256 over the canonical spec; the signed fingerprint (§3) |
 | `checkStep(rubric, checkpoint, output, opts)` | runs the checks (and the judge), mints the verdict, gap or fault (§7) |
+| `renderGaps(gaps)` | pure: a deterministic one-string render of a gap list, for stuck-detection (§7) |
 | `quoteIn(quote, source)` | pure: is the quote in the source, whitespace and `**` forgiven (§4.2) |
 | `numbersInQuote(claim, quote)` | pure: does every number in the claim appear in the quote (§4.2) |
 | `rubricVocabulary` | frozen, machine-readable list of every rule: field names, types, required/optional, bounds, defaults; descriptions are generated from it (§9) |
@@ -223,17 +224,25 @@ Text is split into lines on `/\r?\n/`.
 - **`sectionOrder`**: for each name in order, search forward from the position after the previous
   match. Not found anywhere = red "missing"; found only earlier = red "out of order". It implies
   presence, so `sections` and `sectionOrder` on the same names are redundant but allowed; listing
-  both reports the union of reds.
+  both reports the union of reds. After a MISSING name, keep checking the later names; the search
+  position does NOT move past the missing one. A harness whose "sections" means an ordered map
+  maps it to `sectionOrder` (fwdloop does); presence-only `sections` stays available.
 - **`mustCarry`**: case-insensitive substring.
 - **`blockLines`**: group the field's non-empty lines into blocks of `size` lines (joined with a
   space); a non-empty line count that is not a multiple of `size` = red; zero non-empty lines =
-  red; each listed phrase must appear in EACH block (same case rule as `mustCarry`).
+  red; each listed phrase must appear in EACH block (same case rule as `mustCarry`). `size` AND
+  `mustCarry` are BOTH required; either missing is refused at `createRubric`.
 
 **`strict: true`** (signed, per check; there is no rubric-wide switch): words also count markers
 (split the raw line on `/\s+/`, no stripping); headings are ATX only, a line matching
 `^#{1,6} +(.+?) *#*$` with the capture compared exactly and case-sensitively (no setext, no HTML,
 no bold-as-heading, no bare line, no trailing `:`); no ATX heading in the output = red "no headings
 found"; `mustCarry` and `blockLines` phrases are exact substrings. `strict` can only tighten.
+
+**Bounds** (enforced in `rubricVocabulary` and at `createRubric`): count fields (`value` of the word
+and line rules, `size`, `reads`, `maxReds`) are integers >= 1 with no maximum; string lists
+(`names`, `values`, `mustCarry`, `patterns`, `allowPrefixes`, `items`) are non-empty arrays of
+non-empty strings; a whitespace-only string is refused.
 
 **Gap fields** (§7): every gap for an ordered rule (`maxWords`, `minWords`, `maxLines`, `max`,
 `min`, `atMost`) carries `direction`: `"at-most"` or `"at-least"`. `notWorse` carries its signed
@@ -405,7 +414,9 @@ Non-gating checkpoints record and return gaps/faults but never deny.
   ACCEPT is recorded for that checkpoint's `outputSha`, even when the verdict is green. The ask goes
   through bareguard's existing `humanChannel` at that signed position; the reply `{ decision:
   "allow" }` is recorded as ACCEPT bound to `outputSha`; any other reply, or no `humanChannel`,
-  denies. `outputSha` = sha256 of the artifact bytes. A red or stopped verdict denies before any ask.
+  denies. `outputSha` = sha256 of exactly the output bytes `checkStep` checked (a string is hashed as UTF-8).
+  bareguard never serializes an object to hash it; a harness that hashes an artifact differently
+  keeps its own hash. A red or stopped verdict denies before any ask.
 
 **Exhaustion.** The loop owns retries and strikes. `maxReds` is OFF unless set: when set, the gate
 counts reds (not stopped) per `(rubricSha, checkpointId)` as a backstop, reusing budget's countable
@@ -431,7 +442,11 @@ advance.
 **Gap view by construction.** Each red produces two views:
 - **gap**: `{ key, checkpoint, check, id, field, measured, limit, direction? }` per failing check,
   e.g. `{ key:"resume:words-cap", check:"maxWords", measured:633, limit:600, direction:"at-most" }`.
-  Offender lists are bounded. No rule text, no other checks. Read through `gate.drainGaps()` or
+  Offender lists are bounded. No rule text, no other checks.
+- **`renderGaps(gaps) -> string`** (pure, exported): the entries in signed check order (then a
+  stable order within a check), each rendered from its gap fields, joined by `"; "`. The same
+  failing state always renders the same string, so a harness may detect "stuck" by comparing
+  renders across tries. Read through `gate.drainGaps()` or
   `checkStep`'s return.
 - **full**: everything, for the audit line and the human.
 - **`key`** is `${checkpoint}:${checkId}`: stable across retries for the same failing check so
@@ -475,14 +490,14 @@ audit write failure still propagates.
 
 | Kind | Added |
 |---|---|
-| exports | `createRubric(spec)`, `rubricSha(spec)`, `checkStep(rubric, checkpointId, output, opts)`, `quoteIn(quote, source)`, `numbersInQuote(claim, quote)`, `rubricVocabulary` |
-| `rubricVocabulary` | frozen, machine-readable; lists every rule with its field names, types, required/optional, bounds and defaults (including `strict`); a drafting LLM reads it; every check description shown to anyone is GENERATED from it, never hand-written |
+| exports | `createRubric(spec)`, `rubricSha(spec)`, `checkStep(rubric, checkpointId, output, opts)`, `quoteIn(quote, source)`, `numbersInQuote(claim, quote)`, `renderGaps(gaps)`, `rubricVocabulary` |
+| `rubricVocabulary` | frozen, machine-readable; lists every rule with its field names, types, required/optional, bounds (count fields integers >= 1, no max; string lists non-empty arrays of non-empty strings; no whitespace-only strings) and defaults (including `strict`); a drafting LLM reads it; every check description shown to anyone is GENERATED from it, never hand-written |
 | gate methods | `drainGaps()` |
 | config keys | `rubric: { spec, sha256 }`, `rubric.advanceOn`, `onExhausted`, `maxReds`; spec keys `reads`, `requiresHuman`, per-check `id`, `strict`, `noneExit`, `expectExit`, `direction`, `baseline`, `patterns`, `allowPrefixes`, `requireNonEmpty`, `size`, `items`, `itemsFrom` |
 | rule strings | every rule in §4; deny rules `rubric.invalid`, `rubric.red`, `rubric.stopped`, `rubric.unminted`, `rubric.output-mismatch`, `rubric.exhausted`, `rubric.needs-accept` |
 | audit | a `rubric` phase carrying `rubricSha`, `checkpoint`, `verdict`, `outputSha`, bounded `gaps` / `fault`, recorded `baselineSource`, ACCEPT records |
 | types | `Rubric`, `Check`, `Gap`, `Fault`, `LocateJudge`, `VerdictJudge` (JSDoc typedefs) |
-| primitives.json | entries for the six exports + `drainGaps` |
+| primitives.json | entries for the seven exports + `drainGaps` |
 
 Name: **rubric**.
 
@@ -528,6 +543,14 @@ Name: **rubric**.
   resets a count).
 - Gaps: `key` identical across retries for the same failing check; ordered-rule gaps carry
   `direction`.
+- `renderGaps`: the same failing state renders byte-identically twice; different failing states
+  render differently; entries follow signed check order; joined by `"; "`.
+- `sectionOrder` after a missing name: later names are still checked and the search position does not
+  move; missing anywhere = "missing"; found only before the position = "out of order".
+- `blockLines` with `size` or `mustCarry` absent = refused at `createRubric`.
+- Bounds: a count of 0, a non-integer, an empty list, an empty string and a whitespace-only string
+  are each refused at `createRubric`; a huge count is accepted.
+- `outputSha`: equals sha256 of the UTF-8 bytes of the checked string.
 - `rubricVocabulary`: frozen; every rule `createRubric` implements appears in it with fields,
   types, required/optional, bounds and defaults, and every entry is implemented (both directions);
   generated descriptions match the entries.
@@ -547,7 +570,7 @@ Name: **rubric**.
 
 | | What |
 |---|---|
-| **Day 1** | `quoteIn`, `numbersInQuote` · `rubricVocabulary` · `createRubric` / `rubricSha` · `checkStep` with all deterministic checks (shape rules incl. `blockLines` and `strict`, value rules, `complete`, `cited`, and the four borrowed shapes `commandExit` / `notWorse` / `patternAbsent` / `filesChanged`) · the four verdicts minus soft-green (green / red / stopped) · liveness proof · gating checkpoint + `outputSha` + `requiresHuman` · `drainGaps` · audit-backed state · `onExhausted: "fail"` |
+| **Day 1** | `quoteIn`, `numbersInQuote` · `rubricVocabulary` · `createRubric` / `rubricSha` · `checkStep` with all deterministic checks (shape rules incl. `blockLines` and `strict`, value rules, `complete`, `cited`, and the four borrowed shapes `commandExit` / `notWorse` / `patternAbsent` / `filesChanged`) · the four verdicts minus soft-green (green / red / stopped) · liveness proof · gating checkpoint + `outputSha` + `requiresHuman` · `drainGaps` · `renderGaps` · audit-backed state · `onExhausted: "fail"` |
 | Next | `locate` judge in `checkStep` (deadline, one retry on malformed only, clipped quote, foundational judge-quote checks) · `verdict` judge (jev, via a caller-passed adapter; quote optional) · soft-green + ACCEPT fail-closed · `reads` / `agree` |
 | Later | bareguard's own judge calibration (in the hash) · `onExhausted: "ask"` |
 
@@ -598,3 +621,10 @@ All RULED by hamr. Superseded entries are kept for the record.
 23. RULED (hamr, 2026-10-07): "estimated" pricing counts as priced.
 24. RULED (hamr, 2026-10-07): bareguard records the bounded judge facts; the caller keeps the full raw facts.
 25. RULED (hamr, 2026-10-07): framing: bareguard builds general pieces for harnesses that have nothing yet; peers' proven shapes are made available, never forced; retry loops, spend caps, typed `done:false`, end door and quarantine, per-run re-signing and no-improvement strike counting stay in the harness.
+
+**2026-10-08** (fwd's spec sign-off)
+1. RULED (hamr, 2026-10-08): `sectionOrder` after a MISSING name keeps checking the later names; the search position does not move past the missing one. Missing anywhere = red "missing"; found only before the position = red "out of order".
+2. RULED (hamr, 2026-10-08): export `renderGaps(gaps) -> string`: entries in signed check order (stable within a check), joined by "; "; the same failing state always renders the same string; harnesses may detect "stuck" on the render.
+3. RULED (hamr, 2026-10-08): `blockLines` requires BOTH `size` and `mustCarry`; either missing is refused at `createRubric`.
+4. RULED (hamr, 2026-10-08): bounds in `rubricVocabulary` and `createRubric`: count fields are integers >= 1 with no max; string lists are non-empty arrays of non-empty strings; whitespace-only strings are refused.
+5. RULED (hamr, 2026-10-08): `outputSha` = sha256 of exactly the output bytes `checkStep` checked (a string hashed as UTF-8); bareguard never serializes an object to hash it; a harness that hashes differently keeps its own hash.

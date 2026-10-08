@@ -228,6 +228,15 @@ door and quarantine, per-run re-signing, "no-improvement" strike counting.
   rule as the budget.
 - **Estimated pricing = priced.** Only an unpriced round has no cost to account.
 
+### F. fwd spec sign-off (2026-10-08)
+
+fwd signed off the spec on 2026-10-08 with five asks, all RULED by hamr (PRD §12, 2026-10-08):
+`sectionOrder` keeps checking later names after a missing one; exported deterministic `renderGaps`
+so harnesses can detect "stuck" on the render; `blockLines` requires both `size` and `mustCarry`;
+bounds (counts integers >= 1 no max, non-empty string lists of non-empty strings, no
+whitespace-only strings); `outputSha` = sha256 of exactly the checked bytes. fwdloop's ordered
+"sections" maps to `sectionOrder`.
+
 ## L9. Superseded 2026-10-06 entries (history)
 
 | 2026-10-06 ruling | Superseded by (2026-10-07) |
