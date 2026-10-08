@@ -266,6 +266,13 @@ and hamr RULED all nine (PRD §12, 2026-10-08 #6-#13).
   string is the field `text`; `baselines` out / `priorBaselines` in with `baseline-conflict`;
   stopped > red > green with the worker's gaps empty.
 - **`noneExit` on `commandExit` was a trap** (no match count, so it did nothing); now refused.
+- **Signed names are never clipped (fwd measured all 81 of its section names).** The longest real
+  name was 159 characters and was its own bug (fwdloop now caps names at 8 words); the next longest
+  is 35; 0 of 81 end in `:`. The old 120-character gap clip truncated a signed name so the worker
+  could not reproduce it. Ruled: signed values ride gaps whole and are bounded at `createRubric`
+  (over 1000 characters is refused); only measured or output-derived values are clipped. Empty
+  output stays red `happened:empty` before `blockLines`; a `sections`/`sectionOrder` name ending in
+  `:` is refused at `createRubric` (PRD §12 #14-#16).
 - **Fake-green hole (from loop).** `cited` with zero claims on a non-empty output was vacuously
   green, so a worker could pass by citing nothing. Now red `no-claims`, independent of `complete`.
 

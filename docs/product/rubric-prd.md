@@ -78,7 +78,7 @@ end -> human ACCEPT
 **The check shapes.** Every type, one line; exact rules in §4.
 
 *Foundational (always on, cannot be switched off):*
-- `happened`: the output exists and is readable.
+- `happened`: the output exists and is readable. It short-circuits: an empty or whitespace-only string (or an object with no own key) is red `happened:empty` and NO other check runs, so `blockLines` never reaches `zero-lines` on it (RULED 2026-10-08 #14).
 - `clean`: no malformed judge reply, no unpriced call; a `locate` judge returned quotes.
 - `quoteIn` on every judge quote.
 - `numbersInQuote` on every claim-quote pair.
@@ -228,7 +228,9 @@ keys.
   total over all lines.
 - **Heading line**: the line with a leading `/^#+\s*/` stripped, a trailing `/:\s*$/` stripped,
   trimmed and lowercased; it must be non-empty. A section name matches a heading line equal to the
-  name trimmed and lowercased, so a bare line counts.
+  name trimmed and lowercased, so a bare line counts. A `sections`/`sectionOrder` name whose trimmed
+  form ends in `:` is REFUSED at `createRubric` (the `:` is stripped from the line, not the name, so
+  it could never match; the error names it) (RULED 2026-10-08 #15).
 - **`sections`**: each name must match a heading line anywhere; absent = red "missing".
 - **`sectionOrder`**: for each name in order, search forward from the position after the previous
   match. Not found anywhere = red "missing"; found only earlier = red "out of order". It implies
@@ -498,7 +500,14 @@ checkStep(rubric, checkpoint, output, {
 **Gap view by construction.** Each red produces two views:
 - **gap**: `{ key, checkpoint, check, id, field, measured, limit, direction? }` per failing check,
   e.g. `{ key:"resume:words-cap", check:"maxWords", measured:633, limit:600, direction:"at-most" }`.
-  Offender lists are bounded. No rule text, no other checks.
+  Offender lists are bounded (20 shown, `itemsTotal` true). No rule text, no other checks.
+  **A signed value is never clipped in a gap** (section names, phrases, `in`/`notIn` values, `order`
+  entries, `complete` signed items, `notWorse` term ids): the worker must be able to reproduce it.
+  They are bounded at `createRubric` instead: any signed name/phrase string over 1000 characters
+  is refused (`rubricVocabulary.bounds.stringList.itemMaxLength`, `.signedString.maxLength`).
+  Only caller-MEASURED or output-derived strings are clipped to 120 characters (the measured value
+  in `in`/`atMost`, output lines, hit text and paths, `complete` items from the caller, `cited`
+  claim labels) (RULED 2026-10-08 #16).
 - **`renderGaps(gaps) -> string`** (pure, exported): the entries in signed check order (then a
   stable order within a check), each rendered from its gap fields, joined by `"; "`. The same
   failing state always renders the same string, so a harness may detect "stuck" by comparing
@@ -697,3 +706,6 @@ All RULED by hamr. Superseded entries are kept for the record.
 11. RULED (hamr, 2026-10-08): `noneExit` on `commandExit` is refused at `createRubric`.
 12. RULED (hamr, 2026-10-08): precedence is stopped > red > green; a stopped verdict gives the worker no gaps and keeps the reds in `full`.
 13. RULED (hamr, 2026-10-08): `cited` with zero claims on a non-empty output is red `no-claims`, never a vacuous green, independent of `complete`.
+14. RULED (hamr, 2026-10-08): empty or whitespace-only output is red `happened:empty` before `blockLines` (or any check) runs; the foundational check short-circuits.
+15. RULED (hamr, 2026-10-08): a `sections`/`sectionOrder` name whose trimmed form ends in `:` is refused at `createRubric`, the error naming it.
+16. RULED (hamr, 2026-10-08): a signed name is NEVER clipped in a gap (fwd's longest real name, 159 characters, reached the worker truncated and unreproducible). Signed strings over 1000 characters are refused at `createRubric`; only caller-measured or output-derived values are clipped (120).
