@@ -46,6 +46,8 @@ test("construct: a tampered / unsigned / mis-shaped rubric config throws", () =>
   assert.throws(() => new Gate({ rubric: { ...good, advanceOn: undefined } }), /advanceOn/);
   assert.throws(() => new Gate({ rubric: { ...good, advanceOn: [] } }), /advanceOn/);
   assert.throws(() => new Gate({ rubric: { ...good, advanceOn: [1] } }), /advanceOn/);
+  assert.throws(() => new Gate({ rubric: { ...good, advanceOn: [] } }), /advanceOn must be an action type or tool name string/, "the message says a tool name is accepted too");
+  assert.throws(() => new Gate({ rubric: { ...good, advanceOn: [] } }), /tool/);
   assert.throws(() => new Gate({ rubric: { ...good, extra: 1 } }), /not a recognised key/);
   assert.throws(() => new Gate({ rubric: { ...good, spec: { ...SPEC, onExhausted: "ask" } , sha256: rubricSha({ ...SPEC, onExhausted: "ask" }) } }), /ask/);
   // maxReds / onExhausted are the SIGNED spec's, never gate keys

@@ -94,6 +94,8 @@ end -> human ACCEPT
 - `maxWords` / `minWords`: word count bound.
 - `maxLines`: non-empty line count bound.
 - `sections`: each named heading is present. `sectionOrder`: headings present and in order.
+- `sectionWords`: each listed section's own word count is within +-20% of `wordsPerSection` (ported from fwdloop, RULED 2026-10-08 #25).
+- `allowedKeys`: an object output has no own key outside a signed list (ported from fwdloop, RULED 2026-10-08 #26).
 - `mustCarry`: every listed phrase is present.
 - `blockLines`: output grouped in blocks of N lines; every listed phrase in each block.
 - `in` / `notIn`, `atMost`, `max` / `min`: value checks.
@@ -220,6 +222,8 @@ keys.
 | `maxLines` | `field`, `value` | non-empty line count <= value |
 | `sections` | `field`, `names:[...]`, `strict?` | every name matches some heading line |
 | `sectionOrder` | `field`, `names:[...]`, `strict?` | every name matches a heading line, in that order |
+| `sectionWords` | `field`, `names:[...]`, `wordsPerSection` | each found section's words are within `[ceil(N*0.8), floor(N*1.2)]` inclusive (no `strict`) |
+| `allowedKeys` | `keys:[...]` | the output has no own key outside `keys` |
 | `mustCarry` | `field`, `phrases:[...]`, `strict?` | every listed phrase is present |
 | `blockLines` | `field`, `size`, `phrases:[...]`, `strict?` | see below |
 | `in` / `notIn` | `field`, `values:[...]` | value `===` one of / none of |
@@ -244,6 +248,28 @@ keys.
   both reports the union of reds. After a MISSING name, keep checking the later names; the search
   position does NOT move past the missing one. A harness whose "sections" means an ordered map
   maps it to `sectionOrder` (fwdloop does); presence-only `sections` stays available.
+- **`sectionWords`** (RULED 2026-10-08 #25; ported from fwdloop's `wordsPerSection`, M4e amendment 15).
+  Headings and words are the forgiving ones above (`#` run not a word, case-insensitive, trailing
+  `:` ok, found by the same forward search as `sectionOrder`). A section's words are the words on the
+  lines after its heading up to the next FOUND listed heading, or the end; an unlisted heading stays
+  inside the section; text before the first found heading belongs to no section. Red per section whose
+  count is outside `lo = ceil(N*0.8)` .. `hi = floor(N*1.2)` inclusive (180 -> 144..216). A listed
+  section that is missing or out of order is NOT measured by this rule (fwdloop reds it in its separate
+  sections check): pair `sectionWords` with `sectionOrder`. There is no `strict` (strict could only
+  drop sections from the measure, which is looser). One gap per offending section, in signed order,
+  `{kind:"section-words", section, words, asked, lo, hi}` (bounded to 20, `itemsTotal` set when cut; the
+  signed `section` is never clipped). `renderGaps` renders it as `<section>: <words> words, about
+  <asked> asked (<lo>-<hi>)` (fwdloop's strike detection keys on that string).
+- **`allowedKeys`** (RULED 2026-10-08 #26; ported from fwdloop's softgreen extra-key check). Red when
+  the output has an own enumerable string key that is not in the signed `keys` (exact, case-sensitive;
+  the allowed list is a ceiling, not a requirement). A plain-string output is the single field `text`.
+  A non-object, array or null output is already red `happened:wrong-type` before any rule runs; an
+  unreadable key list (hostile Proxy) is red `unreadable`, never a throw. Gap
+  `{kind:"extra-keys", keys, allowed}`: `keys` in the output's own insertion order (as fwdloop's
+  `Object.keys`), clipped to 120 and bounded to 20 (`itemsTotal` when cut); `allowed` is the signed list,
+  never clipped. The caller strips `done`/`blocker` before calling (no `ignoreKeys`). `renderGaps`:
+  `artifact has key(s) "lines" besides "text"; the check reads "text" only, so put the whole answer in
+  "text"` (several allowed keys: `"text", "note"` in the three places).
 - **`mustCarry`**: every phrase in `phrases` is a case-insensitive substring of the field; a red
   gap lists the missing phrases (bounded).
 - **`blockLines`**: group the field's non-empty lines into blocks of `size` lines (joined with a
@@ -283,11 +309,20 @@ empty fails with kind `no-claims`, never a vacuous green, whether or not a `comp
 The signed input's frozen text comes from `opts.inputs[name]` and must hash to the signed `sha256`,
 or the check is `stopped` (RULED 2026-10-08 #8).
 
+**`cited`: work cap** (RULED 2026-10-08 #24). Each distinct normalized quote costs one linear search
+of the source, whatever the quote's length. Before searching, the check counts the DISTINCT
+non-empty normalized quotes (identical quotes are searched once); if that count exceeds
+`floor(128 MiB / normalized-source-length)` (128 MiB = 134,217,728; 25 quotes at the 5 MiB source
+cap, 1,024 at 128 KiB) the check is red with the existing `too-many` gap, `measured` = the distinct
+quotes, `limit` = the count this source size allows. A pure function of the inputs, never a clock,
+so a verdict is reproducible (Law 8). Exposed as `rubricVocabulary.bounds.quoteWorkMax`.
+
 ### 4.2 Pure helpers
 
 **`quoteIn(quote, source)`**: collapse whitespace (`\s+` to one space, trim) and strip `**` and `__`
-on both sides, then substring containment. Substring, not line-wise. Empty quote = red. Source cap
+on both sides, then substring containment. Substring, not line-wise (opt-in `{ wholeLines: true }` matches whole lines instead, RULED 2026-10-08 #27, contiguous-run refinement #28; `cited` does not use it). Empty quote = red. Source cap
 **5 MB**; over it = red "source too large". Linear time.
+The `cited` rule also caps total search work per check (§4.1, ruling #24).
 
 **`numbersInQuote(claim, quote)`**: number tokens are `/\d+(?:\.\d+)?/g`; every token in the claim
 must appear as a token in the quote (`8` does not match `2018`). `8x` is 8, `1.2k` is 1.2, `50%` is
@@ -465,7 +500,7 @@ Non-gating checkpoints record and return gaps/faults but never deny.
     checkpoint, outputSha, verdict, gaps }` (`gaps` = the worker view, empty on a green). It is asked
     ONCE per `outputSha`: the reply `{ decision: "allow" }` is recorded as an ACCEPT bound to that
     sha; any other reply, a timeout, a throw, or no `humanChannel` denies and records nothing; a
-    different `outputSha` asks again. Concurrent advances for the same `(checkpoint, outputSha)` share ONE ask and one ACCEPT line. A reply that arrives after the verdict moved on (the latest verdict is no longer that green `outputSha`, or the checkpoint is exhausted) is discarded: nothing is recorded and the red count is not reset. If the Axis A floor also asks on the advance, the floor's ask
+    different `outputSha` asks again. Concurrent advances for the same `(checkpoint, outputSha)` share ONE ask and one ACCEPT line. A concurrent advance that JOINS an in-flight ask gets no `approval` audit line of its own: only the ask's owner (the first advance) has one, and the `rubric_accept` line carries the owner's `askId`. A reader joining approvals to decisions by `aid` will see a joiner `allow` with no approval line under its own `aid`; follow the shared `(checkpoint, outputSha)` to the owner's. A reply that arrives after the verdict moved on (the latest verdict is no longer that green `outputSha`, or the checkpoint is exhausted) is discarded: nothing is recorded and the red count is not reset. If the Axis A floor also asks on the advance, the floor's ask
     comes first and the rubric ask follows it; no other action ever gets a rubric ask.
   - **`accept: "later"`** for a harness that parks and resumes in another process. There is no live
     ask: an advance without a recorded ACCEPT is denied `rubric.needs-accept`. The harness (never the
@@ -542,7 +577,8 @@ checkStep(rubric, checkpoint, output, {
   in `in`/`atMost`, output lines, hit text and paths, `complete` items from the caller, `cited`
   claim labels) (RULED 2026-10-08 #16).
 - **`renderGaps(gaps) -> string`** (pure, exported): the entries in signed check order (then a
-  stable order within a check), each rendered from its gap fields, joined by `"; "`. The same
+  stable order within a check), each rendered from its gap fields, joined by `"; "`. The two gaps of
+  `sectionWords` and `allowedKeys` render as the plain sentences in §4.1 instead of a JSON row. The same
   failing state always renders the same string, so a harness may detect "stuck" by comparing
   renders across tries. Read through `gate.drainGaps()` or
   `checkStep`'s return.
@@ -663,6 +699,7 @@ Name: **rubric**.
 - `sectionOrder` after a missing name: later names are still checked and the search position does not
   move; missing anywhere = "missing"; found only before the position = "out of order".
 - `blockLines` with `size` or `phrases` absent = refused at `createRubric`.
+- `sectionWords`: AT / UNDER / OVER the band (180 -> 143/144/216/217, plus a ceil/floor grid); preamble, unlisted-heading and missing/out-of-order cases match fwdloop's am15 fixtures; rendered text equals fwdloop's red string. `allowedKeys`: extra key present / absent / several (insertion order), multi-key list, string output, hostile Proxy; rendered text equals fwdloop's with only "softgreen " dropped.
 - Bounds: a count of 0, a non-integer, an empty list, an empty string and a whitespace-only string
   are each refused at `createRubric`; a huge count is accepted.
 - `outputSha`: equals sha256 of `opts.outputBytes` (string as UTF-8, Buffer, Uint8Array) for any output type, including the hand-computed sha of `JSON.stringify(artifact, null, 2)`; sha256 of a string output without it; `null` for an object without it.
@@ -772,3 +809,8 @@ All RULED by hamr. Superseded entries are kept for the record.
 21. RULED (hamr, 2026-10-08): `advanceOn` is nested in the `rubric` config; `maxReds`/`onExhausted` come ONLY from the signed spec (one source, no top-level gate keys); the red count resets on a re-sign (new `rubricSha`) or an ACCEPT at that `requiresHuman` checkpoint, and on nothing else.
 22. RULED (hamr, 2026-10-08): add Needle to the Later table as a "to try" row (a candidate caller-side cheap `locate` judge; needs calibration first).
 23. RULED (hamr, 2026-10-08): the two ACCEPT paths differ on an exhausted checkpoint, and that is intended. A LIVE accept (`humanChannel` ask) is written only if, inside the lock, the checkpoint's latest verdict is still the green for exactly the asked `outputSha` AND the checkpoint is not exhausted; otherwise the answer is discarded (no accept line, no red reset), so a stale answer can never reset the red count and lift the signed `maxReds` wall. A LATER accept (`accept: "later"` + `gate.recordAccept`) needs a green for the exact `outputSha` but MAY be recorded on an exhausted checkpoint and resets the reds, matching §6 "terminal until a re-sign or ACCEPT": it is a deliberate human decision about a known green output, while the live guard only rejects answers that went stale while pending. Rejected: making both identical so only a re-sign lifts exhaustion.
+24. RULED (hamr, 2026-10-08): `cited` has a deterministic WORK cap, not a clock. Distinct normalized quotes x normalized source length is capped at 128 MiB (`floor(128 MiB / source length)` distinct quotes); over it = the existing `too-many` gap (`measured` = distinct quotes, `limit` = allowed), checked before any search. Identical normalized quotes are searched once (pure performance, same verdict). Measured: per-quote cost is flat in quote length, so claims x source length bounds the work (worst case ~70 ms per quote at 5 MiB; capped worst case about 1 s). No new rule name or gap kind; a wall-clock budget was rejected because verdicts must be deterministic (Law 8).
+25. RULED (hamr, 2026-10-08): `sectionWords` (`field`, `names`, `wordsPerSection`) is ported from fwdloop's `wordsPerSection` (M4e amendment 15) so the forgiving defaults keep matching `closers.js`: each found section within `[ceil(N*0.8), floor(N*1.2)]` inclusive; a missing or out-of-order listed section is not measured (pair with `sectionOrder`); no `strict`; one `{kind:"section-words", section, words, asked, lo, hi}` gap per section; `renderGaps` text `<section>: <words> words, about <asked> asked (<lo>-<hi>)`.
+26. RULED (hamr, 2026-10-08): `allowedKeys` (`keys`) is ported from fwdloop's softgreen extra-key check with a GENERAL wording (no "softgreen"): an object output with an own key outside the signed list is red, `{kind:"extra-keys", keys, allowed}`; the caller strips `done`/`blocker` first (no `ignoreKeys`); `renderGaps` text `artifact has key(s) "<k>", ... besides "<allowed>"; the check reads "<allowed>" only, so put the whole answer in "<allowed>"`.
+27. RULED (hamr, 2026-10-08): `quoteIn(quote, source, opts?)` gains an opt-in `{ wholeLines: true }`, asked by bareloop (F192). Default unchanged (byte-for-byte); any `opts` other than an object with `wholeLines === true` is the default mode. Whole-line mode: both sides split into lines (CRLF ok), each normalized per line after stripping ONE leading comment decoration (`/**`, `*/`, `//`, `* ` or a lone `*`, and `#` only when a space or tab follows, or alone on its line, so `#include` stays whole); a decoration-only line keys as itself; every non-empty quote line must EQUAL a whole source line (not a substring). Tighten-only; the `cited` rule is not changed.
+28. RULED (hamr, 2026-10-08): `quoteIn` wholeLines: the quote's lines must be a contiguous run of source lines, in order, with empty and decoration-only lines skippable on both sides (bareloop); a decoration-only quote falls back to per-line equality and is documented as proving nothing about location; in a MIXED quote decoration-only lines are skipped too, so a quote's `/**` or `*/` lines are not required to appear (`/**\nfoo\n*/` matches a source `foo`) and only the substantive lines are proven; a lone `#` line is decoration-only like a lone `*`; never-throws on a hostile `opts` (a throwing getter or Proxy means default mode).

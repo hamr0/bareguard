@@ -33,7 +33,14 @@ import { resolveWithSymlinks, findSymlinkComponent, within, norm } from "./fs.js
  * @property {string|number} [limit]
  * @property {string} [direction]
  * @property {string[]} [items]
- * @property {number} [itemsTotal] set only when `items` was truncated
+ * @property {number} [itemsTotal] set only when `items` (or `keys`, or the per-section gaps of one `sectionWords` check) was truncated
+ * @property {string} [section] `sectionWords` only: the signed section name (never clipped)
+ * @property {number} [words] `sectionWords` only: the section's measured word count
+ * @property {number} [asked] `sectionWords` only: the signed `wordsPerSection`
+ * @property {number} [lo] `sectionWords` only: the inclusive lower bound, `ceil(asked * 0.8)`
+ * @property {number} [hi] `sectionWords` only: the inclusive upper bound, `floor(asked * 1.2)`
+ * @property {string[]} [keys] `allowedKeys` only: the output's own keys that are not allowed (insertion order, clipped, bounded)
+ * @property {string[]} [allowed] `allowedKeys` only: the signed allowed keys (never clipped)
  *
  * @typedef {Object} Fault
  * An instrument failure (`stopped`): for the runner, never the worker.
@@ -70,6 +77,7 @@ import { resolveWithSymlinks, findSymlinkComponent, within, norm } from "./fs.js
 
 const MAX_NAME_LEN = 128; // ids, checkpoint ids, field names (they land in keys and audit lines)
 const SOURCE_CAP_BYTES = 5 * 1024 * 1024; // PRD §4.2 / ruling 2026-10-06 #7
+const QUOTE_WORK_CAP = 128 * 1024 * 1024; // `cited`: distinct quotes x normalized source length (UTF-16 units) searched per check; over it = red too-many. Deterministic, never a clock (Law 8)
 const MAX_ITEMS = 20; // offender-list bound in a gap
 const CLIP = 120; // a caller-MEASURED / output-derived string inside a gap (never a signed one)
 const MAX_SIGNED_LEN = 1000; // a signed name/phrase/value is refused past this at createRubric, so it rides a gap UNCLIPPED
@@ -268,6 +276,12 @@ function countWords(text, markers) {
   return n;
 }
 
+/** Words on ONE line, forgiving (a leading '#' run is not a word). */
+function lineWords(line) {
+  const s = stripLeadingHashes(line).trim();
+  return s === "" ? 0 : s.split(/\s+/).length;
+}
+
 function countNonEmptyLines(text) {
   let n = 0;
   for (const line of splitLines(text)) if (line.trim() !== "") n++;
@@ -379,6 +393,83 @@ function runSectionOrder(ctx, c) {
   if (offenders.length === 0) return OK;
   const kind = ["missing", "out-of-order"].filter((k) => kinds.has(k)).join(",");
   return red(kind, { measured: offenders.length, limit: c.names.length, ...boundItems(offenders, true) });
+}
+
+/**
+ * `sectionWords` (ported from fwdloop's closers.js `wordsPerSection`, M4e amendment 15): each listed section's
+ * own words must be within +-20% of `wordsPerSection`, inclusive: lo = ceil(N * 0.8), hi = floor(N * 1.2).
+ * A section's words = the words on the lines after its heading up to the next FOUND listed heading, or the end
+ * (an unlisted heading stays inside it); text before the first found heading belongs to no section. Headings
+ * are the forgiving ones and are found by the same forward search as `sectionOrder`; a listed section that is
+ * missing or out of order is simply not measured here (fwdloop reds it in its separate sections check: pair
+ * this rule with `sectionOrder`). One gap per section outside the band.
+ */
+function runSectionWords(ctx, c) {
+  const t = textField(ctx, c.field);
+  if (t.gap) return t;
+  const lines = splitLines(t.text);
+  /** @type {Map<string, number[]>} heading text -> line indexes */
+  const positions = new Map();
+  lines.forEach((line, k) => {
+    const h = forgivingHeading(line);
+    if (h === "") return;
+    const l = positions.get(h);
+    if (l) l.push(k);
+    else positions.set(h, [k]);
+  });
+  const starts = [];
+  let from = 0; // a line index; the search moves past a FOUND heading only
+  for (const name of c.names) {
+    const list = positions.get(nameKey(name, false));
+    if (!list) continue;
+    let lo = 0;
+    let hi = list.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (list[mid] < from) lo = mid + 1;
+      else hi = mid;
+    }
+    if (lo === list.length) continue;
+    from = list[lo] + 1;
+    starts.push({ name, line: list[lo] });
+  }
+  const lo = Math.ceil((c.wordsPerSection * 8) / 10);
+  const hi = Math.floor((c.wordsPerSection * 12) / 10);
+  const gaps = [];
+  for (let i = 0; i < starts.length; i++) {
+    const end = i + 1 < starts.length ? starts[i + 1].line : lines.length;
+    let n = 0;
+    for (let k = starts[i].line + 1; k < end; k++) n += lineWords(lines[k]);
+    if (n < lo || n > hi) gaps.push({ kind: "section-words", section: starts[i].name, words: n, asked: c.wordsPerSection, lo, hi });
+  }
+  if (gaps.length === 0) return OK;
+  if (gaps.length > MAX_ITEMS) {
+    const total = gaps.length;
+    return { gaps: gaps.slice(0, MAX_ITEMS).map((g) => ({ ...g, itemsTotal: total })) };
+  }
+  return { gaps };
+}
+
+/**
+ * `allowedKeys` (ported from fwdloop's closeSoftgreen extra-key check): red when the output has an own
+ * enumerable key that is not in the signed list. A plain-string output is the single field `text`. Keys are
+ * reported in the output's own insertion order (Object.keys, as fwdloop), clipped and bounded; the signed
+ * allowed list rides the gap unclipped. An unreadable key list (hostile Proxy) is red, never a throw.
+ */
+function runAllowedKeys(ctx, c) {
+  let extra;
+  try {
+    const allowed = new Set(c.keys);
+    extra = Object.keys(ctx.fields).filter((k) => !allowed.has(k));
+  } catch {
+    return red("unreadable");
+  }
+  if (extra.length === 0) return OK;
+  return red("extra-keys", {
+    keys: extra.slice(0, MAX_ITEMS).map((k) => clip(k)),
+    allowed: [...c.keys],
+    ...(extra.length > MAX_ITEMS ? { itemsTotal: extra.length } : {}),
+  });
 }
 
 /** Forgiving: case-insensitive substring. Strict: ALSO an exact substring (so never looser). */
@@ -520,17 +611,41 @@ function runCited(ctx, c) {
   if (cl.claims.length === 0) return red("no-claims", { measured: 0 });
   const tooBig = Buffer.byteLength(text, "utf8") > SOURCE_CAP_BYTES;
   const src = tooBig ? "" : normalizeForQuote(text);
-  const bad = [];
-  cl.claims.forEach((cc, i) => {
+  // Work cap, checked BEFORE any search: each distinct normalized quote costs one linear
+  // `includes` over the source, whatever the quote's length (measured flat in quote length).
+  // Over the cap = the existing `too-many` gap (measured = distinct quotes, limit = how many
+  // this source size allows). Pure function of the inputs, so the verdict is deterministic.
+  const normMemo = new Map(); // RAW quote -> normalized (each distinct raw quote is normalized once, not per claim)
+  const normQuotes = cl.claims.map((cc) => {
     const claim = ownString(cc, "claim");
     const quote = ownString(cc, "quote");
-    if (claim === undefined || quote === undefined) return bad.push(`#${i}:malformed`);
+    if (claim === undefined || quote === undefined) return undefined;
+    let n = normMemo.get(quote);
+    if (n === undefined) normMemo.set(quote, (n = normalizeForQuote(quote)));
+    return n;
+  });
+  if (!tooBig) {
+    const distinct = new Set();
+    for (const q of normQuotes) if (q !== undefined && q !== "") distinct.add(q);
+    const limit = Math.floor(QUOTE_WORK_CAP / Math.max(src.length, 1));
+    if (distinct.size > limit) return { gap: { kind: "too-many", measured: distinct.size, limit } };
+  }
+  const found = new Map(); // normalized quote -> found in src (identical quotes searched once; same verdict)
+  const numSets = new Map(); // RAW quote -> its number-token Set (scanned once per distinct raw quote, not per claim)
+  const bad = [];
+  cl.claims.forEach((cc, i) => {
+    const q = normQuotes[i];
+    if (q === undefined) return bad.push(`#${i}:malformed`);
     if (tooBig) return bad.push(`#${i}:source-too-large`);
-    const q = normalizeForQuote(quote);
     if (q === "") return bad.push(`#${i}:empty-quote`);
-    if (!src.includes(q)) return bad.push(`#${i}:quote-not-found`);
-    const n = numbersInQuote(claim, quote);
-    if (!n.ok) return bad.push(`#${i}:numbers:${n.missing.join(",")}`);
+    let hit = found.get(q);
+    if (hit === undefined) found.set(q, (hit = src.includes(q)));
+    if (!hit) return bad.push(`#${i}:quote-not-found`);
+    const rawQuote = /** @type {string} */ (ownString(cc, "quote"));
+    let have = numSets.get(rawQuote);
+    if (have === undefined) numSets.set(rawQuote, (have = new Set(numberTokens(rawQuote))));
+    const missing = missingNumbers(/** @type {string} */ (ownString(cc, "claim")), have);
+    if (missing.length > 0) return bad.push(`#${i}:numbers:${missing.join(",")}`);
   });
   return bad.length === 0 ? OK : red("unsupported", { measured: bad.length, limit: cl.claims.length, ...boundItems(bad) });
 }
@@ -719,6 +834,8 @@ const RULES = {
   maxLines: { fields: { field: FIELD, value: COUNT }, run: runCountRule(countNonEmptyLines, "at-most", (n, v) => n > v) },
   sections: { fields: { field: FIELD, names: LIST, strict: STRICT }, run: runSections },
   sectionOrder: { fields: { field: FIELD, names: LIST, strict: STRICT }, run: runSectionOrder },
+  sectionWords: { fields: { field: FIELD, names: LIST, wordsPerSection: COUNT }, run: runSectionWords },
+  allowedKeys: { fields: { keys: LIST }, run: runAllowedKeys },
   mustCarry: { fields: { field: FIELD, phrases: LIST, strict: STRICT }, run: runMustCarry },
   blockLines: { fields: { field: FIELD, size: COUNT, phrases: LIST, strict: STRICT }, run: runBlockLines },
   in: { fields: { field: FIELD, values: LIST }, run: runIn(true) },
@@ -810,6 +927,7 @@ export const rubricVocabulary = deepFreeze({
     signedString: { maxLength: MAX_SIGNED_LEN },
     name: { maxLength: MAX_NAME_LEN },
     quoteSourceMaxBytes: SOURCE_CAP_BYTES,
+    quoteWorkMax: QUOTE_WORK_CAP,
   },
   checkpoint: {
     gating: { type: "boolean", required: true },
@@ -903,7 +1021,7 @@ function validateCheck(c, where, inputNames) {
       continue;
     }
     checkValue(d, v, `${where}.${name}`);
-    if ((rule === "sections" || rule === "sectionOrder") && name === "names") {
+    if ((rule === "sections" || rule === "sectionOrder" || rule === "sectionWords") && name === "names") {
       // A heading line's trailing ":" is stripped from the LINE, never from the name, so such a name could never match.
       v.forEach((n, i) => {
         if (n.trim().endsWith(":")) throw fail(`${where}.names[${i}]`, `${JSON.stringify(n)} ends in ":", which can never match (the ":" is stripped from the heading line, not the name); drop the ":"`);
@@ -1026,29 +1144,127 @@ function normalizeForQuote(s) {
   return s.split("**").join("").split("__").join("").replace(/\s+/g, " ").trim();
 }
 
+// wholeLines mode (opt-in). Per line: trim, strip ONE leading comment decoration, then
+// normalizeForQuote. Decoration is stripped from the RAW line, before "**" removal, because
+// "/**" would otherwise normalize to "/". A line that is ONLY decoration ("/**", "*/", "//",
+// "*", "#") would strip to "" and could never be quoted, so it keys as itself (whitespace
+// collapsed, nothing else removed). Applied identically to quote and source lines.
+function wholeLineKey(line) {
+  const t = line.trim();
+  if (t === "") return { key: "", deco: false };
+  let rest = t;
+  if (t.startsWith("/**")) rest = t.slice(3);
+  else if (t.startsWith("*/")) rest = t.slice(2);
+  else if (t.startsWith("//")) rest = t.slice(2);
+  else if (t === "*" || t.startsWith("* ") || t.startsWith("*\t")) rest = t.slice(1);
+  else if (t === "#" || t.startsWith("# ") || t.startsWith("#\t")) rest = t.slice(1); // "#include", "#!" stay whole
+  const n = normalizeForQuote(rest);
+  if (n !== "") return { key: n, deco: false };
+  // only-decoration line is itself (and skippable for adjacency); only-markers is empty
+  return rest === t ? { key: "", deco: false } : { key: t.replace(/\s+/g, " "), deco: true };
+}
+
+// all: every non-empty key. subst: the same minus decoration-only lines (the skippable ones).
+function wholeLineKeys(text) {
+  const all = [];
+  const subst = [];
+  for (const line of text.split(/\r\n|\r|\n/)) {
+    const { key, deco } = wholeLineKey(line);
+    if (key === "") continue;
+    all.push(key);
+    if (!deco) subst.push(key);
+  }
+  return { all, subst };
+}
+
+// KMP: does `pat` occur as a contiguous run in `text`? Linear in both; arrays of strings.
+function hasRun(pat, text) {
+  const fail = new Array(pat.length).fill(0);
+  for (let i = 1, k = 0; i < pat.length; i++) {
+    while (k > 0 && pat[i] !== pat[k]) k = fail[k - 1];
+    if (pat[i] === pat[k]) k++;
+    fail[i] = k;
+  }
+  for (let i = 0, k = 0; i < text.length; i++) {
+    while (k > 0 && text[i] !== pat[k]) k = fail[k - 1];
+    if (text[i] === pat[k]) k++;
+    if (k === pat.length) return true;
+  }
+  return false;
+}
+
 /**
  * Is `quote` in `source`? Minimal normalization on both sides: whitespace runs
  * collapse to one space (then trim), and `**` and `__` are removed. Then plain
  * substring containment (not line-wise). Case-sensitive. An empty quote (after
  * normalizing) is not ok; a source over 5 MiB (5 * 1024 * 1024 UTF-8 bytes) is not ok.
+ *
+ * Opt-in `opts.wholeLines === true` switches to whole-line matching: the quote and the
+ * source are split into lines (CRLF ok), each line is normalized on its own and one
+ * leading comment decoration is stripped (`/**`, `*` + space or a lone `*`, `*` + `/`, `//`,
+ * and `#` only when a space follows, so `#include` stays whole; a `//` mid-line is never
+ * touched). A line that is only decoration (`/**`, `*` + `/`) is compared as itself. Lines are
+ * compared by equality (not substring), so a fragment of a line is not-found. The quote's lines
+ * must match a CONTIGUOUS run of source lines, in order; empty and decoration-only lines
+ * (`/**`, `*` + `/`, `*`, `//`, `#`) are skipped on BOTH sides when checking adjacency, so a doc
+ * block's blank ` *` line may be left out or included. A quote that is ENTIRELY decoration-only
+ * (e.g. `/**` alone) falls back to: every non-empty quote line equals some source line. Such a
+ * quote matches any source holding that line and proves nothing about WHERE it sits; a caller
+ * that needs location must check it itself. Any `opts` other than an object with
+ * `wholeLines === true` (absent, non-object, non-boolean `wholeLines`, or a throwing getter or
+ * Proxy) means the default mode; it never throws. In a MIXED quote, decoration-only lines are
+ * skipped too, so a quote's `/**` or `*` + `/` lines need not appear in the source (`/**`, `foo`,
+ * `*` + `/` matches a source `foo`); only the substantive lines are proven.
  * @param {string} quote
  * @param {string} source
+ * @param {{wholeLines?: boolean}} [opts]
  * @returns {{ok: boolean, why?: string}}
- * @when Reach for this to check that a quote a model returned really appears in the frozen text it claims to cite, forgiving only markdown bold and reflowed whitespace — so a paraphrase or a changed word fails, but a quote copied across a line wrap or out of a bold run passes.
+ * @when Reach for this to check that a quote a model returned really appears in the frozen text it claims to cite, forgiving only markdown bold and reflowed whitespace — so a paraphrase or a changed word fails, but a quote copied across a line wrap or out of a bold run passes. Pass `{ wholeLines: true }` when a bare word like "return" must not pass by hiding inside a longer line.
  * @category rubric
- * @signature quoteIn(quote: string, source: string) => { ok: boolean, why?: "not-a-string"|"source-too-large"|"empty-quote"|"not-found" }
- * @fails Never throws. A non-string argument, an empty quote and an oversize source each return `{ ok: false, why }`. Plain substring search, no regex built from input.
+ * @signature quoteIn(quote: string, source: string, opts?: { wholeLines?: boolean }) => { ok: boolean, why?: "not-a-string"|"source-too-large"|"empty-quote"|"not-found" }
+ * @fails Never throws. A non-string argument, an empty quote and an oversize source each return `{ ok: false, why }`. A bad `opts` is ignored (default mode). Plain substring, Set lookup and a linear KMP run search; no regex built from input.
  * @example
  * import { quoteIn } from "bareguard";
  * quoteIn("ships in 2 weeks", "It **ships in\n2 weeks**.").ok; // true
  * quoteIn("ships in 3 weeks", "It ships in 2 weeks.").ok;      // false
+ * quoteIn("ships", " * It ships in 2 weeks.", { wholeLines: true }).ok; // false (not a whole line)
  */
-export function quoteIn(quote, source) {
+export function quoteIn(quote, source, opts) {
   if (typeof quote !== "string" || typeof source !== "string") return { ok: false, why: "not-a-string" };
   if (Buffer.byteLength(source, "utf8") > SOURCE_CAP_BYTES) return { ok: false, why: "source-too-large" };
+  let whole = false;
+  try {
+    whole = opts !== null && typeof opts === "object" && opts.wholeLines === true; // hostile getter/Proxy: default mode
+  } catch {
+    whole = false;
+  }
+  if (whole) {
+    const q = wholeLineKeys(quote);
+    if (q.all.length === 0) return { ok: false, why: "empty-quote" };
+    const src = wholeLineKeys(source);
+    if (q.subst.length === 0) {
+      const have = new Set(src.all); // all decoration-only: per-line equality, proves nothing about location
+      return q.all.every((k) => have.has(k)) ? { ok: true } : { ok: false, why: "not-found" };
+    }
+    return hasRun(q.subst, src.subst) ? { ok: true } : { ok: false, why: "not-found" };
+  }
   const q = normalizeForQuote(quote);
   if (q === "") return { ok: false, why: "empty-quote" };
   return normalizeForQuote(source).includes(q) ? { ok: true } : { ok: false, why: "not-found" };
+}
+
+// Number-token logic, shared by numbersInQuote and runCited (which scans each distinct raw quote once).
+function numberTokens(s) {
+  return s.match(/\d+(?:\.\d+)?/g) ?? [];
+}
+
+function missingNumbers(claim, have) {
+  const missing = [];
+  for (const t of numberTokens(claim)) {
+    if (!have.has(t) && !missing.includes(t)) missing.push(t);
+    if (missing.length >= MAX_ITEMS) break;
+  }
+  return missing;
 }
 
 /**
@@ -1071,23 +1287,46 @@ export function quoteIn(quote, source) {
  */
 export function numbersInQuote(claim, quote) {
   if (typeof claim !== "string" || typeof quote !== "string") return { ok: false, missing: [], why: "not-a-string" };
-  const have = new Set(quote.match(/\d+(?:\.\d+)?/g) ?? []);
-  const missing = [];
-  for (const t of claim.match(/\d+(?:\.\d+)?/g) ?? []) {
-    if (!have.has(t) && !missing.includes(t)) missing.push(t);
-    if (missing.length >= MAX_ITEMS) break;
-  }
+  const missing = missingNumbers(claim, new Set(numberTokens(quote)));
   return { ok: missing.length === 0, missing };
 }
 
 // --- renderGaps --------------------------------------------------------------
 
 /**
+ * The two gaps that render as a plain sentence instead of a JSON row (fwdloop's strike detection keys on these
+ * exact strings). null = not one of them, or a field is missing / the wrong type / unreadable: use the JSON row.
+ */
+function renderSentence(g) {
+  try {
+    const kind = g.kind;
+    if (kind === "section-words") {
+      const { section, words, asked, lo, hi } = g;
+      if (typeof section !== "string" || [words, asked, lo, hi].some((n) => typeof n !== "number")) return null;
+      return `${section}: ${words} words, about ${asked} asked (${lo}-${hi})`;
+    }
+    if (kind === "extra-keys") {
+      const { keys, allowed } = g;
+      if (!Array.isArray(keys) || !Array.isArray(allowed) || allowed.length === 0) return null;
+      const q = (a) => a.map((k) => `"${String(k)}"`).join(", ");
+      const al = q(allowed);
+      return `artifact has key(s) ${q(keys)} besides ${al}; the check reads ${al} only, so put the whole answer in ${al}`;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+/**
  * A deterministic one-string render of a gap list: each gap becomes a JSON array
  * of its fields in a FIXED order [key, check, kind, field, measured, limit,
  * direction, items, itemsTotal] (absent = null), and the entries are joined by
- * "; " in the order given (the minted order is signed check order). JSON makes the
- * render injective, so the same failing state always gives the same string and
+ * "; " in the order given (the minted order is signed check order). The two gaps
+ * `sectionWords` (kind `section-words`) and `allowedKeys` (kind `extra-keys`) render as a plain
+ * sentence instead, exactly: `<section>: <words> words, about <asked> asked (<lo>-<hi>)` and
+ * `artifact has key(s) "k1", "k2" besides "text"; the check reads "text" only, so put the whole answer in "text"`.
+ * JSON makes the other rows' render injective, so the same failing state always gives the same string and
  * different states give different strings.
  * @param {Gap[]} gaps
  * @returns {string}
@@ -1105,6 +1344,11 @@ export function renderGaps(gaps) {
   const parts = [];
   for (const g of gaps) {
     if (g === null || typeof g !== "object") continue;
+    const sentence = renderSentence(g);
+    if (sentence !== null) {
+      parts.push(sentence);
+      continue;
+    }
     const row = ["key", "check", "kind", "field", "measured", "limit", "direction", "items", "itemsTotal"].map((k) => {
       try {
         const v = g[k];
@@ -1134,7 +1378,7 @@ function mintGap(checkpoint, c, partial) {
   const g = { key: `${checkpoint}:${c.id}`, checkpoint, check: c.rule, id: c.id };
   const field = c.field ?? c.claims;
   if (field !== undefined) g.field = field;
-  for (const k of ["kind", "measured", "limit", "direction", "items", "itemsTotal"]) {
+  for (const k of ["kind", "measured", "limit", "direction", "items", "itemsTotal", "section", "words", "asked", "lo", "hi", "keys", "allowed"]) {
     let v = partial[k];
     if (v === undefined) continue;
     g[k] = v;
@@ -1257,6 +1501,7 @@ export async function checkStep(rubric, checkpoint, output, opts) {
         res = stop("exception", errorDetail(e));
       }
       if (res.gap) reds.push(mintGap(checkpoint, c, res.gap));
+      else if (res.gaps) for (const g of res.gaps) reds.push(mintGap(checkpoint, c, g)); // sectionWords: one gap per section
       else if (res.fault) faults.push({ key: `${checkpoint}:${c.id}`, checkpoint, id: c.id, kind: res.fault.kind, detail: res.fault.detail });
     }
   }

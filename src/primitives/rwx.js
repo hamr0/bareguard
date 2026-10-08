@@ -35,18 +35,7 @@
 
 import { resolveIdentity, looseIdentity } from "./tool-identity.js";
 import { isPlainObject } from "./plain-object.js";
-
-/**
- * Bound a caller-supplied config key before it is interpolated into an error
- * message or a deny reason (both are unbounded downstream). Duplicated from
- * `gate.js`'s `clipKey` (not imported) to avoid a primitives→gate circular import.
- * @param {*} k
- * @returns {string}
- */
-function clipKey(k) {
-  const s = String(k);
-  return s.length > 64 ? s.slice(0, 64) + "…" : s;
-}
+import { clipKey } from "./clip-key.js";
 
 const AGENT_LETTERS_RE = /^[r-][w-][x-]$/;
 const TOOL_LETTER_RE = /^[rwx]$/;

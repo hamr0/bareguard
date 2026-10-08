@@ -13,7 +13,7 @@
   bareguard
 ```
 
-> One chokepoint between your agent and the world. Bounds what the agent **does**, not what it **says**.
+> One chokepoint between your agent and the world. Gates what the agent **does** — and whether its **work** is done — with deterministic checks only; it never runs an LLM.
 > Single audit log. Hard caps that halt with a human in the loop. Small, one production dep.
 
 <p align="center">
@@ -24,16 +24,18 @@
 
 ## What it is
 
-**One gate, two ways to scope it.** Every action your agent takes — a shell command, a file write, a network call, a spend — passes through one `Gate` and comes back **allow**, **deny**, or **ask a human**. One audit log of everything it tried, and hard caps (spend, tokens, turns) that halt with a human in the loop instead of silently.
+**One gate, two jobs.**
 
-You scope that gate **one of two mutually exclusive ways**:
+**1. Gate the action** (Axis A) — every shell command, file write, network call, and spend passes through one `Gate` and comes back **allow**, **deny**, or **ask a human**. You scope it **one of two mutually exclusive ways**:
 
 - **`tools.allowlist`** (+ `bash`/`fs`/`net`) — a closed allowlist naming exactly what's reachable. Simplest, built for one agent.
 - **`rwx` letters** — tag every tool `r` (read — changes nothing), `w` (write — can be set back), or `x` (execute — can't be undone), borrowed straight from Unix `chmod`. Built for a *fleet* of agents: a human reviews by scanning for `x` instead of reading N separate allowlists. See [rwx + rwxmap](#rwx-and-rwxmap) below.
 
-Both are **Axis A** — gate the action before it runs. **Axis B** (opt-in, either mode) reconciles what came back after — see [Before and after](#before-and-after-axis-a-and-axis-b).
+**2. Gate the advance** (rubric) — a human signs a list of checks before the work; the next step is denied until the agent's output is green. See [Rubric](#rubric-checks-the-agent-must-green).
 
-**What it isn't** — bareguard owns one layer and is honest about the rest. It's not a content filter (toxicity / PII / schema → `guardrails-ai`), not a sandbox (containment → Docker / gVisor), and not auth (who the actor *is* → upstream; per-principal policy rides `action._ctx`). It decides the action; it never runs it.
+Both share one audit log of everything the agent tried, and the same hard caps (budget, limits) that halt with a human in the loop instead of silently.
+
+**What it isn't** — bareguard owns one layer and is honest about the rest. It's not a content filter (toxicity / PII / schema → `guardrails-ai`), not a sandbox (containment → Docker / gVisor), and not auth (who the actor *is* → upstream; per-principal policy rides `action._ctx`). It decides the action; it never runs it. It's also not an LLM judge — a judge runs on your side, and bareguard takes its answer as a fact (via `annotate`, or a caller-measured number in the rubric).
 
 ## Install
 
@@ -79,6 +81,7 @@ Small files, each readable in a sitting. The gate runs them in a fixed order (**
 - **Tier what's dangerous** — `bash.classify` ranks a command **safe → destructive → super-destructive**; `content` denies `rm -rf /` / `DROP TABLE` outright.
 - **Bound what accumulates** — `budget` caps spend, tokens, or any countable resource; `limits` caps turns / children / depth — both **halt with a human in the loop**, shared across processes.
 - **Gate on meaning, not text** — `flags` reads a structured field's value (e.g. a memory engine's `provenance`) straight off the action, no regex.
+- **Grade the work** — `rubric` checks word counts, headings, required phrases, quotes found in a frozen source, and caller-measured numbers, then gates the next step on green.
 - **Prove what happened** — `secrets` auto-redacts every audit line **by default**; one `audit` JSONL joins each request to its outcome and its approval.
 
 Full per-primitive reference lives in the **[Usage Guide](docs/product/usage-guide.md)** and **[Integration Guide](bareguard.context.md)**. Tested across Linux + macOS + Windows × Node 20 + 22.
@@ -166,14 +169,15 @@ console.log(s.verdict, d.outcome, d.rule);                          // green all
 
 // Gate-less agents: the pure helpers.
 console.log(quoteIn("lead time", "The **lead  time** fell"));      // { ok: true }  (** and whitespace forgiven)
+console.log(quoteIn("time", " * lead time", { wholeLines: true }));   // { ok: false, why: "not-found" }  (opt-in: whole lines only)
 console.log(numbersInQuote("4 hours", "2 weeks"));                 // { ok: false, missing: ["4"] }
 ```
 
 `advanceOn` matches an action's `type` or its `tool`; give the advance a reserved name no real tool uses (e.g. `fwdloop.advance`), or the rubric would run on that tool's ordinary calls. Denies on the advance: `rubric.unminted`, `rubric.exhausted`, `rubric.stopped`, `rubric.red`, `rubric.output-mismatch`, `rubric.needs-accept`, and `rubric.invalid` (the config was swapped after construct). `accept: "later"` is for a harness that parks and resumes in another process: it records the answer with `gate.recordAccept(...)`, which is **harness-only**. Pass a stable `runId` (and audit path) on resume, or red counts start fresh. Full contract: [`docs/product/rubric-prd.md`](docs/product/rubric-prd.md); harness guide: [`bareguard.context.md`](bareguard.context.md#rubric-signed-checks-that-gate-an-advance).
 
-## Before and after: Axis A and Axis B
+## Facts you computed: `annotate`
 
-bareguard never runs an LLM; it checks deterministic facts against declared, enumerated rules. `annotate` is transport for a fact you computed; for checks bareguard grades itself, see [Rubric](#rubric-checks-the-agent-must-green).
+bareguard never runs an LLM; it checks deterministic facts against declared, enumerated rules. `annotate` is transport for a fact you computed; for checks bareguard grades itself, see [Rubric](#rubric-checks-the-agent-must-green). To grade the agent's work, the rubric is now the way.
 
 ```js
 // a fact you computed (a deterministic check); bareguard buffers it and rides the next ask
@@ -195,7 +199,7 @@ if (decision.outcome === "allow") await run(action);
 ```
 
 - **[bareagent](https://npmjs.com/package/bare-agent)** — the think→act→observe loop. *Goal in → coordinated actions out.* Replaces LangChain, CrewAI, AutoGen.
-- **[bareguard](https://npmjs.com/package/bareguard)** — the single gate every action passes through. *Action in → allow / deny / ask-a-human out.* Replaces hand-rolled allowlists and scattered policy code.
+- **[bareguard](https://npmjs.com/package/bareguard)** — the single gate every action passes through. *Action in → allow / deny / ask-a-human out. Work in → green / red.* Replaces hand-rolled allowlists and scattered policy code.
 - **[litectx](https://npmjs.com/package/litectx)** — tree-sitter code + memory graph with activation decay, plus lightweight context engineering (write · select · compress · isolate). *Query in → ranked context out.*
 - **[rwxmap](https://github.com/hamr0/rwxmap)** [WIP] — labels every OpenAPI operation r/w/x as a starting point, marked for review. *API spec in → per-operation letter out.* Exports straight into bareguard's `rwx` mode.
 

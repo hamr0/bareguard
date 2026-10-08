@@ -8,7 +8,8 @@ sources: [docs/archive/bareguard-prd.md]
 # bareguard — Product Requirements Document (PRD)
 
 > A one-dependency, local-first **runtime policy library** for autonomous agents: it
-> bounds what an agent can *do*, not what it can *say*. This PRD is the single
+> gates what an agent *does* — and whether its work is done — with deterministic
+> checks only. This PRD is the single
 > authority for **all of bareguard**, organized as **two parts**:
 >
 > - **Part 1 — Core bareguard (the shipped library).** The `Gate`, the thirteen
@@ -110,7 +111,7 @@ The full pre-split original is archived at `../archive/bareguard-prd.md`.
 ## 1. One-line summary
 
 `bareguard` is a one-dep, local-first runtime policy library for autonomous
-agents. It bounds what the agent can *do*, not what it can *say*. (bareguard-prd.md:82-83)
+agents. It gates what the agent *does* — and whether its work is done — with deterministic checks only. (bareguard-prd.md:82-83)
 
 ## 2. Two-paragraph summary
 
