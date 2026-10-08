@@ -163,9 +163,12 @@ test("strict is NEVER looser than forgiving: over many generated inputs, forgivi
   let seed = 987654;
   const rnd = (n) => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed % n; };
   const pick = (a) => a[rnd(a.length)];
-  const atoms = ["#", "##", "###", " ", "  ", "Summary", "summary", "Skills", "C#", "C", ":", "x", "\n", "\n", "\r\n", "Σ", "ΑΣ", "σ", "owner", "Owner", "İ", "\t", "="];
-  const gen = () => Array.from({ length: rnd(14) }, () => pick(atoms)).join(pick(["", " ", ""]));
   const names = ["Summary", "summary", "Skills", "C#", "C", "Summary:", "x", "Σ", "Owner", " Summary", "Summary "];
+  const atoms = ["#", "##", "###", " ", "  ", "Summary", "summary", "Skills", "C#", "C", ":", "x", "\n", "\n", "\r\n", "Σ", "ΑΣ", "σ", "owner", "Owner", "İ", "\t", "="];
+  const noise = () => Array.from({ length: rnd(14) }, () => pick(atoms)).join(pick(["", " ", ""]));
+  // heading-shaped lines so the generator reaches strict-green cases (names with ':', '#', case, padding)
+  const headingLine = () => "#".repeat(rnd(8)) + " ".repeat(rnd(3)) + pick(names) + pick(["", ":", " ", " ##", "#", "  "]);
+  const gen = () => Array.from({ length: 1 + rnd(3) }, () => (rnd(2) ? headingLine() : noise())).join(pick(["\n", "\r\n"]));
   const counts = { checked: 0, bothRed: 0, forgivingGreenStrictRed: 0 };
   const check = async (rule, extra, text) => {
     const f = (await one(rule, extra, { text })).verdict;
@@ -176,13 +179,18 @@ test("strict is NEVER looser than forgiving: over many generated inputs, forgivi
   };
   for (let i = 0; i < 1500; i++) {
     const text = gen();
-    const nm = [pick(names), pick(names)];
+    const nm = rnd(3) ? [pick(names)] : [pick(names), pick(names)];
     await check("maxWords", { value: 1 + rnd(8) }, text);
     await check("minWords", { value: 1 + rnd(8) }, text);
     await check("sections", { names: nm }, text);
     await check("sectionOrder", { names: nm }, text);
     await check("mustCarry", { phrases: [pick(names)] }, text);
     await check("blockLines", { size: 1 + rnd(2), phrases: [pick(names)] }, text);
+  }
+  // exhaustive heading grid: every name x hash run x spacing x suffix, name asked for == name on the line
+  for (const n of names) for (let h = 0; h < 8; h++) for (let sp = 0; sp < 3; sp++) for (const suf of ["", ":", " ", " ##", "#", "  "]) {
+    const line = "#".repeat(h) + " ".repeat(sp) + n + suf;
+    for (const rule of ["sections", "sectionOrder"]) await check(rule, { names: [n] }, line);
   }
   assert.ok(counts.bothRed > 1500, `forgiving-red cases exercised (${counts.bothRed})`);
   assert.ok(counts.forgivingGreenStrictRed > 100, `strict really is tighter somewhere (${counts.forgivingGreenStrictRed}): the test can see a difference`);
