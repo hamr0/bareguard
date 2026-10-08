@@ -193,7 +193,8 @@ function safeAction(action) {
 /**
  * Pure Axis-B routing (§6.6/§8.2.2): a fact's surface flag × the gated action's
  * reversibility × the operator's escalation knob → where the fact goes. No LLM,
- * no side effects. `surface` comes from the caller-computed judge verdict
+ * no side effects (bareguard never runs an LLM; it checks deterministic facts
+ * against declared, enumerated rules). `surface` comes from the caller-computed judge verdict
  * (`broke` ⇒ true); `reversible` is read from the GATED ACTION's type via the
  * operator's config — never the fact, the agent, or the model.
  * @param {boolean} surface  true if the answer did NOT honor the request
@@ -1456,8 +1457,8 @@ export class Gate {
 
   /**
    * Axis B (§6.6/§8.2) — buffer a return-time-judge FACT about whether a returned
-   * value honored the user's request. bareguard NEVER computes the fact (no LLM)
-   * and NEVER decides an outcome: it buffers, audits the fact (sink 1), lets it
+   * value honored the user's request. bareguard never runs an LLM; the fact is
+   * caller-computed, and annotate never decides an outcome: it buffers, audits the fact (sink 1), lets it
    * ride the next human ask `check()` raises (sink 3, §6.6 routing), and exposes
    * it for agent feedback via {@link Gate#drainAnnotations} (sink 2). Additive and
    * opt-in: with no `annotate()` call the decision path is byte-identical.

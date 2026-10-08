@@ -150,7 +150,9 @@ checkpoint, bounded by Law 9 (it only ever adds a deny). `stopped` denies the sa
 11. **The caller measures, bareguard only compares.**
 12. **Every governor and deny rule has its own distinct name.**
 
-### 2.1 Doc sites carrying the old boundary line (to update when built)
+### 2.1 Doc sites carrying the old boundary line (updated 2026-10-08, Part 3)
+
+All sites below were reworded to the ruled line; `types/gate.d.ts` and `primitives.json` regenerate from the JSDoc. Axis B docs that describe `annotate` as transport keep that framing; `trial-first`, code-mode and D8 are marked DROPPED from the roadmap (§8).
 
 | Where | Line | Text |
 |---|---|---|

@@ -103,8 +103,8 @@ export {};
 
 /**
  * Axis-B annotation fact (§6.6/§8.2) — a caller-computed verdict on whether a
- * returned value honored the user's request. bareguard never computes this (no
- * LLM) and never decides an outcome; it buffers, audits, lets it ride the next
+ * returned value honored the user's request. bareguard never runs an LLM and does not compute
+ * this fact; it never decides an outcome; it buffers, audits, lets it ride the next
  * human ask, and exposes it for agent feedback via `gate.drainAnnotations()`.
  * `surface` is the one load-bearing field — the caller sets it (e.g. to
  * `verdict !== "honored"`); the rest is carried, not interpreted.

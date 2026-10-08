@@ -136,7 +136,7 @@ This is the a2a §12.4 candidate ("satisfaction contract"). Appendix-C self-asse
 ## 8.1 Concrete spec — `recall`-provenance & `impact`-risk (settled 2026-06-14, design-only)
 The §6.5 skeleton (tap → `{surface, verdict, where, meta}` envelope → sinks → never-decide) is fixed. *(The envelopes in this section pre-date E6 and are rewritten to the shipped shape — `kind` was retired by E6e and `text` is not a field; see §6.5.)* This section fills in the **variable check** for litectx's two real return shapes (grounded at file:line, litectx HEAD), and shows the declaration format (OQ1) they imply. **Still unbuilt** — this is the spec for *if* a consumer asks; none has. It replaces the retired `assemble`/scenario-2 sensor (§0.2 #5: `assemble` self-enforces its budget, so there is no honest violation to reconcile) (bareguard-prd.md:2441-2446).
 
-> **#2 RESOLVED (2026-06-15) — thin primitive.** bareguard ships `gate.annotate` (the §6.5 skeleton: envelope + `surface × reversible` routing per §6.6); the **check stays the caller's**, so OQ1's format is not frozen by the surface. Both litectx checks below are **deterministic → `surface:true` (`verdict:"broke"`)**; the soft LLM-judged path is caller/runner-side only (§6.7) and needs no litectx change. Routing is now **surfaced always → HITL** (§6.6), which tightens Case R below. *(Written pre-E6 as `kind:"violation"` vs `deviation`; `kind` was retired by E6e — the shipped envelope routes on `surface`, and the decisive verdict is `honored`/`broke`.)* (bareguard-prd.md:2448-2454)
+> **#2 RESOLVED (2026-06-15) — thin primitive.** bareguard ships `gate.annotate` (the §6.5 skeleton: envelope + `surface × reversible` routing per §6.6); the **check stays the caller's** (annotate is transport; bareguard's own deterministic grading of an output lives in the rubric, `rubric-prd.md`), so OQ1's format is not frozen by the surface. Both litectx checks below are **deterministic → `surface:true` (`verdict:"broke"`)**; the soft LLM-judged path is caller/runner-side only (§6.7) and needs no litectx change. Routing is now **surfaced always → HITL** (§6.6), which tightens Case R below. *(Written pre-E6 as `kind:"violation"` vs `deviation`; `kind` was retired by E6e — the shipped envelope routes on `surface`, and the decisive verdict is `honored`/`broke`.)* (bareguard-prd.md:2448-2454)
 
 **Case R — recall provenance** *(deterministic membership → `surface:true`; reversible read)* (bareguard-prd.md:2456):
 - **Return:** `recall(q)` → `Hit[]`; memory hits carry `provenance` via `attachMemMeta` (`litectx/src/index.js:332`). Values **today `human | agent`, `null` for indexed files** (`:120`).
@@ -163,7 +163,7 @@ constraints: {
 ```
 No numeric comparison, no nesting, no expression language. **OQ1 collapses to "freeze {membership, ordered-threshold}, keyed by tool name."** Skeleton untouched; build (if ever) = ~1 envelope + 2 wire-points, runner-layer (bareagent), `src/` untouched — same as E2's `reconcile()` (bareguard-prd.md:2479-2487).
 
-**Part 1 §6 compliance:** both checks read a *structured return field* against a *user-stated* value — no text scan, no content semantics; neither blocks (D7). A B that *filtered* recall hits or *stopped* the edit would cross into enforcement — forbidden. The soft `deviation` path (§6.7) *does* read content, but via an **LLM the runner calls** — bareguard still only receives a fact and routes it, so the floor itself stays content-blind. bareguard never makes the LLM call (bareguard-prd.md:2489-2493).
+**Part 1 §6 compliance:** both checks read a *structured return field* against a *user-stated* value — no content semantics (and, under the 2026-10-06 Part 1 §6 amendment, bareguard may measure declared deterministic properties of an output but never interprets meaning); neither blocks (D7). A B that *filtered* recall hits or *stopped* the edit would cross into enforcement — forbidden. The soft `deviation` path (§6.7) *does* read content, but via an **LLM the runner calls** — bareguard still only receives a fact and routes it, so the floor itself stays content-blind. bareguard never makes the LLM call (bareguard-prd.md:2489-2493).
 
 **Honest ceiling:** (1) recall provenance is **thin today** (`human|agent` only on hits; the richer `web|subagent|doc` enum lives on the *write* action) — Case R can't discriminate web-sourced memory until litectx surfaces full provenance on recall hits (litectx's gap). (2) impact risk is litectx's own verdict — B inherits its accuracy. (3) Still catches no F8 lie (tampered label) and no §11 omission (the symbol you never `impact()`'d). (4) **No demand** — plausible, unrequested (bareguard-prd.md:2495-2499).
 
@@ -183,10 +183,10 @@ Axis B is a **checker** that sits behind an agent. The agent does a task; before
 **Verdict: good enough to build**, as a best-effort layer over the Axis-A floor. The €280 false-alarm is **resolved** (decisive honor/break ask, E6i). One item is **deferred** to the first real deployment, not blocking the build: re-test trickery (injection) on a judge model weaker than haiku — none is reachable in our test env (the local CLI bottoms out at haiku), so this waits on a real adopter's chosen model (bareguard-prd.md:2543-2547).
 
 ### 8.2.1 What bareguard ships (the only `src/` change)
-A thin primitive — the §6.5 skeleton, nothing more. bareguard **never** calls an LLM, never decides an outcome; it buffers a fact and routes it (bareguard-prd.md:2551-2552).
+A thin primitive — the §6.5 skeleton, nothing more. bareguard never runs an LLM and never decides an outcome; it buffers a caller-computed fact and routes it (bareguard-prd.md:2551-2552).
 
 ```js
-// caller hands bareguard a FACT (it never computes the fact itself):
+// caller hands bareguard a FACT (computed caller-side; annotate is transport only):
 gate.annotate({
   surface: true,                 // bool — the one load-bearing field (honored ⇒ false)
   verdict: "broke",              // optional hint: honored | broke (decisive, not a confidence scale)
