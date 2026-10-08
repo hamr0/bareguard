@@ -237,6 +237,38 @@ bounds (counts integers >= 1 no max, non-empty string lists of non-empty strings
 whitespace-only strings); `outputSha` = sha256 of exactly the checked bytes. fwdloop's ordered
 "sections" maps to `sectionOrder`.
 
+### G. Module 1 build findings and the fwd / loop answers (2026-10-08)
+
+Module 1 (the pure core, `src/primitives/rubric.js`) surfaced nine questions; fwd and loop agreed
+and hamr RULED all nine (PRD §12, 2026-10-08 #6-#13).
+
+- **Strict could LOOSEN.** The first build counted markers under strict for both word rules, so
+  `minWords` strict passed `## Summary` at 2 where forgiving said 1 (the 2026-10-06 strict word rule
+  versus the "strict only tightens" law). Ruled: strict `maxWords` counts markers, strict `minWords`
+  counts like forgiving. The proof is a generated corpus (forgiving red implies strict red, every
+  strict-capable rule), not a reading of the rule.
+- **Headings and the "forgiving also matches" conjunction.** Strict headings now take the exact rest
+  of the line (`# Summary ##` is `Summary ##`, `## C#` is `C#`). The hand-coded parse stays linear
+  (the old regex's lazy capture before ` *#*$` backtracks quadratically). Two further loosenings
+  were found by the generated test and closed by making a strict match also require the forgiving
+  match: a name ending in `:` (strict kept the colon, forgiving strips it), and case folding that is
+  not substring-preserving (final-sigma: `"Σ"` is a strict substring of `"ΑΣ"` but its lowercase is
+  not a substring of the lowercased text). Consequence: a name ending in `:` matches in neither mode.
+- **`text` meant two things.** On `mustCarry`/`blockLines` it was the phrase, everywhere else the
+  signer's explanation (Law 6). Renamed the phrase field to `phrases` (a list on both); `text` is
+  now only the explanation, optional, never decides.
+- **Object outputs could not be bound.** bareguard never serializes an object, so an object output
+  had `outputSha` null and no way to match fwdloop's accept/send hash. Ruled: `opts.outputBytes`
+  (string or bytes) is hashed exactly, for any output type; with none, an object stays unbound and
+  Module 2's gate denies it. fwdloop serialises as `JSON.stringify(artifact, null, 2)`; a test pins
+  our sha256 of those bytes to a hand-computed one.
+- **Kept as built:** `opts.inputs[name]` with a sha256 check for `cited` (mismatch = stopped); a plain
+  string is the field `text`; `baselines` out / `priorBaselines` in with `baseline-conflict`;
+  stopped > red > green with the worker's gaps empty.
+- **`noneExit` on `commandExit` was a trap** (no match count, so it did nothing); now refused.
+- **Fake-green hole (from loop).** `cited` with zero claims on a non-empty output was vacuously
+  green, so a worker could pass by citing nothing. Now red `no-claims`, independent of `complete`.
+
 ## L9. Superseded 2026-10-06 entries (history)
 
 | 2026-10-06 ruling | Superseded by (2026-10-07) |

@@ -38,7 +38,8 @@ replanning, cadence, spend caps) stays outside bareguard.
    cutoff change means re-sign.
 4. The agent works. It never sees the rubric.
 5. The runner takes any caller measurements, then calls
-   `checkStep(rubric, checkpoint, output, { judge?, deadlineMs?, measurements?, items? })`. The
+   `checkStep(rubric, checkpoint, output, { judge?, deadlineMs?, measurements?, items?, inputs?,
+   priorBaselines?, outputBytes? })` (signature in §7). The
    deterministic checks run, then the judge if any. It mints green / soft-green / red / stopped.
 6. The agent or runner sends the advance action `{ type: <advanceOn>, checkpoint, outputSha }`
    through `gate.check`. The Axis A floor runs first (Law 9); then the advance is denied if there
@@ -89,8 +90,8 @@ end -> human ACCEPT
 - `maxWords` / `minWords`: word count bound.
 - `maxLines`: non-empty line count bound.
 - `sections`: each named heading is present. `sectionOrder`: headings present and in order.
-- `mustCarry`: a phrase is present.
-- `blockLines`: output grouped in blocks of N lines; phrases in each block.
+- `mustCarry`: every listed phrase is present.
+- `blockLines`: output grouped in blocks of N lines; every listed phrase in each block.
 - `in` / `notIn`, `atMost`, `max` / `min`: value checks.
 - `cited`: every claim's quote is in the frozen input with its numbers.
 - `complete`: every item of a list is covered by a claim.
@@ -198,6 +199,14 @@ caller passes; none parses prose in general.
 
 Text is split into lines on `/\r?\n/`.
 
+**`text` on every check** is the signer's explanation only (Law 6): optional, a string, never
+decides, never read by a check. The phrases a check looks for are always in a `phrases` list, never
+in `text` (RULED 2026-10-08 #7).
+
+**A plain-string output is the single field `text`** (RULED 2026-10-08 #8): `field: "text"` reads
+it; any other field name on a string output is red "missing". An object output is read by its own
+keys.
+
 | Rule | Params | Green when |
 |---|---|---|
 | `nonEmpty` | `field` | non-empty string / array / object with >=1 own key |
@@ -205,8 +214,8 @@ Text is split into lines on `/\r?\n/`.
 | `maxLines` | `field`, `value` | non-empty line count <= value |
 | `sections` | `field`, `names:[...]`, `strict?` | every name matches some heading line |
 | `sectionOrder` | `field`, `names:[...]`, `strict?` | every name matches a heading line, in that order |
-| `mustCarry` | `field`, `text`, `strict?` | the phrase is present |
-| `blockLines` | `field`, `size`, `mustCarry:[...]`, `strict?` | see below |
+| `mustCarry` | `field`, `phrases:[...]`, `strict?` | every listed phrase is present |
+| `blockLines` | `field`, `size`, `phrases:[...]`, `strict?` | see below |
 | `in` / `notIn` | `field`, `values:[...]` | value `===` one of / none of |
 | `atMost` | `field`, `value`, `order:[...]` | ordered-enum rank <= value's |
 | `max` / `min` | `field`, `value` | finite number <= / >= |
@@ -227,26 +236,44 @@ Text is split into lines on `/\r?\n/`.
   both reports the union of reds. After a MISSING name, keep checking the later names; the search
   position does NOT move past the missing one. A harness whose "sections" means an ordered map
   maps it to `sectionOrder` (fwdloop does); presence-only `sections` stays available.
-- **`mustCarry`**: case-insensitive substring.
+- **`mustCarry`**: every phrase in `phrases` is a case-insensitive substring of the field; a red
+  gap lists the missing phrases (bounded).
 - **`blockLines`**: group the field's non-empty lines into blocks of `size` lines (joined with a
   space); a non-empty line count that is not a multiple of `size` = red; zero non-empty lines =
   red; each listed phrase must appear in EACH block (same case rule as `mustCarry`). `size` AND
-  `mustCarry` are BOTH required; either missing is refused at `createRubric`.
+  `phrases` are BOTH required; either missing is refused at `createRubric`.
 
-**`strict: true`** (signed, per check; there is no rubric-wide switch): words also count markers
-(split the raw line on `/\s+/`, no stripping); headings are ATX only, a line matching
-`^#{1,6} +(.+?) *#*$` with the capture compared exactly and case-sensitively (no setext, no HTML,
-no bold-as-heading, no bare line, no trailing `:`); no ATX heading in the output = red "no headings
-found"; `mustCarry` and `blockLines` phrases are exact substrings. `strict` can only tighten.
+**`strict: true`** (signed, per check; there is no rubric-wide switch). **Strict is ALWAYS the
+tighter result: it is never green where forgiving is red, in either direction** (RULED 2026-10-08
+#1). The rules:
+- **`maxWords`** counts markers (split the raw line on `/\s+/`, no stripping). The raw count is
+  never below the forgiving count, so it can only make `maxWords` stricter.
+- **`minWords`** under strict counts exactly like forgiving (a leading `#` run is NOT counted):
+  counting markers would make `minWords` easier to pass, which strict must never do.
+- **Headings** are ATX only: after `#{1,6}` and one or more spaces, the REST of the line is the
+  heading text EXACTLY (no closing-`#` stripping, no trimming), compared exactly and
+  case-sensitively. So `# Summary ##` is the heading `Summary ##` and does NOT match `Summary`;
+  `## C#` is the heading `C#`. No setext, no HTML, no bold-as-heading, no bare line. A heading line
+  with nothing after the spaces is not a heading. Parsing is hand-coded and linear (no backtracking
+  regex). A strict name matches a heading only if the forgiving rule ALSO matches it, which is what
+  makes "never looser" hold by construction (a name ending in `:` therefore matches in neither
+  mode). No ATX heading in the output = red "no headings found".
+- **`mustCarry` / `blockLines` phrases** are exact substrings AND (by the same conjunction) also
+  forgiving matches.
 
 **Bounds** (enforced in `rubricVocabulary` and at `createRubric`): count fields (`value` of the word
 and line rules, `size`, `reads`, `maxReds`) are integers >= 1 with no maximum; string lists
-(`names`, `values`, `mustCarry`, `patterns`, `allowPrefixes`, `items`) are non-empty arrays of
+(`names`, `values`, `phrases`, `patterns`, `allowPrefixes`, `items`) are non-empty arrays of
 non-empty strings; a whitespace-only string is refused.
 
 **Gap fields** (§7): every gap for an ordered rule (`maxWords`, `minWords`, `maxLines`, `max`,
 `min`, `atMost`) carries `direction`: `"at-most"` or `"at-least"`. `notWorse` carries its signed
 `direction`.
+
+**`cited`: zero claims is RED** (RULED 2026-10-08 #13). A non-empty output whose `claims` list is
+empty fails with kind `no-claims`, never a vacuous green, whether or not a `complete` check runs.
+The signed input's frozen text comes from `opts.inputs[name]` and must hash to the signed `sha256`,
+or the check is `stopped` (RULED 2026-10-08 #8).
 
 ### 4.2 Pure helpers
 
@@ -270,12 +297,14 @@ the first line applies):
   count BEFORE any scope filter. Missing proof = `stopped`.
 - Non-zero `exit` AND zero `matchedPreScope` = `stopped` ("crashed tool: unknown, not zero").
 - Liveness is read BEFORE any scope filter.
-- A tool whose "none found" is a non-zero exit declares a signed `noneExit: <n>`; an `exit` equal to
-  `noneExit` with zero matches is a live zero. No softened default.
+- A tool whose "none found" is a non-zero exit declares a signed `noneExit: <n>` on `notWorse`,
+  `patternAbsent` or `filesChanged`; an `exit` equal to `noneExit` with zero matches is a live zero.
+  No softened default. **`commandExit` takes NO `noneExit`** (it has no match count, so the param
+  would do nothing): `createRubric` refuses it (RULED 2026-10-08 #11).
 
 | Rule | Signed params | Caller passes | Green when |
 |---|---|---|---|
-| `commandExit` | `expectExit` (default 0), `noneExit?` | `{ exit, outputLines? }` | `exit === expectExit`. Red gap: `exit`, `expected`, bounded output lines |
+| `commandExit` | `expectExit` (default 0) | `{ exit, outputLines? }` | `exit === expectExit`. Red gap: `exit`, `expected`, bounded output lines |
 | `notWorse` | `direction` (`"lower-is-better"` \| `"higher-is-better"`, REQUIRED, never inferred), `baseline` (literal \| `"seed"`), `noneExit?`, `terms?:[id]` | `{ value, exit, matchedPreScope, baseline?, baselineSource?:{anchor, route}, terms?:[{id, contributes}] }` | not worse than baseline in `direction`; equal = green. Gap may carry the per-term breakdown |
 | `patternAbsent` | `patterns:[id]` (ids only; patterns are the caller's), `noneExit?` | `{ exit, matchedPreScope, hits:[{id, path, line, text}] }` | zero hits. Red iff >=1 hit; gap = bounded hit list. A hit whose `id` is not in the signed list = `stopped` |
 | `filesChanged` | `allowPrefixes:[...]`, `requireNonEmpty`, `noneExit?` | `{ exit, matchedPreScope, paths:[...] }` | not empty when required AND every path under some prefix, resolved physically like bareguard's fs scopes. Gap lists offenders |
@@ -284,9 +313,12 @@ the first line applies):
 - A literal baseline is signed in the spec.
 - `"seed"`: the counting RULE is signed, never a number. The runner measures the baseline per run
   at a signed anchor kind (e.g. a commit sha it names in the call) and passes
-  `{ baseline, baselineSource: { anchor, route } }`. bareguard records it in the audit. Once recorded
-  for `(rubricSha, runId, checkId)` it is frozen; a different baseline for the same run is refused
-  (`stopped`, fault kind `baseline-conflict`).
+  `{ baseline, baselineSource: { anchor, route } }`. `checkStep` returns the baselines it measured
+  as `baselines` and takes the already-recorded ones as `opts.priorBaselines[checkId]`; a different
+  baseline for the same check is refused (`stopped`, fault kind `baseline-conflict`).
+  **The gate's job (Module 2):** record each seed baseline by `(rubricSha, runId, checkId)` in the
+  audit, feed it back as `priorBaselines`, and rebuild it on resume, so a resume never forgets a
+  frozen baseline (RULED 2026-10-08 #10).
 - A baseline passed per call without `"seed"` in the spec is refused.
 - `notWorse` with literal baseline 0 stays an allowed alternative to `patternAbsent`.
 
@@ -404,6 +436,10 @@ required quotes) stays **red** (`clean`). Unpriced stays **red**. `stopped` is a
 `{ key, checkpoint, id, kind, detail }` with `kind` one of `exception`, `liveness`,
 `missing-measurement`, `unknown-pattern`, `baseline-conflict`, `judge-no-answer`; `detail` is bounded.
 
+**Precedence: stopped > red > green** (RULED 2026-10-08 #12). When a checkpoint has both a fault and
+reds, the verdict is `stopped`: `gaps` (the worker's view) is empty and the reds are kept only in the
+`full` record, for the audit and the human. A broken instrument is fixed before any red is acted on.
+
 Non-gating checkpoints record and return gaps/faults but never deny.
 
 **Human moments: SIGN and ACCEPT.**
@@ -414,9 +450,8 @@ Non-gating checkpoints record and return gaps/faults but never deny.
   ACCEPT is recorded for that checkpoint's `outputSha`, even when the verdict is green. The ask goes
   through bareguard's existing `humanChannel` at that signed position; the reply `{ decision:
   "allow" }` is recorded as ACCEPT bound to `outputSha`; any other reply, or no `humanChannel`,
-  denies. `outputSha` = sha256 of exactly the output bytes `checkStep` checked (a string is hashed as UTF-8).
-  bareguard never serializes an object to hash it; a harness that hashes an artifact differently
-  keeps its own hash. A red or stopped verdict denies before any ask.
+  denies. `outputSha` = sha256 of exactly the bytes bound to the advance (see §7 `outputBytes`).
+  bareguard never serializes an object to hash it. A red or stopped verdict denies before any ask.
 
 **Exhaustion.** The loop owns retries and strikes. `maxReds` is OFF unless set: when set, the gate
 counts reds (not stopped) per `(rubricSha, checkpointId)` as a backstop, reusing budget's countable
@@ -438,6 +473,27 @@ marks which gate the advance.
    differs (`rubric.output-mismatch`), or a required ACCEPT is missing (`rubric.needs-accept`).
 Big outputs never enter the action or the audit line. Either an agent or a runner may send the
 advance.
+
+**`checkStep` signature and `outputSha`.**
+
+```js
+checkStep(rubric, checkpoint, output, {
+  measurements?,   // { [checkId]: caller-measured proof }              (§4.3)
+  items?,          // { [checkId]: caller item list } for itemsFrom      (§4.4)
+  inputs?,         // { [inputName]: frozen source text } for `cited`; must hash to the signed sha256, else stopped
+  priorBaselines?, // { [checkId]: seed baseline already recorded } ; a different one = stopped baseline-conflict
+  outputBytes?,    // string | Buffer | Uint8Array : the exact bytes the advance is bound to
+  judge?, deadlineMs?,  // Next
+}) -> Promise<{ verdict, checkpoint, rubricSha, outputSha, gaps, fault, full, baselines, callerItems }>
+```
+
+- `outputSha` = sha256 of exactly `opts.outputBytes` when given (a string is hashed as UTF-8), for
+  ANY output type (RULED 2026-10-08 #9). Otherwise it is the sha256 of the UTF-8 bytes of a string
+  output. For an object output with no `outputBytes` it is `null`: bareguard never serializes an
+  object itself, so the result cannot be bound to an advance, and **Module 2's gate denies an
+  advance that carries no `outputSha` as unbound**. A harness whose artifact bytes are
+  `JSON.stringify(artifact, null, 2)` passes exactly that string as `outputBytes`.
+- `outputBytes` of any other type is refused (a `TypeError`: caller misuse).
 
 **Gap view by construction.** Each red produces two views:
 - **gap**: `{ key, checkpoint, check, id, field, measured, limit, direction? }` per failing check,
@@ -493,7 +549,7 @@ audit write failure still propagates.
 | exports | `createRubric(spec)`, `rubricSha(spec)`, `checkStep(rubric, checkpointId, output, opts)`, `quoteIn(quote, source)`, `numbersInQuote(claim, quote)`, `renderGaps(gaps)`, `rubricVocabulary` |
 | `rubricVocabulary` | frozen, machine-readable; lists every rule with its field names, types, required/optional, bounds (count fields integers >= 1, no max; string lists non-empty arrays of non-empty strings; no whitespace-only strings) and defaults (including `strict`); a drafting LLM reads it; every check description shown to anyone is GENERATED from it, never hand-written |
 | gate methods | `drainGaps()` |
-| config keys | `rubric: { spec, sha256 }`, `rubric.advanceOn`, `onExhausted`, `maxReds`; spec keys `reads`, `requiresHuman`, per-check `id`, `strict`, `noneExit`, `expectExit`, `direction`, `baseline`, `patterns`, `allowPrefixes`, `requireNonEmpty`, `size`, `items`, `itemsFrom` |
+| config keys | `rubric: { spec, sha256 }`, `rubric.advanceOn`, `onExhausted`, `maxReds`; spec keys `reads`, `requiresHuman`, per-check `id`, `text`, `strict`, `phrases`, `noneExit`, `expectExit`, `direction`, `baseline`, `patterns`, `allowPrefixes`, `requireNonEmpty`, `size`, `items`, `itemsFrom` |
 | rule strings | every rule in §4; deny rules `rubric.invalid`, `rubric.red`, `rubric.stopped`, `rubric.unminted`, `rubric.output-mismatch`, `rubric.exhausted`, `rubric.needs-accept` |
 | audit | a `rubric` phase carrying `rubricSha`, `checkpoint`, `verdict`, `outputSha`, bounded `gaps` / `fault`, recorded `baselineSource`, ACCEPT records |
 | types | `Rubric`, `Check`, `Gap`, `Fault`, `LocateJudge`, `VerdictJudge` (JSDoc typedefs) |
@@ -505,12 +561,15 @@ Name: **rubric**.
 
 - Every rule: green, red, and **falsify-by-revert** (flip the comparison; the test must fail).
 - Thresholds: AT / UNDER / OVER (`600` words vs `maxWords 600` green; `601` red).
-- Words: `## Summary` counts 1 forgiving, 2 strict.
+- Words: `## Summary` counts 1 forgiving, 2 strict `maxWords`, 1 strict `minWords`.
 - Headings forgiving: `## Summary`, `summary`, `Summary:` and a bare `Summary` line all match; empty
   heading line never matches. `sectionOrder`: absent = "missing"; present only earlier = "out of
   order". Strict: setext not a heading, bare line not a heading, case differs = red, no ATX heading
-  = red "no headings found". `strict` never turns a strict-red green.
-- `mustCarry`: case differs green by default, red under `strict`.
+  = red "no headings found". Strict never looser: a generated corpus where forgiving red
+  implies strict red for every strict-capable rule (falsified by reverting the source).
+- `mustCarry`: case differs green by default, red under `strict`; every listed phrase is needed.
+- `cited` with zero claims on a non-empty output = red `no-claims`; `commandExit` with `noneExit`
+  refused at `createRubric`.
 - `blockLines`: count not a multiple of N = red; zero lines = red; phrase missing from one block = red;
   case rule follows `strict`.
 - `quoteIn`: `**` case green; reflowed spaces green; a changed word red; empty quote red; 5 MB
@@ -547,10 +606,10 @@ Name: **rubric**.
   render differently; entries follow signed check order; joined by `"; "`.
 - `sectionOrder` after a missing name: later names are still checked and the search position does not
   move; missing anywhere = "missing"; found only before the position = "out of order".
-- `blockLines` with `size` or `mustCarry` absent = refused at `createRubric`.
+- `blockLines` with `size` or `phrases` absent = refused at `createRubric`.
 - Bounds: a count of 0, a non-integer, an empty list, an empty string and a whitespace-only string
   are each refused at `createRubric`; a huge count is accepted.
-- `outputSha`: equals sha256 of the UTF-8 bytes of the checked string.
+- `outputSha`: equals sha256 of `opts.outputBytes` (string as UTF-8, Buffer, Uint8Array) for any output type, including the hand-computed sha of `JSON.stringify(artifact, null, 2)`; sha256 of a string output without it; `null` for an object without it.
 - `rubricVocabulary`: frozen; every rule `createRubric` implements appears in it with fields,
   types, required/optional, bounds and defaults, and every entry is implemented (both directions);
   generated descriptions match the entries.
@@ -628,3 +687,13 @@ All RULED by hamr. Superseded entries are kept for the record.
 3. RULED (hamr, 2026-10-08): `blockLines` requires BOTH `size` and `mustCarry`; either missing is refused at `createRubric`.
 4. RULED (hamr, 2026-10-08): bounds in `rubricVocabulary` and `createRubric`: count fields are integers >= 1 with no max; string lists are non-empty arrays of non-empty strings; whitespace-only strings are refused.
 5. RULED (hamr, 2026-10-08): `outputSha` = sha256 of exactly the output bytes `checkStep` checked (a string hashed as UTF-8); bareguard never serializes an object to hash it; a harness that hashes differently keeps its own hash.
+
+**2026-10-08** (Module 1 build findings; fwd and loop agreed)
+6. RULED (hamr, 2026-10-08): strict is always the tighter result, in both directions: strict `maxWords` counts markers, strict `minWords` counts like forgiving; strict headings take the exact rest of the line after `#{1,6}` + spaces (so `# Summary ##` does not match `Summary`, `## C#` is `C#`), matched only when the forgiving rule also matches.
+7. RULED (hamr, 2026-10-08): the phrase field on `mustCarry` and `blockLines` is renamed `text` -> `phrases` (a non-empty list of non-blank strings; `mustCarry` takes a list too, all phrases required); `blockLines` = `{size, phrases}`, both required; `text` on every check is only the signer's explanation (Law 6).
+8. RULED (hamr, 2026-10-08): `opts.inputs[name]` supplies `cited`'s frozen source and must match the signed sha256, else `stopped`; a plain-string output is the single field `text`.
+9. RULED (hamr, 2026-10-08): `opts.outputBytes` (string, Buffer or Uint8Array) is what `outputSha` hashes, for any output type; an object output with no `outputBytes` has `outputSha` null (Module 2's gate denies it as unbound); bareguard never serializes an object.
+10. RULED (hamr, 2026-10-08): `checkStep` returns `baselines` and takes `priorBaselines`; a conflict is `stopped` `baseline-conflict`; the gate (Module 2) records by `(rubricSha, runId, checkId)` and survives resume.
+11. RULED (hamr, 2026-10-08): `noneExit` on `commandExit` is refused at `createRubric`.
+12. RULED (hamr, 2026-10-08): precedence is stopped > red > green; a stopped verdict gives the worker no gaps and keeps the reds in `full`.
+13. RULED (hamr, 2026-10-08): `cited` with zero claims on a non-empty output is red `no-claims`, never a vacuous green, independent of `complete`.
