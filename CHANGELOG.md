@@ -3,6 +3,34 @@
 All notable changes to bareguard are documented here. Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [SemVer](https://semver.org/).
 
 
+## [0.21.0] - 2026-10-08
+
+### Added
+
+- **`sectionWords` rule `{ field, names, wordsPerSection: N }`** (ported from fwdloop's `closers.js`). A listed section that is found and whose own word count falls outside `ceil(N*0.8)..floor(N*1.2)` (inclusive) is red, one gap per section: `{ kind: "section-words", section, words, asked, lo, hi }`, rendered `<section>: <words> words, about <asked> asked (<lo>-<hi>)`. It reuses the forgiving heading and word helpers; a missing section is not measured (pair it with `sectionOrder`). Parity against fwdloop's closers: the added rows all match.
+- **`allowedKeys` rule `{ keys }`.** An object output with an own key outside the signed list is red with `{ kind: "extra-keys", keys, allowed }`, rendered `artifact has key(s) "lines" besides "text"; the check reads "text" only, so put the whole answer in "text"`. The caller strips `done`/`blocker`. A hostile object whose keys cannot be read is red `unreadable`, never a throw.
+- **`quoteIn(quote, source, { wholeLines: true })` opt-in** (asked by bareloop). The quote's lines must match a contiguous run of whole source lines, in order, so a bare word like `return` cannot pass by hiding inside a longer line. Per line: trim, strip ONE leading decoration (`/**`, `*/`, `* ` or a lone `*`, `//` at line start, `#` alone or before a space/tab), then the usual normalization. Empty and decoration-only lines are skipped for adjacency on both sides. A quote that is entirely decoration falls back to per-line equality and proves nothing about location. The default mode is unchanged. `opts` is read once inside try/catch: a hostile `opts` (throwing getter, Proxy) means the default mode and never throws.
+- **`rubricVocabulary.bounds.quoteWorkMax`** exposes the `cited` work cap below.
+
+### Changed
+
+- **`cited` has a deterministic work cap (behavior change).** When the distinct non-empty normalized quotes exceed `floor(128 MiB / normalized source length)`, the check is red with the existing `too-many` gap `{ measured, limit }` (25 quotes at the 5 MiB source cap, 1,024 at 128 KiB). No new rule or gap kind, and no clock. A `cited` check with more distinct quotes than the cap now goes red where it used to run. Identical quotes count once. Worst measured case: 30.5 s to 0.08 s.
+- **The `rubric.advanceOn` config error now says "type or tool name".**
+
+### Fixed
+
+- **`cited` normalizes and number-scans each distinct raw quote once.** N claims sharing one large quote cost O(N x quote length) before; measured 300 claims sharing a 1 MiB quote: 10.6 s to about 0.14 s.
+
+### Docs
+
+- README reframed: one gate, two jobs (gate the action, gate the advance); `package.json` description updated to match.
+- `bareguard.context.md` documents the `cited` work cap and `quoteIn` `wholeLines`.
+- A check that joins an in-flight shared live ask gets no approval line of its own, and `rubric_accept` carries the owner's `askId`.
+
+### Internal
+
+- `clipKey` moved to one leaf module, `src/primitives/clip-key.js` (it was byte-identical in `gate.js` and `rwx.js`); no behavior or API change. New tests pin the floor-ask-then-rubric-ask branch in `Gate#check` and `auditView`'s own-`__proto__` skip and depth cut.
+
 ## [0.20.0] - 2026-10-08
 
 ### Added
