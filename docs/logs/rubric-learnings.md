@@ -308,6 +308,13 @@ hamr ruled (PRD §12 #17-#22) with fwd consulted.
 - **Maxreds is terminal by design.** At the cap every advance at that checkpoint denies
   `rubric.exhausted`, even after a later green, until a re-sign or an ACCEPT; a stale green must not
   silently re-open a spent backstop.
+- **Live and later accept differ on an exhausted checkpoint (PRD §12 #23).** Evidence: self-review
+  2026-10-08, repro p5: a live answer that arrived after the verdict moved on still wrote an ACCEPT,
+  which reset the red count and lifted the signed `maxReds` wall (fixed in aa9cbc7: the live write
+  re-checks, inside the lock, that the latest verdict is the green for that `outputSha` and that the
+  checkpoint is not exhausted). `recordAccept` keeps working on an exhausted checkpoint on purpose:
+  it is a deliberate human decision about a known green, which §6 already names as a way out
+  ("terminal until a re-sign or ACCEPT"). Rejected: make both identical so only a re-sign lifts it.
 - **To try: Needle** (cactus-compute/needle). A 29-121M on-device tool-calling model with
   grammar-constrained JSON (would remove the malformed-reply class) and a 0-1 confidence it may never
   decide on (Law 8). Candidate caller-side cheap `locate` judge, quotes verified by bareguard. Its own
