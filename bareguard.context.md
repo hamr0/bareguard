@@ -274,7 +274,7 @@ THE 6 STEPS (first match wins; all action severity unless noted)
 
 AFTER THE 6 STEPS (only when a `rubric` is configured; deny-only, Law 9)
   R. rubric advance rules           → deny  (rubric.invalid on every action; for an action whose
-                                      `type` is in `rubric.advanceOn`: rubric.unminted → rubric.exhausted →
+                                      `type` or valid `tool` is in `rubric.advanceOn`: rubric.unminted → rubric.exhausted →
                                       rubric.stopped → rubric.red → rubric.output-mismatch → rubric.needs-accept,
                                       which is an ask on an `accept: "live"` checkpoint). Runs after the floor,
                                       so it can add a deny and never turn a floor deny/ask into an allow.
@@ -721,7 +721,7 @@ await gate.recordAccept({ checkpoint, outputSha, by, at?, askId? })  // HARNESS-
 
 A drafting LLM reads `rubricVocabulary` (frozen; every rule with its exact fields, types, bounds and defaults) and may use only those check types; do not hand-copy it into prompts or docs, generate from it. `maxReds` and `onExhausted` are fields of the SIGNED spec, never gate keys (a gate key of either name throws at construct). `gate.checkStep` takes no verdict and no `priorBaselines`: there is no way to hand the gate a verdict. The exported `checkStep(rubric, checkpoint, output, opts)` is the pure form for agents with no Gate; it mints nothing the gate can see.
 
-**Deny rules on the advance** (only actions whose `type` is in `advanceOn` are examined; each rule can only ADD a deny):
+**Deny rules on the advance** (only actions whose `type` or valid `tool` is in `advanceOn` are examined; each rule can only ADD a deny). Name the advance action with a reserved name that is no real tool's name (e.g. `fwdloop.advance`): an `advanceOn` entry equal to a real tool name (e.g. `write`) would run the rubric on the model's ordinary tool calls and could deny them:
 
 | Rule | Meaning |
 |---|---|

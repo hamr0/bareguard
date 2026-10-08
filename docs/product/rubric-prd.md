@@ -569,8 +569,12 @@ bounded at the source, redacted, then line-capped by the existing `LINE_FIELDS` 
 phases: `rubric` (one per mint: verdict, bounded gaps with `gapsTotal`, `fault` for stopped, `reds`),
 `rubric_baseline`, `rubric_accept` (`source: "live" | "later"`) and `rubric_accept_refused`.
 
-**Interactions.** Independent of `rwx` / `tools.allowlist` mode (`advanceOn` keys on
-`action.type`). A check spends no budget; a judge call's cost is the caller's to report through the
+**Interactions.** Independent of `rwx` / `tools.allowlist` mode. `advanceOn` matches `action.type` OR a valid
+`action.tool` (a non-empty string; `tool` is an identity field, so either hit makes the action an
+advance; a non-string/empty `tool` never matches and `tool: null` is absent). RULED 2026-10-08, with
+fwdloop and bareloop consulted; it only tightens. Name the advance action with a reserved name that is no
+real tool's name (e.g. `fwdloop.advance`): an `advanceOn` entry equal to a real tool name (e.g. `write`)
+would run the rubric on the model's ordinary tool calls and could deny them. A check spends no budget; a judge call's cost is the caller's to report through the
 budget path. `humanChannel` is reached only via `requiresHuman`, `onExhausted: "ask"` (Later) or the
 existing Axis B routing.
 

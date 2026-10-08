@@ -111,6 +111,43 @@ test("Law 9: a rubric cannot turn a floor allow into anything but allow-or-deny:
   assert.equal((await gate.check({ type: "bash", args: { command: "ls" } })).outcome, "allow");
 });
 
+// --- advanceOn: type OR tool (ruled 2026-10-08, fwdloop + bareloop consulted) ---------
+
+test("advanceOn matches action.type OR a valid action.tool", async (t) => {
+  const { gate } = await mk(t);
+  const r = await gate.checkStep("resume", BAD, {});
+  // tool matches, type is off-list -> examined (red)
+  const a = await gate.check({ type: "x", tool: "done", checkpoint: "resume", outputSha: r.outputSha });
+  assert.equal(a.outcome, "deny"); assert.equal(a.rule, "rubric.red");
+  // type matches, tool is something else -> still examined
+  const b = await gate.check({ type: "done", tool: "other", checkpoint: "resume", outputSha: r.outputSha });
+  assert.equal(b.rule, "rubric.red");
+  // tool:null is absent; type match still works
+  const c = await gate.check({ type: "done", tool: null, checkpoint: "resume", outputSha: r.outputSha });
+  assert.equal(c.rule, "rubric.red");
+  // both off-list -> unaffected
+  const d = await gate.check({ type: "x", tool: "y", checkpoint: "resume", outputSha: r.outputSha });
+  assert.equal(d.outcome, "allow");
+  const e = await gate.check({ type: "x", tool: null });
+  assert.equal(e.outcome, "allow");
+});
+
+test("advanceOn: an invalid tool is never an advance match and never crashes; tools.invalidTool denies it under an allowlist", async (t) => {
+  const { gate } = await mk(t);
+  for (const bad of [42, "", {}, [], true]) {
+    const x = await gate.check({ type: "x", tool: bad });
+    assert.equal(x.outcome, "allow", `rubric alone does not treat tool ${JSON.stringify(bad)} as an advance`);
+  }
+  // type still matches with a bad tool: examined (unminted checkpoint here)
+  const y = await gate.check({ type: "done", tool: 42, checkpoint: "resume" });
+  assert.equal(y.outcome, "deny");
+  // with a tools primitive configured the floor denies it first
+  const g2 = new Gate({ rubric: rubricCfg(), tools: { allowlist: ["x", "done"] } });
+  await g2.init();
+  const z = await g2.check({ type: "x", tool: 42 });
+  assert.equal(z.outcome, "deny"); assert.equal(z.rule, "tools.invalidTool");
+});
+
 // --- deny rules ----------------------------------------------------------------
 
 test("each deny rule fires on its own case; non-gating never denies", async (t) => {

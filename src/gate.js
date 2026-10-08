@@ -1526,7 +1526,11 @@ export class Gate {
     try { cfg = readRubricConfig(this.cfg.rubric); sha = this.cfg.rubric?.sha256; } catch { cfg = { ok: false, why: "rubric config is unreadable" }; }
     if (!cfg.ok) return deny("rubric.invalid", cfg.why);
     if (sha !== rb.sha) return deny("rubric.invalid", "rubric.sha256 differs from the signed rubric this gate verified at construct");
-    if (!cfg.advanceOn?.has(action?.type)) return null;
+    // An advance is `type` OR a valid `tool` in advanceOn (`tool` is an identity field; ruled
+    // 2026-10-08). A non-string / empty `tool` never counts as a match (it cannot be a name),
+    // and never throws; `tools.invalidTool` is the floor's call, not the rubric's.
+    const t = action?.tool;
+    if (!(cfg.advanceOn?.has(action?.type) || (typeof t === "string" && t !== "" && cfg.advanceOn?.has(t)))) return null;
     const cp = action.checkpoint;
     if (typeof cp !== "string" || !Object.hasOwn(rb.rubric.checkpoints, cp)) {
       return deny("rubric.unminted", `no rubric verdict exists for checkpoint ${typeof cp === "string" ? JSON.stringify(clipKey(cp)) : "(none given)"}`);

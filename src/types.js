@@ -428,7 +428,7 @@ export {};
  * @typedef {object} RubricConfig
  * @property {object} spec  The rubric spec (see `createRubric`).
  * @property {string} sha256  `rubricSha(spec)`, the fingerprint the human signed.
- * @property {string|string[]} advanceOn  Action type(s) that count as "advance".
+ * @property {string|string[]} advanceOn  Action name(s) that count as "advance": an action whose `type` OR valid `tool` is listed. Use a reserved name that is no real tool's name (e.g. `fwdloop.advance`).
  */
 
 /**
