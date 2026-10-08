@@ -166,6 +166,7 @@ console.log(s.verdict, d.outcome, d.rule);                          // green all
 
 // Gate-less agents: the pure helpers.
 console.log(quoteIn("lead time", "The **lead  time** fell"));      // { ok: true }  (** and whitespace forgiven)
+console.log(quoteIn("time", " * lead time", { wholeLines: true }));   // { ok: false, why: "not-found" }  (opt-in: whole lines only)
 console.log(numbersInQuote("4 hours", "2 weeks"));                 // { ok: false, missing: ["4"] }
 ```
 

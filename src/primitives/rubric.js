@@ -1136,26 +1136,71 @@ function normalizeForQuote(s) {
   return s.split("**").join("").split("__").join("").replace(/\s+/g, " ").trim();
 }
 
+// wholeLines mode (opt-in). Per line: trim, strip ONE leading comment decoration, then
+// normalizeForQuote. Decoration is stripped from the RAW line, before "**" removal, because
+// "/**" would otherwise normalize to "/". A line that is ONLY decoration ("/**", "*/", "//",
+// "*", "#") would strip to "" and could never be quoted, so it keys as itself (whitespace
+// collapsed, nothing else removed). Applied identically to quote and source lines.
+function wholeLineKey(line) {
+  const t = line.trim();
+  if (t === "") return "";
+  let rest = t;
+  if (t.startsWith("/**")) rest = t.slice(3);
+  else if (t.startsWith("*/")) rest = t.slice(2);
+  else if (t.startsWith("//")) rest = t.slice(2);
+  else if (t === "*" || t.startsWith("* ") || t.startsWith("*\t")) rest = t.slice(1);
+  else if (t.startsWith("# ") || t.startsWith("#\t")) rest = t.slice(1); // "#include", "#!" stay whole
+  const n = normalizeForQuote(rest);
+  if (n !== "") return n;
+  return rest === t ? "" : t.replace(/\s+/g, " "); // only-decoration line is itself; only-markers is empty
+}
+
+function wholeLineKeys(text) {
+  const keys = [];
+  for (const line of text.split(/\r\n|\r|\n/)) {
+    const k = wholeLineKey(line);
+    if (k !== "") keys.push(k);
+  }
+  return keys;
+}
+
 /**
  * Is `quote` in `source`? Minimal normalization on both sides: whitespace runs
  * collapse to one space (then trim), and `**` and `__` are removed. Then plain
  * substring containment (not line-wise). Case-sensitive. An empty quote (after
  * normalizing) is not ok; a source over 5 MiB (5 * 1024 * 1024 UTF-8 bytes) is not ok.
+ *
+ * Opt-in `opts.wholeLines === true` switches to whole-line matching: the quote and the
+ * source are split into lines (CRLF ok), each line is normalized on its own and one
+ * leading comment decoration is stripped (`/**`, `*` + space or a lone `*`, `*` + `/`, `//`,
+ * and `#` only when a space follows, so `#include` stays whole; a `//` mid-line is never
+ * touched). A line that is only decoration (`/**`, `*` + `/`) is compared as itself. Every
+ * non-empty quote line must EQUAL a whole non-empty source line (equality, not substring), so a
+ * fragment of a line is not-found. Any `opts` other than an object with `wholeLines === true`
+ * (absent, non-object, non-boolean `wholeLines`) means the default mode; it never throws.
  * @param {string} quote
  * @param {string} source
+ * @param {{wholeLines?: boolean}} [opts]
  * @returns {{ok: boolean, why?: string}}
- * @when Reach for this to check that a quote a model returned really appears in the frozen text it claims to cite, forgiving only markdown bold and reflowed whitespace — so a paraphrase or a changed word fails, but a quote copied across a line wrap or out of a bold run passes.
+ * @when Reach for this to check that a quote a model returned really appears in the frozen text it claims to cite, forgiving only markdown bold and reflowed whitespace — so a paraphrase or a changed word fails, but a quote copied across a line wrap or out of a bold run passes. Pass `{ wholeLines: true }` when a bare word like "return" must not pass by hiding inside a longer line.
  * @category rubric
- * @signature quoteIn(quote: string, source: string) => { ok: boolean, why?: "not-a-string"|"source-too-large"|"empty-quote"|"not-found" }
- * @fails Never throws. A non-string argument, an empty quote and an oversize source each return `{ ok: false, why }`. Plain substring search, no regex built from input.
+ * @signature quoteIn(quote: string, source: string, opts?: { wholeLines?: boolean }) => { ok: boolean, why?: "not-a-string"|"source-too-large"|"empty-quote"|"not-found" }
+ * @fails Never throws. A non-string argument, an empty quote and an oversize source each return `{ ok: false, why }`. A bad `opts` is ignored (default mode). Plain substring or Set lookup, no regex built from input.
  * @example
  * import { quoteIn } from "bareguard";
  * quoteIn("ships in 2 weeks", "It **ships in\n2 weeks**.").ok; // true
  * quoteIn("ships in 3 weeks", "It ships in 2 weeks.").ok;      // false
+ * quoteIn("ships", " * It ships in 2 weeks.", { wholeLines: true }).ok; // false (not a whole line)
  */
-export function quoteIn(quote, source) {
+export function quoteIn(quote, source, opts) {
   if (typeof quote !== "string" || typeof source !== "string") return { ok: false, why: "not-a-string" };
   if (Buffer.byteLength(source, "utf8") > SOURCE_CAP_BYTES) return { ok: false, why: "source-too-large" };
+  if (opts !== null && typeof opts === "object" && opts.wholeLines === true) {
+    const qLines = wholeLineKeys(quote);
+    if (qLines.length === 0) return { ok: false, why: "empty-quote" };
+    const have = new Set(wholeLineKeys(source));
+    return qLines.every((k) => have.has(k)) ? { ok: true } : { ok: false, why: "not-found" };
+  }
   const q = normalizeForQuote(quote);
   if (q === "") return { ok: false, why: "empty-quote" };
   return normalizeForQuote(source).includes(q) ? { ok: true } : { ok: false, why: "not-found" };

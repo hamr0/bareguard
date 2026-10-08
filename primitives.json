@@ -166,11 +166,11 @@
     {
       "name": "quoteIn",
       "category": "rubric",
-      "when": "Reach for this to check that a quote a model returned really appears in the frozen text it claims to cite, forgiving only markdown bold and reflowed whitespace — so a paraphrase or a changed word fails, but a quote copied across a line wrap or out of a bold run passes.",
+      "when": "Reach for this to check that a quote a model returned really appears in the frozen text it claims to cite, forgiving only markdown bold and reflowed whitespace — so a paraphrase or a changed word fails, but a quote copied across a line wrap or out of a bold run passes. Pass `{ wholeLines: true }` when a bare word like \"return\" must not pass by hiding inside a longer line.",
       "import": "import { quoteIn } from 'bareguard'",
-      "signature": "quoteIn(quote: string, source: string) => { ok: boolean, why?: \"not-a-string\"|\"source-too-large\"|\"empty-quote\"|\"not-found\" }",
-      "fails": "Never throws. A non-string argument, an empty quote and an oversize source each return `{ ok: false, why }`. Plain substring search, no regex built from input.",
-      "example": "import { quoteIn } from \"bareguard\";\nquoteIn(\"ships in 2 weeks\", \"It **ships in\\n2 weeks**.\").ok; // true\nquoteIn(\"ships in 3 weeks\", \"It ships in 2 weeks.\").ok;      // false"
+      "signature": "quoteIn(quote: string, source: string, opts?: { wholeLines?: boolean }) => { ok: boolean, why?: \"not-a-string\"|\"source-too-large\"|\"empty-quote\"|\"not-found\" }",
+      "fails": "Never throws. A non-string argument, an empty quote and an oversize source each return `{ ok: false, why }`. A bad `opts` is ignored (default mode). Plain substring or Set lookup, no regex built from input.",
+      "example": "import { quoteIn } from \"bareguard\";\nquoteIn(\"ships in 2 weeks\", \"It **ships in\\n2 weeks**.\").ok; // true\nquoteIn(\"ships in 3 weeks\", \"It ships in 2 weeks.\").ok;      // false\nquoteIn(\"ships\", \" * It ships in 2 weeks.\", { wholeLines: true }).ok; // false (not a whole line)"
     },
     {
       "name": "redact",
