@@ -33,7 +33,14 @@ import { resolveWithSymlinks, findSymlinkComponent, within, norm } from "./fs.js
  * @property {string|number} [limit]
  * @property {string} [direction]
  * @property {string[]} [items]
- * @property {number} [itemsTotal] set only when `items` was truncated
+ * @property {number} [itemsTotal] set only when `items` (or `keys`, or the per-section gaps of one `sectionWords` check) was truncated
+ * @property {string} [section] `sectionWords` only: the signed section name (never clipped)
+ * @property {number} [words] `sectionWords` only: the section's measured word count
+ * @property {number} [asked] `sectionWords` only: the signed `wordsPerSection`
+ * @property {number} [lo] `sectionWords` only: the inclusive lower bound, `ceil(asked * 0.8)`
+ * @property {number} [hi] `sectionWords` only: the inclusive upper bound, `floor(asked * 1.2)`
+ * @property {string[]} [keys] `allowedKeys` only: the output's own keys that are not allowed (insertion order, clipped, bounded)
+ * @property {string[]} [allowed] `allowedKeys` only: the signed allowed keys (never clipped)
  *
  * @typedef {Object} Fault
  * An instrument failure (`stopped`): for the runner, never the worker.
@@ -269,6 +276,12 @@ function countWords(text, markers) {
   return n;
 }
 
+/** Words on ONE line, forgiving (a leading '#' run is not a word). */
+function lineWords(line) {
+  const s = stripLeadingHashes(line).trim();
+  return s === "" ? 0 : s.split(/\s+/).length;
+}
+
 function countNonEmptyLines(text) {
   let n = 0;
   for (const line of splitLines(text)) if (line.trim() !== "") n++;
@@ -380,6 +393,83 @@ function runSectionOrder(ctx, c) {
   if (offenders.length === 0) return OK;
   const kind = ["missing", "out-of-order"].filter((k) => kinds.has(k)).join(",");
   return red(kind, { measured: offenders.length, limit: c.names.length, ...boundItems(offenders, true) });
+}
+
+/**
+ * `sectionWords` (ported from fwdloop's closers.js `wordsPerSection`, M4e amendment 15): each listed section's
+ * own words must be within +-20% of `wordsPerSection`, inclusive: lo = ceil(N * 0.8), hi = floor(N * 1.2).
+ * A section's words = the words on the lines after its heading up to the next FOUND listed heading, or the end
+ * (an unlisted heading stays inside it); text before the first found heading belongs to no section. Headings
+ * are the forgiving ones and are found by the same forward search as `sectionOrder`; a listed section that is
+ * missing or out of order is simply not measured here (fwdloop reds it in its separate sections check: pair
+ * this rule with `sectionOrder`). One gap per section outside the band.
+ */
+function runSectionWords(ctx, c) {
+  const t = textField(ctx, c.field);
+  if (t.gap) return t;
+  const lines = splitLines(t.text);
+  /** @type {Map<string, number[]>} heading text -> line indexes */
+  const positions = new Map();
+  lines.forEach((line, k) => {
+    const h = forgivingHeading(line);
+    if (h === "") return;
+    const l = positions.get(h);
+    if (l) l.push(k);
+    else positions.set(h, [k]);
+  });
+  const starts = [];
+  let from = 0; // a line index; the search moves past a FOUND heading only
+  for (const name of c.names) {
+    const list = positions.get(nameKey(name, false));
+    if (!list) continue;
+    let lo = 0;
+    let hi = list.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (list[mid] < from) lo = mid + 1;
+      else hi = mid;
+    }
+    if (lo === list.length) continue;
+    from = list[lo] + 1;
+    starts.push({ name, line: list[lo] });
+  }
+  const lo = Math.ceil((c.wordsPerSection * 8) / 10);
+  const hi = Math.floor((c.wordsPerSection * 12) / 10);
+  const gaps = [];
+  for (let i = 0; i < starts.length; i++) {
+    const end = i + 1 < starts.length ? starts[i + 1].line : lines.length;
+    let n = 0;
+    for (let k = starts[i].line + 1; k < end; k++) n += lineWords(lines[k]);
+    if (n < lo || n > hi) gaps.push({ kind: "section-words", section: starts[i].name, words: n, asked: c.wordsPerSection, lo, hi });
+  }
+  if (gaps.length === 0) return OK;
+  if (gaps.length > MAX_ITEMS) {
+    const total = gaps.length;
+    return { gaps: gaps.slice(0, MAX_ITEMS).map((g) => ({ ...g, itemsTotal: total })) };
+  }
+  return { gaps };
+}
+
+/**
+ * `allowedKeys` (ported from fwdloop's closeSoftgreen extra-key check): red when the output has an own
+ * enumerable key that is not in the signed list. A plain-string output is the single field `text`. Keys are
+ * reported in the output's own insertion order (Object.keys, as fwdloop), clipped and bounded; the signed
+ * allowed list rides the gap unclipped. An unreadable key list (hostile Proxy) is red, never a throw.
+ */
+function runAllowedKeys(ctx, c) {
+  let extra;
+  try {
+    const allowed = new Set(c.keys);
+    extra = Object.keys(ctx.fields).filter((k) => !allowed.has(k));
+  } catch {
+    return red("unreadable");
+  }
+  if (extra.length === 0) return OK;
+  return red("extra-keys", {
+    keys: extra.slice(0, MAX_ITEMS).map((k) => clip(k)),
+    allowed: [...c.keys],
+    ...(extra.length > MAX_ITEMS ? { itemsTotal: extra.length } : {}),
+  });
 }
 
 /** Forgiving: case-insensitive substring. Strict: ALSO an exact substring (so never looser). */
@@ -736,6 +826,8 @@ const RULES = {
   maxLines: { fields: { field: FIELD, value: COUNT }, run: runCountRule(countNonEmptyLines, "at-most", (n, v) => n > v) },
   sections: { fields: { field: FIELD, names: LIST, strict: STRICT }, run: runSections },
   sectionOrder: { fields: { field: FIELD, names: LIST, strict: STRICT }, run: runSectionOrder },
+  sectionWords: { fields: { field: FIELD, names: LIST, wordsPerSection: COUNT }, run: runSectionWords },
+  allowedKeys: { fields: { keys: LIST }, run: runAllowedKeys },
   mustCarry: { fields: { field: FIELD, phrases: LIST, strict: STRICT }, run: runMustCarry },
   blockLines: { fields: { field: FIELD, size: COUNT, phrases: LIST, strict: STRICT }, run: runBlockLines },
   in: { fields: { field: FIELD, values: LIST }, run: runIn(true) },
@@ -921,7 +1013,7 @@ function validateCheck(c, where, inputNames) {
       continue;
     }
     checkValue(d, v, `${where}.${name}`);
-    if ((rule === "sections" || rule === "sectionOrder") && name === "names") {
+    if ((rule === "sections" || rule === "sectionOrder" || rule === "sectionWords") && name === "names") {
       // A heading line's trailing ":" is stripped from the LINE, never from the name, so such a name could never match.
       v.forEach((n, i) => {
         if (n.trim().endsWith(":")) throw fail(`${where}.names[${i}]`, `${JSON.stringify(n)} ends in ":", which can never match (the ":" is stripped from the heading line, not the name); drop the ":"`);
@@ -1101,11 +1193,39 @@ export function numbersInQuote(claim, quote) {
 // --- renderGaps --------------------------------------------------------------
 
 /**
+ * The two gaps that render as a plain sentence instead of a JSON row (fwdloop's strike detection keys on these
+ * exact strings). null = not one of them, or a field is missing / the wrong type / unreadable: use the JSON row.
+ */
+function renderSentence(g) {
+  try {
+    const kind = g.kind;
+    if (kind === "section-words") {
+      const { section, words, asked, lo, hi } = g;
+      if (typeof section !== "string" || [words, asked, lo, hi].some((n) => typeof n !== "number")) return null;
+      return `${section}: ${words} words, about ${asked} asked (${lo}-${hi})`;
+    }
+    if (kind === "extra-keys") {
+      const { keys, allowed } = g;
+      if (!Array.isArray(keys) || !Array.isArray(allowed) || allowed.length === 0) return null;
+      const q = (a) => a.map((k) => `"${String(k)}"`).join(", ");
+      const al = q(allowed);
+      return `artifact has key(s) ${q(keys)} besides ${al}; the check reads ${al} only, so put the whole answer in ${al}`;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+/**
  * A deterministic one-string render of a gap list: each gap becomes a JSON array
  * of its fields in a FIXED order [key, check, kind, field, measured, limit,
  * direction, items, itemsTotal] (absent = null), and the entries are joined by
- * "; " in the order given (the minted order is signed check order). JSON makes the
- * render injective, so the same failing state always gives the same string and
+ * "; " in the order given (the minted order is signed check order). The two gaps
+ * `sectionWords` (kind `section-words`) and `allowedKeys` (kind `extra-keys`) render as a plain
+ * sentence instead, exactly: `<section>: <words> words, about <asked> asked (<lo>-<hi>)` and
+ * `artifact has key(s) "k1", "k2" besides "text"; the check reads "text" only, so put the whole answer in "text"`.
+ * JSON makes the other rows' render injective, so the same failing state always gives the same string and
  * different states give different strings.
  * @param {Gap[]} gaps
  * @returns {string}
@@ -1123,6 +1243,11 @@ export function renderGaps(gaps) {
   const parts = [];
   for (const g of gaps) {
     if (g === null || typeof g !== "object") continue;
+    const sentence = renderSentence(g);
+    if (sentence !== null) {
+      parts.push(sentence);
+      continue;
+    }
     const row = ["key", "check", "kind", "field", "measured", "limit", "direction", "items", "itemsTotal"].map((k) => {
       try {
         const v = g[k];
@@ -1152,7 +1277,7 @@ function mintGap(checkpoint, c, partial) {
   const g = { key: `${checkpoint}:${c.id}`, checkpoint, check: c.rule, id: c.id };
   const field = c.field ?? c.claims;
   if (field !== undefined) g.field = field;
-  for (const k of ["kind", "measured", "limit", "direction", "items", "itemsTotal"]) {
+  for (const k of ["kind", "measured", "limit", "direction", "items", "itemsTotal", "section", "words", "asked", "lo", "hi", "keys", "allowed"]) {
     let v = partial[k];
     if (v === undefined) continue;
     g[k] = v;
@@ -1275,6 +1400,7 @@ export async function checkStep(rubric, checkpoint, output, opts) {
         res = stop("exception", errorDetail(e));
       }
       if (res.gap) reds.push(mintGap(checkpoint, c, res.gap));
+      else if (res.gaps) for (const g of res.gaps) reds.push(mintGap(checkpoint, c, g)); // sectionWords: one gap per section
       else if (res.fault) faults.push({ key: `${checkpoint}:${c.id}`, checkpoint, id: c.id, kind: res.fault.kind, detail: res.fault.detail });
     }
   }

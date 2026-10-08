@@ -276,6 +276,18 @@ and hamr RULED all nine (PRD §12, 2026-10-08 #6-#13).
 - **Fake-green hole (from loop).** `cited` with zero claims on a non-empty output was vacuously
   green, so a worker could pass by citing nothing. Now red `no-claims`, independent of `complete`.
 
+### H. fwdloop ports: `sectionWords` and `allowedKeys` (2026-10-08, PRD §12 #25, #26)
+
+Evidence: fwdloop M4e amendment 15 added `wordsPerSection` to its softgreen close (each section within
++-20%, `lo = ceil(0.8N)`, `hi = floor(1.2N)`), and a live fwdloop run had the model hide its real answer
+in an unchecked `lines` field next to a fine-looking `text`, so every text check passed over an answer
+nobody checked. fwdloop answered with an extra-key red (`closeSoftgreen`). hamr ruled that bareguard's
+forgiving defaults keep matching `closers.js`, so both checks were ported as general rules, the extra-key
+sentence without the word "softgreen" and with the signed allowed key(s) in place of the literal `text`.
+Kept from fwdloop on purpose: a missing or out-of-order section is not measured by `sectionWords` (the
+sections check reds it), and extra keys are reported in insertion order. Not carried over: `ignoreKeys`
+(the caller strips `done`/`blocker`) and any `strict` on `sectionWords` (it could only be looser).
+
 ## L8b. 2026-10-08 Module 2 (the gate): what the spec left open, and what was ruled
 
 Module 2 wired the rubric into the Gate. The PRD said "the runner mints, the gate reads" but never
