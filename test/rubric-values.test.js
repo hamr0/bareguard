@@ -240,3 +240,35 @@ test("cited dedupe: identical normalized quotes count once toward the cap and gi
   assert.equal(gap(r).measured, 5);
   assert.equal(gap(r).limit, 7);
 });
+
+test("cited dedupe: N claims sharing ONE big number-heavy quote scan that quote's numbers once (counted, not timed)", async () => {
+  const bigQuote = Array.from({ length: 100000 }, (_, i) => `n${i}`).join(" "); // ~1 MiB of number tokens
+  const src = `intro ${bigQuote} outro`;
+  const N = 2000;
+  const claims = Array.from({ length: N }, () => ({ claim: "uses n5 and n77", quote: bigQuote }));
+  // Count big-string `.match` calls (the number-token scan) without a clock.
+  const orig = String.prototype.match;
+  let bigScans = 0;
+  String.prototype.match = function (re) {
+    if (this.length > 100000 && re instanceof RegExp && re.source === "\\d+(?:\\.\\d+)?") bigScans++;
+    return orig.call(this, re);
+  };
+  let r;
+  try { r = await citedOver(src, claims); } finally { String.prototype.match = orig; }
+  assert.equal(r.verdict, "green");
+  assert.equal(bigScans, 1, "the shared raw quote's numbers are scanned once, not once per claim");
+});
+
+test("cited dedupe: differently-worded claims sharing one quote each keep their own #i:numbers: entry", async () => {
+  const src = "pays 2 weeks and 8 days, plus 3.5 percent";
+  const quote = "pays 2 weeks and 8 days";
+  const r = await citedOver(src, [
+    { claim: "pays 2 weeks", quote },
+    { claim: "pays 4 weeks and 9 days", quote },
+    { claim: "pays 4 and 4 and 7 days", quote },
+    { claim: "pays 8 days", quote },
+    { claim: "pays 3.5 percent", quote },
+  ]);
+  assert.equal(gap(r).kind, "unsupported");
+  assert.deepEqual(gap(r).items, ["#1:numbers:4,9", "#2:numbers:4,7", "#4:numbers:3.5"]);
+});

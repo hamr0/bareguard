@@ -615,29 +615,33 @@ function runCited(ctx, c) {
   // `includes` over the source, whatever the quote's length (measured flat in quote length).
   // Over the cap = the existing `too-many` gap (measured = distinct quotes, limit = how many
   // this source size allows). Pure function of the inputs, so the verdict is deterministic.
-  const norm = cl.claims.map((cc) => {
+  const normQuotes = cl.claims.map((cc) => {
     const claim = ownString(cc, "claim");
     const quote = ownString(cc, "quote");
     return claim === undefined || quote === undefined ? undefined : normalizeForQuote(quote);
   });
   if (!tooBig) {
     const distinct = new Set();
-    for (const q of norm) if (q !== undefined && q !== "") distinct.add(q);
+    for (const q of normQuotes) if (q !== undefined && q !== "") distinct.add(q);
     const limit = Math.floor(QUOTE_WORK_CAP / Math.max(src.length, 1));
     if (distinct.size > limit) return { gap: { kind: "too-many", measured: distinct.size, limit } };
   }
   const found = new Map(); // normalized quote -> found in src (identical quotes searched once; same verdict)
+  const numSets = new Map(); // RAW quote -> its number-token Set (scanned once per distinct raw quote, not per claim)
   const bad = [];
   cl.claims.forEach((cc, i) => {
-    const q = norm[i];
+    const q = normQuotes[i];
     if (q === undefined) return bad.push(`#${i}:malformed`);
     if (tooBig) return bad.push(`#${i}:source-too-large`);
     if (q === "") return bad.push(`#${i}:empty-quote`);
     let hit = found.get(q);
     if (hit === undefined) found.set(q, (hit = src.includes(q)));
     if (!hit) return bad.push(`#${i}:quote-not-found`);
-    const n = numbersInQuote(/** @type {string} */ (ownString(cc, "claim")), /** @type {string} */ (ownString(cc, "quote")));
-    if (!n.ok) return bad.push(`#${i}:numbers:${n.missing.join(",")}`);
+    const rawQuote = /** @type {string} */ (ownString(cc, "quote"));
+    let have = numSets.get(rawQuote);
+    if (have === undefined) numSets.set(rawQuote, (have = new Set(numberTokens(rawQuote))));
+    const missing = missingNumbers(/** @type {string} */ (ownString(cc, "claim")), have);
+    if (missing.length > 0) return bad.push(`#${i}:numbers:${missing.join(",")}`);
   });
   return bad.length === 0 ? OK : red("unsupported", { measured: bad.length, limit: cl.claims.length, ...boundItems(bad) });
 }
@@ -1206,6 +1210,20 @@ export function quoteIn(quote, source, opts) {
   return normalizeForQuote(source).includes(q) ? { ok: true } : { ok: false, why: "not-found" };
 }
 
+// Number-token logic, shared by numbersInQuote and runCited (which scans each distinct raw quote once).
+function numberTokens(s) {
+  return s.match(/\d+(?:\.\d+)?/g) ?? [];
+}
+
+function missingNumbers(claim, have) {
+  const missing = [];
+  for (const t of numberTokens(claim)) {
+    if (!have.has(t) && !missing.includes(t)) missing.push(t);
+    if (missing.length >= MAX_ITEMS) break;
+  }
+  return missing;
+}
+
 /**
  * Does every number in `claim` appear as a number in `quote`? A number token is
  * ASCII digits with an optional fractional part (`\d+(?:\.\d+)?`) and is compared
@@ -1226,12 +1244,7 @@ export function quoteIn(quote, source, opts) {
  */
 export function numbersInQuote(claim, quote) {
   if (typeof claim !== "string" || typeof quote !== "string") return { ok: false, missing: [], why: "not-a-string" };
-  const have = new Set(quote.match(/\d+(?:\.\d+)?/g) ?? []);
-  const missing = [];
-  for (const t of claim.match(/\d+(?:\.\d+)?/g) ?? []) {
-    if (!have.has(t) && !missing.includes(t)) missing.push(t);
-    if (missing.length >= MAX_ITEMS) break;
-  }
+  const missing = missingNumbers(claim, new Set(numberTokens(quote)));
   return { ok: missing.length === 0, missing };
 }
 
