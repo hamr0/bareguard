@@ -1202,7 +1202,7 @@ function hasRun(pat, text) {
  * Opt-in `opts.wholeLines === true` switches to whole-line matching: the quote and the
  * source are split into lines (CRLF ok), each line is normalized on its own and one
  * leading comment decoration is stripped (`/**`, `*` + space or a lone `*`, `*` + `/`, `//`,
- * and `#` only when a space follows, so `#include` stays whole; a `//` mid-line is never
+ * and `#` only as a lone `#` line or before a space or tab, so `#include` stays whole; a `//` mid-line is never
  * touched). A line that is only decoration (`/**`, `*` + `/`) is compared as itself. Lines are
  * compared by equality (not substring), so a fragment of a line is not-found. The quote's lines
  * must match a CONTIGUOUS run of source lines, in order; empty and decoration-only lines
