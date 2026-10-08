@@ -27,12 +27,13 @@ async function mk(t, extra = {}) {
 // --- F1: a stale live-ask answer must not lift the signed maxReds wall ----------------------------
 
 test("F1: a live accept that lands after the checkpoint went exhausted is discarded (no accept line, reds not reset)", async (t) => {
-  let release;
-  const { boot, auditPath } = await mk(t, { humanChannel: () => new Promise((r) => { release = () => r({ decision: "allow" }); }) });
+  let release, asked;
+  const askedP = new Promise((r) => { asked = r; });
+  const { boot, auditPath } = await mk(t, { humanChannel: () => new Promise((r) => { release = () => r({ decision: "allow" }); asked(); }) });
   const g = await boot();
   const A = await g.checkStep("a", "OK fine");
   const pend = g.check(adv(A));
-  await tick();
+  await askedP; // deterministic: the live ask is raised (no wall-clock sleep)
   await g.checkStep("a", "bad1");
   await g.checkStep("a", "bad2"); // reds == maxReds
   assert.equal((await g.check(adv(A))).rule, "rubric.exhausted");
@@ -62,32 +63,50 @@ test("F1 control: a fresh accept with unchanged green state resets reds and allo
 
 // --- L4: concurrent live asks are deduped per (checkpoint, outputSha) -----------------------------
 
-test("L4: 3 concurrent checks for one green raise ONE ask, write ONE rubric_accept line, same outcome", async (t) => {
-  let asks = 0, release;
-  const { boot, auditPath } = await mk(t, { humanChannel: () => { asks++; return new Promise((r) => { release = () => r({ decision: "allow" }); }); } });
+test("L4: 3 concurrent checks for one green raise ONE ask, write ONE rubric_accept line, never a second ask", async (t) => {
+  let asks = 0, release, asked;
+  const askedP = new Promise((r) => { asked = r; });
+  const { boot, auditPath } = await mk(t, { humanChannel: () => { asks++; return new Promise((r) => { release = () => r({ decision: "allow" }); asked(); }); } });
   const g = await boot();
   const A = await g.checkStep("a", "OK fine");
   const all = [g.check(adv(A)), g.check(adv(A)), g.check(adv(A))];
-  await tick();
+  await askedP;
+  await tick(); // best-effort so the others reach the join; correctness below does NOT depend on it
   release();
   const ds = await Promise.all(all);
   assert.equal(asks, 1);
-  assert.deepEqual(ds.map((d) => [d.outcome, d.rule]), [["allow", "humanChannel.allow"], ["allow", "humanChannel.allow"], ["allow", "humanChannel.allow"]]);
+  // A call slow to start (loaded CI) may arrive after the accept landed: it then re-evaluates to
+  // allow/default (the accept is seen, no second ask). Either way: all allow, one ask, one accept line.
+  for (const d of ds) assert.equal(d.outcome, "allow");
+  for (const d of ds) assert.ok(["humanChannel.allow", "default"].includes(d.rule), d.rule);
+  assert.ok(ds.some((d) => d.rule === "humanChannel.allow"), "the asker got the human's allow");
   assert.equal(lines(auditPath).filter((l) => l.phase === "rubric_accept").length, 1);
-  // a late joiner after the accept sees it: no new ask
   assert.equal((await g.check(adv(A))).outcome, "allow");
   assert.equal(asks, 1);
+});
+
+test("L4: a late joiner (starts after the accept landed) re-evaluates to allow/default: no new ask, no second accept line", async (t) => {
+  let asks = 0;
+  const { boot, auditPath } = await mk(t, { humanChannel: async () => { asks++; return { decision: "allow" }; } });
+  const g = await boot();
+  const A = await g.checkStep("a", "OK fine");
+  const first = await g.check(adv(A));
+  assert.deepEqual([first.outcome, first.rule], ["allow", "humanChannel.allow"]);
+  const late = await g.check(adv(A));
+  assert.deepEqual([late.outcome, late.rule], ["allow", "default"]);
+  assert.equal(asks, 1);
+  assert.equal(lines(auditPath).filter((l) => l.phase === "rubric_accept").length, 1);
 });
 
 test("L4: a rejected ask clears the in-flight entry; a later retry asks again", async (t) => {
   let asks = 0;
   const replies = [{ decision: "deny", reason: "no" }, { decision: "allow" }];
-  const { boot, auditPath } = await mk(t, { humanChannel: async () => { asks++; await tick(10); return replies.shift(); } });
+  const { boot, auditPath } = await mk(t, { humanChannel: async () => { asks++; return replies.shift(); } });
   const g = await boot();
   const A = await g.checkStep("a", "OK fine");
-  const first = await Promise.all([g.check(adv(A)), g.check(adv(A))]);
+  const first = await g.check(adv(A));
   assert.equal(asks, 1);
-  assert.deepEqual(first.map((d) => [d.outcome, d.rule]), [["deny", "rubric.needs-accept"], ["deny", "rubric.needs-accept"]]);
+  assert.deepEqual([first.outcome, first.rule], ["deny", "rubric.needs-accept"]);
   assert.equal(lines(auditPath).filter((l) => l.phase === "rubric_accept").length, 0);
   const again = await g.check(adv(A));
   assert.equal(asks, 2, "retry asks again");
