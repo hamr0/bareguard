@@ -581,7 +581,7 @@ written to — `add()` mutates only the gate's own private, construct-time
 deep-copied map. Full contract: `src/gate.js`'s own `add()`/`_addOnce` JSDoc,
 PRD §23.21.
 
-**`gate.rwxTools()`** is `add()`'s read counterpart — added this session to
+**`gate.rwxTools()`** is `add()`'s read counterpart — added in 0.18.0 to
 close a gap the rwx-e2e bench flagged (a harness had no public way to read
 "what does the gate currently believe this key's letter is," only the
 private `gate.cfg.rwx.tools`). Returns a DECOUPLED deep copy of the current
@@ -604,7 +604,7 @@ DECOUPLED copy of every line, in both file and fileless mode — mutating the
 returned array or any line in it, at any depth, can never affect the gate's
 live audit state.
 
-This replaces an earlier documentation call (this session) that blessed
+This replaces an earlier documentation call that blessed
 `gate.audit.readAll()` itself as the replay path. That turned out to be a
 real gap, not just a naming one: `gate.audit` is the LIVE `Audit` instance,
 and `Audit` carries a public `emit()` — any caller holding a `Gate`

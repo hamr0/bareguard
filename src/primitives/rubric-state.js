@@ -9,14 +9,10 @@
 // different (or no) stable `runId` starts with FRESH state, by design and stated
 // plainly in the docs.
 
+import { isPlainObject } from "./plain-object.js";
+
 const MAX_AUDIT_STR = 160;
 const MAX_AUDIT_GAPS = 8;
-
-function isPlain(v) {
-  if (v === null || typeof v !== "object") return false;
-  const p = Object.getPrototypeOf(v);
-  return p === Object.prototype || p === null;
-}
 
 const blank = (s) => typeof s !== "string" || s.trim() === "";
 
@@ -29,11 +25,11 @@ const blank = (s) => typeof s !== "string" || s.trim() === "";
  */
 export function readRubricConfig(r) {
   try {
-    if (!isPlain(r)) return { ok: false, why: "rubric must be a plain object { spec, sha256, advanceOn }" };
+    if (!isPlainObject(r)) return { ok: false, why: "rubric must be a plain object { spec, sha256, advanceOn }" };
     for (const k of Object.keys(r)) {
       if (k !== "spec" && k !== "sha256" && k !== "advanceOn") return { ok: false, why: `rubric.${k} is not a recognised key (spec, sha256, advanceOn)` };
     }
-    if (!isPlain(r.spec)) return { ok: false, why: "rubric.spec must be a plain object" };
+    if (!isPlainObject(r.spec)) return { ok: false, why: "rubric.spec must be a plain object" };
     if (blank(r.sha256)) return { ok: false, why: "rubric.sha256 must be the signed fingerprint string" };
     const a = r.advanceOn;
     const list = typeof a === "string" ? [a] : a;

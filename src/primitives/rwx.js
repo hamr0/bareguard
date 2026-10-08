@@ -34,25 +34,12 @@
 // upgrades an ask into an allow or a deny into anything softer.
 
 import { resolveIdentity, looseIdentity } from "./tool-identity.js";
-
-/**
- * True for a plain object — `{}`-literal shaped, or the null-prototype shape
- * `safeAction()` produces gate-wide. Duplicated from `gate.js` (not imported)
- * to avoid a primitives→gate circular import; identical logic, same reasoning
- * (a `Map`/`Set`/`Date` must not silently read as "unconfigured").
- * @param {*} v value to check
- * @returns {boolean}
- */
-function isPlainObject(v) {
-  if (v === null || typeof v !== "object") return false;
-  const proto = Object.getPrototypeOf(v);
-  return proto === Object.prototype || proto === null;
-}
+import { isPlainObject } from "./plain-object.js";
 
 /**
  * Bound a caller-supplied config key before it is interpolated into an error
  * message or a deny reason (both are unbounded downstream). Duplicated from
- * `gate.js`'s `clipKey` for the same reason as `isPlainObject` above.
+ * `gate.js`'s `clipKey` (not imported) to avoid a primitives→gate circular import.
  * @param {*} k
  * @returns {string}
  */

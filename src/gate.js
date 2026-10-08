@@ -16,6 +16,7 @@ import {
 } from "./primitives/tools.js";
 import { assertRwxConfig, rwxCheck, matchRwxLetter, resolveAgentLetters, clampLetters, normalizeEntry } from "./primitives/rwx.js";
 import { looseIdentity } from "./primitives/tool-identity.js";
+import { isPlainObject } from "./primitives/plain-object.js";
 import { assertArrayElementTypes, findInvalidIndex, findBlankStringIndex } from "./primitives/config-validate.js";
 import { contentDenyCheck, contentAskCheck } from "./primitives/content.js";
 import { flagsDenyCheck, flagsAskCheck } from "./primitives/flags.js";
@@ -455,30 +456,6 @@ const ARRAY_SHAPED_CONFIG = Object.freeze([
 function clipKey(k) {
   const s = String(k);
   return s.length > 64 ? s.slice(0, 64) + "…" : s;
-}
-
-/**
- * True for a plain object — `{}`-literal shaped, or the null-prototype shape
- * `safeAction()` deliberately produces gate-wide (0.6.0) — and false for
- * everything else a config section must not be: an array, a string/number/
- * boolean (primitives coerce through `Object.getPrototypeOf` to their wrapper
- * prototype, e.g. `String.prototype`, never `Object.prototype`), or an exotic
- * object like `Map`/`Set`/`Date`. The prior guard at each of these three call
- * sites was `typeof s !== "object" || Array.isArray(s)`, which a `Map` passes
- * (`typeof` is `"object"`, it is not an `Array`) — so `new Gate({ tools: new
- * Map([["allowlist",["x"]]]) })` constructed with no error, and `s["allowlist"]`
- * on a Map is always `undefined` (Map entries are not own properties), reading
- * as "unconfigured" — full fail-OPEN, same failure as the string-section bug
- * this replaces, just a different exotic type slipping through the same hole.
- * One structural check closes the whole family (Map, Set, Date, anything else
- * with a foreign prototype) instead of enumerating bad types one at a time.
- * @param {*} v value to check
- * @returns {boolean} true if `v` is a plain object (Object.prototype or null prototype)
- */
-function isPlainObject(v) {
-  if (v === null || typeof v !== "object") return false;
-  const proto = Object.getPrototypeOf(v);
-  return proto === Object.prototype || proto === null;
 }
 
 /**
