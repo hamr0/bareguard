@@ -58,7 +58,7 @@ import { resolveWithSymlinks, findSymlinkComponent, within, norm } from "./fs.js
  * @property {"green"|"red"|"stopped"} verdict
  * @property {string} checkpoint
  * @property {string} rubricSha
- * @property {string|null} outputSha sha256 (hex) of the checked bytes; null when the output is not a string
+ * @property {string|null} outputSha sha256 (hex) of `opts.outputBytes`, else of a string output's UTF-8 bytes; null for an object output with no `outputBytes`
  * @property {Gap[]} gaps what the worker may see; [] unless red
  * @property {Fault|null} fault the first fault, when stopped
  * @property {{gaps: Gap[], faults: Fault[]}} full everything, for the audit and the human
@@ -197,6 +197,8 @@ const COUNT = { type: "integer", required: true, min: 1, max: null };
 const LIST = { type: "string-list", required: true, minItems: 1, itemType: "string", nonBlank: true };
 const OPT_LIST = { ...LIST, required: false };
 const NONE_EXIT = { type: "integer", required: false };
+// `text` on EVERY check is the signer's explanation only (Law 6): optional, a string, never decides.
+const EXPLAIN = { type: "explanation", required: false };
 const DIRECTION = { type: "enum", required: true, enum: ["lower-is-better", "higher-is-better"] };
 
 const OK = Object.freeze({});
@@ -250,10 +252,16 @@ function stripLeadingHashes(line) {
   return i === 0 ? line : line.slice(i).trimStart();
 }
 
-function countWords(text, strict) {
+/**
+ * `markers` true = count a leading '#' run as a word (only `maxWords` strict does);
+ * false = strip it (forgiving, and `minWords` in BOTH modes). The raw count is never
+ * below the stripped one, so strict can only make `maxWords` stricter, and `minWords`
+ * strict is exactly forgiving: strict is never the looser result in either direction.
+ */
+function countWords(text, markers) {
   let n = 0;
   for (const line of splitLines(text)) {
-    const s = (strict ? line : stripLeadingHashes(line)).trim();
+    const s = (markers ? line : stripLeadingHashes(line)).trim();
     if (s !== "") n += s.split(/\s+/).length;
   }
   return n;
@@ -273,9 +281,9 @@ function forgivingHeading(line) {
 }
 
 /**
- * Strict ATX heading: the capture of `^#{1,6} +(.+?) *#*$`, or null. Hand-coded
- * (linear): the regex's lazy capture before ` *#*$` backtracks quadratically on
- * long space runs. Pinned against the literal regex by a differential test.
+ * Strict ATX heading: after `#{1,6}` and one or more spaces, the REST of the line is
+ * the heading text, exactly (no closing-`#` stripping, no trimming). null when the line
+ * is not one, or the rest is empty. Hand-coded and linear (no backtracking regex).
  */
 function strictHeading(line) {
   let h = 0;
@@ -283,27 +291,32 @@ function strictHeading(line) {
   if (h < 1 || h > 6 || line.charCodeAt(h) !== 32) return null;
   let s = h;
   while (line.charCodeAt(s) === 32) s++;
-  const body = line.slice(s);
-  if (body === "") return s - h >= 2 ? " " : null; // the regex gives back one space as the capture
-  if (/[\r\u2028\u2029]/.test(body)) return null; // `.` does not match these
-  let k = body.length;
-  while (k > 0 && body.charCodeAt(k - 1) === 35) k--;
-  while (k > 0 && body.charCodeAt(k - 1) === 32) k--;
-  return k === 0 ? body[0] : body.slice(0, k);
+  return s >= line.length ? null : line.slice(s);
 }
 
-/** [{text, pos}] of the heading lines, in order. */
+/**
+ * The comparable keys of the heading lines, in order. Forgiving: the forgiving heading
+ * text. Strict: a (forgiving, strict) pair, so a strict name matches only when BOTH the
+ * exact strict text AND the forgiving text match: strict can never be looser than
+ * forgiving (a name ending in ':' therefore matches in neither mode).
+ */
 function headingsOf(text, strict) {
   const out = [];
   for (const line of splitLines(text)) {
-    const h = strict ? strictHeading(line) : forgivingHeading(line);
-    if (h !== null && h !== "") out.push(h);
+    if (strict) {
+      const sh = strictHeading(line);
+      if (sh !== null) out.push(JSON.stringify([forgivingHeading(line), sh]));
+    } else {
+      const h = forgivingHeading(line);
+      if (h !== "") out.push(h);
+    }
   }
   return out;
 }
 
 function nameKey(name, strict) {
-  return strict ? name : name.trim().toLowerCase();
+  const f = name.trim().toLowerCase();
+  return strict ? JSON.stringify([f, name]) : f;
 }
 
 function boundItems(items) {
@@ -365,12 +378,19 @@ function runSectionOrder(ctx, c) {
   return red(kind, { measured: offenders.length, limit: c.names.length, ...boundItems(offenders) });
 }
 
+/** Forgiving: case-insensitive substring. Strict: ALSO an exact substring (so never looser). */
+function carries(hay, hayLower, phrase, strict) {
+  const f = hayLower.includes(phrase.toLowerCase());
+  return strict ? f && hay.includes(phrase) : f;
+}
+
 function runMustCarry(ctx, c) {
   const t = textField(ctx, c.field);
   if (t.gap) return t;
   const strict = c.strict === true;
-  const has = strict ? t.text.includes(c.text) : t.text.toLowerCase().includes(c.text.toLowerCase());
-  return has ? OK : red("missing", { items: [clip(c.text)] });
+  const lower = t.text.toLowerCase();
+  const missing = c.phrases.filter((p) => !carries(t.text, lower, p, strict));
+  return missing.length === 0 ? OK : red("missing", boundItems(missing));
 }
 
 function runBlockLines(ctx, c) {
@@ -381,14 +401,11 @@ function runBlockLines(ctx, c) {
   if (lines.length === 0) return red("zero-lines", { measured: 0, limit: c.size });
   const kinds = [];
   if (lines.length % c.size !== 0) kinds.push("not-multiple");
-  const phrases = strict ? c.mustCarry : c.mustCarry.map((p) => p.toLowerCase());
   const missing = [];
   for (let i = 0, b = 1; i < lines.length; i += c.size, b++) {
-    let block = lines.slice(i, i + c.size).join(" ");
-    if (!strict) block = block.toLowerCase();
-    phrases.forEach((p, pi) => {
-      if (!block.includes(p)) missing.push(`block ${b}:${c.mustCarry[pi]}`);
-    });
+    const block = lines.slice(i, i + c.size).join(" ");
+    const lower = block.toLowerCase();
+    for (const p of c.phrases) if (!carries(block, lower, p, strict)) missing.push(`block ${b}:${p}`);
   }
   if (missing.length > 0) kinds.push("block-missing");
   if (kinds.length === 0) return OK;
@@ -496,6 +513,8 @@ function runCited(ctx, c) {
   if (sha256Hex(text) !== input.sha256) return stop("missing-measurement", `input ${c.source} does not match its signed sha256`);
   const cl = claimsOf(ctx, c.claims);
   if (cl.gap) return { gap: cl.gap };
+  // A non-empty output that cites nothing is RED, never a vacuous green (independent of `complete`).
+  if (cl.claims.length === 0) return red("no-claims", { measured: 0 });
   const tooBig = Buffer.byteLength(text, "utf8") > SOURCE_CAP_BYTES;
   const src = tooBig ? "" : normalizeForQuote(text);
   const bad = [];
@@ -692,13 +711,13 @@ function runFilesChanged(ctx, c) {
  */
 const RULES = {
   nonEmpty: { fields: { field: FIELD }, run: runNonEmpty },
-  maxWords: { fields: { field: FIELD, value: COUNT, strict: STRICT }, run: runCountRule(countWords, "at-most", (n, v) => n > v) },
-  minWords: { fields: { field: FIELD, value: COUNT, strict: STRICT }, run: runCountRule(countWords, "at-least", (n, v) => n < v) },
+  maxWords: { fields: { field: FIELD, value: COUNT, strict: STRICT }, run: runCountRule((t, strict) => countWords(t, strict), "at-most", (n, v) => n > v) },
+  minWords: { fields: { field: FIELD, value: COUNT, strict: STRICT }, run: runCountRule((t) => countWords(t, false), "at-least", (n, v) => n < v) },
   maxLines: { fields: { field: FIELD, value: COUNT }, run: runCountRule(countNonEmptyLines, "at-most", (n, v) => n > v) },
   sections: { fields: { field: FIELD, names: LIST, strict: STRICT }, run: runSections },
   sectionOrder: { fields: { field: FIELD, names: LIST, strict: STRICT }, run: runSectionOrder },
-  mustCarry: { fields: { field: FIELD, text: { type: "string", required: true, nonBlank: true }, strict: STRICT }, run: runMustCarry },
-  blockLines: { fields: { field: FIELD, size: COUNT, mustCarry: LIST, strict: STRICT }, run: runBlockLines },
+  mustCarry: { fields: { field: FIELD, phrases: LIST, strict: STRICT }, run: runMustCarry },
+  blockLines: { fields: { field: FIELD, size: COUNT, phrases: LIST, strict: STRICT }, run: runBlockLines },
   in: { fields: { field: FIELD, values: LIST }, run: runIn(true) },
   notIn: { fields: { field: FIELD, values: LIST }, run: runIn(false) },
   atMost: {
@@ -716,7 +735,8 @@ const RULES = {
     exactlyOne: ["items", "itemsFrom"],
     run: runComplete,
   },
-  commandExit: { fields: { expectExit: { type: "integer", required: false, default: 0 }, noneExit: NONE_EXIT }, run: runCommandExit },
+  // commandExit takes NO noneExit: it has no liveness scope, so the param would do nothing (refused at createRubric).
+  commandExit: { fields: { expectExit: { type: "integer", required: false, default: 0 } }, run: runCommandExit },
   notWorse: {
     fields: {
       direction: DIRECTION,
@@ -733,9 +753,12 @@ const RULES = {
   },
 };
 
+for (const r of Object.values(RULES)) r.fields.text = EXPLAIN;
+
 // --- rubricVocabulary --------------------------------------------------------
 
 function describeField(name, d) {
+  if (d.type === "explanation") return `${name}?: string (the signer's explanation; never decides)`;
   let t = d.type === "string-list" ? "non-empty list of non-blank strings" : d.type === "name" ? `non-blank string, max ${d.maxLength} chars` : d.type === "string" ? "non-blank string" : d.type;
   if (d.type === "integer" && d.min !== undefined) t = `integer >= ${d.min}`;
   if (d.type === "number") t = "finite number";
@@ -828,6 +851,9 @@ function checkValue(d, v, where) {
     case "boolean":
       if (typeof v !== "boolean") throw fail(where, "must be a boolean");
       return;
+    case "explanation":
+      if (typeof v !== "string") throw fail(where, "must be a string (the signer's explanation)");
+      return;
     case "string-list": {
       if (!Array.isArray(v) || v.length < 1) throw fail(where, "must be a non-empty array of non-blank strings");
       v.forEach((s, i) => {
@@ -878,7 +904,7 @@ function validateCheck(c, where, inputNames) {
  * Validate a rubric spec and return it frozen. Refuses (throws) rather than bends:
  * an unknown check type, an unknown field, a missing required field, a count that
  * is not an integer >= 1, a list that is empty or holds an empty/whitespace-only
- * string, `blockLines` without both `size` and `mustCarry`, `notWorse` without a
+ * string, `blockLines` without both `size` and `phrases`, `commandExit` with `noneExit`, `notWorse` without a
  * `direction`, `__proto__`/`constructor`/`prototype` keys anywhere, and a
  * non-JSON value. The result is a null-prototype deep copy; the caller's object is
  * never held. Pass `{ sha256 }` to also verify the signed fingerprint.
@@ -1106,9 +1132,13 @@ function mintGap(checkpoint, c, partial) {
  * output is the single field `text`; an object output is read by own keys.
  * Caller measurements: `opts.measurements[checkId]`, `opts.items[checkId]`,
  * `opts.inputs[name]` (text of a signed input), `opts.priorBaselines[checkId]`
- * (a seed baseline already recorded for this run). `outputSha` = sha256 of the
- * UTF-8 bytes of a string output (null for an object: bareguard never serializes
- * one to hash it). Async so judge support can be added without an API break.
+ * (a seed baseline already recorded for this run; a different passed baseline is `baseline-conflict`).
+ * `opts.inputs[name]` must hash to the signed `sha256` or the check is `stopped`.
+ * `outputSha` = sha256 of exactly `opts.outputBytes` (a string, or a Buffer/Uint8Array)
+ * when given, for any output type; else of the UTF-8 bytes of a string output; else
+ * null for an object (bareguard never serializes one: such an advance cannot be bound
+ * to its bytes). Precedence: stopped > red > green (a stopped verdict keeps its reds
+ * in `full` only). Async so judge support can be added without an API break.
  * @param {Rubric} rubric
  * @param {string} checkpoint
  * @param {any} output
@@ -1116,7 +1146,7 @@ function mintGap(checkpoint, c, partial) {
  * @returns {Promise<StepResult>}
  * @when Reach for this each time an agent hands over output at a checkpoint: it grades the output against the signed rubric and returns the verdict, the structured gap to feed the retry, or the fault for the runner. Take any command/count measurements yourself first and pass them in — bareguard compares, it never runs a tool.
  * @category rubric
- * @signature checkStep(rubric: Rubric, checkpoint: string, output: string|object, opts?: { measurements?: object, items?: object, inputs?: object, priorBaselines?: object }) => Promise<StepResult>
+ * @signature checkStep(rubric: Rubric, checkpoint: string, output: string|object, opts?: { measurements?: object, items?: object, inputs?: object, priorBaselines?: object, outputBytes?: string|Uint8Array }) => Promise<StepResult>
  * @fails Rejects with a TypeError only for CALLER misuse: a rubric not made by `createRubric`, an unknown checkpoint, a non-object `opts`, or a `judge` option (the judge path is not available yet — refused, not ignored). Never rejects because of the output: any shape, a throwing getter or a Proxy yields red (`happened`/field checks) and a throwing measurement yields stopped. An output that is not a string or a non-array object is red.
  * @example
  * import { createRubric, checkStep } from "bareguard";
@@ -1157,11 +1187,23 @@ export async function checkStep(rubric, checkpoint, output, opts) {
     }
   }
 
+  // outputSha: sha256 of EXACTLY the caller's `outputBytes` (a string as UTF-8) for any output type; else
+  // of a string output's UTF-8 bytes; else null (an object is never serialized here, so it cannot be bound).
+  let outputBytes;
+  try {
+    outputBytes = o.outputBytes;
+  } catch {
+    throw new TypeError("checkStep: opts.outputBytes is unreadable");
+  }
+  if (outputBytes !== undefined && typeof outputBytes !== "string" && !(outputBytes instanceof Uint8Array)) {
+    throw new TypeError("checkStep: opts.outputBytes must be a string or a Buffer/Uint8Array");
+  }
   let outputSha = null;
+  if (outputBytes !== undefined) outputSha = sha256Hex(outputBytes);
+  else if (typeof output === "string") outputSha = sha256Hex(output);
   let fields = null;
   let shapeGap = null;
   if (typeof output === "string") {
-    outputSha = sha256Hex(output);
     fields = Object.create(null);
     fields.text = output;
   } else if (output !== null && typeof output === "object" && !Array.isArray(output)) {

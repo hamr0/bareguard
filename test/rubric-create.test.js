@@ -40,12 +40,18 @@ const refusals = [
   ["empty string in list", spec([{ id: "a", rule: "sections", field: "text", names: ["A", ""] }]), /names\[1\] must be a non-blank string/],
   ["whitespace-only string in list", spec([{ id: "a", rule: "sections", field: "text", names: ["  \t"] }]), /names\[0\] must be a non-blank string/],
   ["list is not an array", spec([{ id: "a", rule: "sections", field: "text", names: "A" }]), /non-empty array/],
-  ["blockLines without size", spec([{ id: "a", rule: "blockLines", field: "text", mustCarry: ["x"] }]), /\.size is required for blockLines/],
-  ["blockLines without mustCarry", spec([{ id: "a", rule: "blockLines", field: "text", size: 3 }]), /\.mustCarry is required for blockLines/],
+  ["blockLines without size", spec([{ id: "a", rule: "blockLines", field: "text", phrases: ["x"] }]), /\.size is required for blockLines/],
+  ["blockLines without phrases", spec([{ id: "a", rule: "blockLines", field: "text", size: 3 }]), /\.phrases is required for blockLines/],
   ["notWorse without direction", spec([{ id: "a", rule: "notWorse", baseline: 0 }]), /\.direction is required for notWorse/],
   ["notWorse direction not an enum member", spec([{ id: "a", rule: "notWorse", baseline: 0, direction: "lower" }]), /direction must be one of/],
   ["notWorse baseline a non-seed string", spec([{ id: "a", rule: "notWorse", baseline: "latest", direction: "lower-is-better" }]), /baseline must be a finite number or "seed"/],
-  ["whitespace-only mustCarry text", spec([{ id: "a", rule: "mustCarry", field: "text", text: "   " }]), /text must be a non-blank string/],
+  ["whitespace-only mustCarry phrase", spec([{ id: "a", rule: "mustCarry", field: "text", phrases: ["   "] }]), /phrases\[0\] must be a non-blank string/],
+  ["empty mustCarry phrases list", spec([{ id: "a", rule: "mustCarry", field: "text", phrases: [] }]), /phrases must be a non-empty array/],
+  ["mustCarry with the old single-phrase `text` and no phrases", spec([{ id: "a", rule: "mustCarry", field: "text", text: "hi" }]), /\.phrases is required for mustCarry/],
+  ["blockLines with an empty phrase", spec([{ id: "a", rule: "blockLines", field: "text", size: 2, phrases: [""] }]), /phrases\[0\] must be a non-blank string/],
+  ["blockLines with the old `mustCarry` list", spec([{ id: "a", rule: "blockLines", field: "text", size: 2, mustCarry: ["x"], phrases: ["x"] }]), /\.mustCarry is not a recognised field/],
+  ["text (explanation) not a string", spec([mw({ text: 5 })]), /text must be a string/],
+  ["noneExit on commandExit (a do-nothing param)", spec([{ id: "a", rule: "commandExit", noneExit: 1 }]), /\.noneExit is not a recognised field/],
   ["blank field name", spec([mw({ field: " " })]), /field must be a non-blank string/],
   ["field name too long", spec([mw({ field: "f".repeat(129) })]), /at most 128/],
   ["duplicate id in a checkpoint", spec([mw(), mw()]), /duplicates id "words-cap"/],
@@ -113,7 +119,7 @@ test("createRubric: hostile spec (throwing getter, throwing Proxy, deep nesting,
 test("createRubric bounds: a huge count is accepted (no maximum); 1 is the minimum", () => {
   for (const v of [1, 1e9, Number.MAX_SAFE_INTEGER, 1e300]) assert.doesNotThrow(() => createRubric(spec([mw({ value: v })])), `value ${v}`);
   assert.throws(() => createRubric(spec([mw({ value: 0 })])));
-  const r = createRubric(spec([{ id: "b", rule: "blockLines", field: "text", size: 1e9, mustCarry: ["x"] }], { reads: 1e9, maxReds: 1e9 }));
+  const r = createRubric(spec([{ id: "b", rule: "blockLines", field: "text", size: 1e9, phrases: ["x"] }], { reads: 1e9, maxReds: 1e9 }));
   assert.equal(r.checkpoints.resume.checks[0].size, 1e9);
 });
 
@@ -121,7 +127,7 @@ test("createRubric accepts every rule's minimal valid shape, and ordered/value r
   assert.doesNotThrow(() => createRubric(spec([
     { id: "a", rule: "max", field: "x", value: -5 },
     { id: "b", rule: "min", field: "x", value: 0 },
-    { id: "c", rule: "commandExit", expectExit: 3, noneExit: 1 },
+    { id: "c", rule: "commandExit", expectExit: 3, text: "the signer's note" },
     { id: "d", rule: "notWorse", direction: "higher-is-better", baseline: "seed" },
   ])));
 });
@@ -153,7 +159,7 @@ test("rubricSha: key order never matters; array order does; a rubric hashes the 
 });
 
 test("rubricSha: changing ANY leaf changes the hash (goal, ids, values, judge identity, inputs, flags)", () => {
-  const base = spec([mw(), { id: "m", rule: "mustCarry", field: "text", text: "hi" }], {
+  const base = spec([mw(), { id: "m", rule: "mustCarry", field: "text", phrases: ["hi"] }], {
     inputs: [{ name: "doc", sha256: "a".repeat(64) }],
     judge: { provider: "jev", model: "jev-1.13.0", cutoff: 0.5, band: 0.1 },
     reads: 2, maxReds: 3, onExhausted: "fail",
@@ -224,7 +230,11 @@ test("rubricVocabulary: documents bounds and defaults (count >= 1 no max, strict
   assert.deepEqual(v.maxWords.fields.strict, { type: "boolean", required: false, default: false });
   assert.equal(v.commandExit.fields.expectExit.default, 0);
   assert.deepEqual(v.blockLines.fields.size, { type: "integer", required: true, min: 1, max: null });
-  assert.equal(v.blockLines.fields.mustCarry.required, true);
+  assert.equal(v.blockLines.fields.phrases.required, true);
+  assert.equal(v.mustCarry.fields.phrases.required, true);
+  assert.deepEqual(v.maxWords.fields.text, { type: "explanation", required: false });
+  assert.equal(v.commandExit.fields.noneExit, undefined, "commandExit has no noneExit");
+  assert.ok(v.patternAbsent.fields.noneExit && v.notWorse.fields.noneExit && v.filesChanged.fields.noneExit);
   assert.equal(v.notWorse.fields.direction.required, true);
   assert.deepEqual(v.sections.fields.names, { type: "string-list", required: true, minItems: 1, itemType: "string", nonBlank: true });
   assert.equal(rubricVocabulary.bounds.quoteSourceMaxBytes, 5 * 1024 * 1024);

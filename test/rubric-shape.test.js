@@ -36,7 +36,7 @@ test("minWords: AT / UNDER / OVER (600 / 599 / 601); direction at-least", async 
   assert.equal(g.measured, 599);
 });
 
-test("words: forgiving strips a leading '#' run per line ('## Summary' = 1), strict counts markers ('## Summary' = 2)", async () => {
+test("words: forgiving strips a leading '#' run per line ('## Summary' = 1); strict maxWords counts markers ('## Summary' = 2)", async () => {
   const text = "## Summary\n### Skills and more";
   // forgiving: Summary(1) + Skills and more(3) = 4;  strict: ##,Summary,###,Skills,and,more = 6
   assert.equal((await one("maxWords", { value: 4 }, text)).verdict, "green");
@@ -47,7 +47,7 @@ test("words: forgiving strips a leading '#' run per line ('## Summary' = 1), str
   assert.equal(gap(await one("maxWords", { value: 1 }, "## Summary two")).measured, 2);
   assert.equal(gap(await one("maxWords", { value: 1, strict: true }, "## Summary two")).measured, 3);
   assert.equal((await one("maxWords", { value: 1 }, "## Summary")).verdict, "green", "'## Summary' counts 1 forgiving");
-  assert.equal((await one("minWords", { value: 2, strict: true }, "## Summary")).verdict, "green", "and 2 strict");
+  assert.equal((await one("minWords", { value: 2, strict: true }, "## Summary")).verdict, "red", "strict minWords does NOT count markers: still 1");
 });
 
 test("words: '#' run strip is per line and only leading; blank lines and CRLF count 0; '#' alone is 0 forgiving", async () => {
@@ -56,10 +56,11 @@ test("words: '#' run strip is per line and only leading; blank lines and CRLF co
   assert.equal(gap(await one("maxWords", { value: 1, strict: true }, "a\n#\nb c")).measured, 4);
 });
 
-test("minWords strict can LOOSEN (markers add to the count): documented spec tension, behavior pinned", async () => {
-  // PRD §4.1 says strict "can only tighten", but its word rule counts MORE tokens under strict.
+test("minWords strict counts exactly like forgiving (markers are NOT counted), so strict can never make minWords easier", async () => {
   assert.equal((await one("minWords", { value: 2 }, "## Summary")).verdict, "red");
-  assert.equal((await one("minWords", { value: 2, strict: true }, "## Summary")).verdict, "green");
+  assert.equal((await one("minWords", { value: 2, strict: true }, "## Summary")).verdict, "red");
+  assert.equal(gap(await one("minWords", { value: 2, strict: true }, "## Summary")).measured, 1);
+  assert.equal((await one("minWords", { value: 1, strict: true }, "## Summary")).verdict, "green");
 });
 
 test("maxLines: counts NON-EMPTY lines; AT / UNDER / OVER", async () => {
@@ -137,10 +138,14 @@ test("sections AND sectionOrder on the same names: both fire, union of reds as t
   assert.deepEqual(r.gaps.map((g) => g.key), ["cp:s", "cp:o"]);
 });
 
-test("strict headings: ATX only, exact case, closing '#' run allowed; setext / bare line / HTML / bold are not headings", async () => {
+test("strict headings: ATX only, exact case, the REST of the line is the text (no closing-# strip); setext / bare line / HTML / bold are not headings", async () => {
   const s = (text, names = ["Summary"]) => one("sections", { names, strict: true }, text);
   assert.equal((await s("## Summary")).verdict, "green");
-  assert.equal((await s("# Summary ##")).verdict, "green");
+  assert.equal(gap(await s("# Summary ##")).kind, "missing", "closing '#' run is NOT stripped: the heading is 'Summary ##'");
+  assert.equal((await s("# Summary ##", ["Summary ##"])).verdict, "green");
+  assert.equal((await s("## C#", ["C#"])).verdict, "green", "'C#' is the heading text");
+  assert.equal(gap(await s("# Summary  ")).kind, "missing", "trailing spaces are part of the text under strict");
+  assert.equal((await s("#    Summary")).verdict, "green", "one or more spaces after the hashes");
   assert.equal((await s("###### Summary")).verdict, "green");
   assert.equal(gap(await s("## summary")).kind, "missing", "case differs = red");
   assert.equal(gap(await s("Summary\n=======")).kind, "no-headings", "setext is not a heading");
@@ -154,18 +159,36 @@ test("strict headings: ATX only, exact case, closing '#' run allowed; setext / b
   assert.equal(gap(await s("## Summary:")).kind, "missing", "strict keeps the trailing ':'");
 });
 
-test("strict never turns a strict-red green: every strict-green output is also forgiving-green (corpus, names without a trailing '#')", async () => {
-  const outputs = ["## Summary", "Summary", "## summary", "Summary\n===", "## Skills\n## Summary", "x", "### Summary:", "## Summary\n## Skills"];
-  let strictGreen = 0;
-  for (const text of outputs) for (const names of [["Summary"], ["Skills"], ["Summary", "Skills"]]) for (const rule of ["sections", "sectionOrder"]) {
-    const st = (await one(rule, { names, strict: true }, text)).verdict;
-    const fg = (await one(rule, { names }, text)).verdict;
-    if (st === "green") { strictGreen++; assert.equal(fg, "green", `${rule} ${JSON.stringify(names)} on ${JSON.stringify(text)}`); }
+test("strict is NEVER looser than forgiving: over many generated inputs, forgiving red => strict red, for every strict-capable rule", async () => {
+  let seed = 987654;
+  const rnd = (n) => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed % n; };
+  const pick = (a) => a[rnd(a.length)];
+  const atoms = ["#", "##", "###", " ", "  ", "Summary", "summary", "Skills", "C#", "C", ":", "x", "\n", "\n", "\r\n", "Σ", "ΑΣ", "σ", "owner", "Owner", "İ", "\t", "="];
+  const gen = () => Array.from({ length: rnd(14) }, () => pick(atoms)).join(pick(["", " ", ""]));
+  const names = ["Summary", "summary", "Skills", "C#", "C", "Summary:", "x", "Σ", "Owner", " Summary", "Summary "];
+  const counts = { checked: 0, bothRed: 0, forgivingGreenStrictRed: 0 };
+  const check = async (rule, extra, text) => {
+    const f = (await one(rule, extra, { text })).verdict;
+    const st = (await one(rule, { ...extra, strict: true }, { text })).verdict;
+    counts.checked++;
+    if (f === "red") { assert.equal(st, "red", `${rule} ${JSON.stringify(extra)} on ${JSON.stringify(text)}: forgiving red but strict ${st}`); counts.bothRed++; }
+    if (f === "green" && st === "red") counts.forgivingGreenStrictRed++;
+  };
+  for (let i = 0; i < 1500; i++) {
+    const text = gen();
+    const nm = [pick(names), pick(names)];
+    await check("maxWords", { value: 1 + rnd(8) }, text);
+    await check("minWords", { value: 1 + rnd(8) }, text);
+    await check("sections", { names: nm }, text);
+    await check("sectionOrder", { names: nm }, text);
+    await check("mustCarry", { phrases: [pick(names)] }, text);
+    await check("blockLines", { size: 1 + rnd(2), phrases: [pick(names)] }, text);
   }
-  assert.ok(strictGreen >= 5, "the corpus has real strict-green cases (positive control)");
+  assert.ok(counts.bothRed > 1500, `forgiving-red cases exercised (${counts.bothRed})`);
+  assert.ok(counts.forgivingGreenStrictRed > 100, `strict really is tighter somewhere (${counts.forgivingGreenStrictRed}): the test can see a difference`);
 });
 
-test("strict heading parse equals the literal regex ^#{1,6} +(.+?) *#*$ on a differential corpus (hand-coded, linear)", async () => {
+test("strict heading parse equals the reference ^#{1,6} +([^ ][^]*)$ (the rest of the line, exactly) on a differential corpus (hand-coded, linear)", async () => {
   const alphabet = ["#", " ", "a", "b", ":", "\t", "\r", "\u2028", "é"];
   let seed = 12345;
   const rnd = (n) => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed % n; };
@@ -175,20 +198,23 @@ test("strict heading parse equals the literal regex ^#{1,6} +(.+?) *#*$ on a dif
     cases.push(i % 2 ? body : "#".repeat(1 + rnd(7)) + " ".repeat(rnd(3)) + body); // half start like a heading
   }
   let matched = 0;
+  let exact = 0;
   for (const line of cases) {
-    const m = /^#{1,6} +(.+?) *#*$/.exec(line);
+    const m = /^#{1,6} +([^ ][^]*)$/.exec(line);
     const r = await run([{ id: "k", rule: "sections", field: "text", names: ["q"], strict: true }], { text: line });
     if (!m) { assert.equal(gap(r).kind, "no-headings", `no heading in ${JSON.stringify(line)}`); continue; }
     matched++;
     assert.equal(gap(r).kind, "missing", `heading exists in ${JSON.stringify(line)}`);
-    if (m[1].trim() !== "") {
-      const hit = await run([{ id: "k", rule: "sections", field: "text", names: [m[1]], strict: true }], { text: line });
-      assert.equal(hit.verdict, "green", `capture ${JSON.stringify(m[1])} of ${JSON.stringify(line)}`);
-      const near = await run([{ id: "k", rule: "sections", field: "text", names: [m[1] + "x"], strict: true }], { text: line });
-      assert.equal(near.verdict, "red");
-    }
+    if (m[1].trim() === "") continue; // a blank name is refused at createRubric
+    // the capture is the heading text EXACTLY: it matches itself under strict iff the forgiving form also does
+    const hit = await run([{ id: "k", rule: "sections", field: "text", names: [m[1]], strict: true }], { text: line });
+    const fgv = await run([{ id: "k", rule: "sections", field: "text", names: [m[1]] }], { text: line });
+    if (hit.verdict === "green") assert.equal(fgv.verdict, "green");
+    if (fgv.verdict === "green") { exact++; assert.equal(hit.verdict, "green", `capture ${JSON.stringify(m[1])} of ${JSON.stringify(line)}`); }
+    const near = await run([{ id: "k", rule: "sections", field: "text", names: [m[1] + "x"], strict: true }], { text: line });
+    assert.equal(near.verdict, "red");
   }
-  assert.ok(matched > 200, `corpus exercised ${matched} matching headings`);
+  assert.ok(matched > 200 && exact > 100, `corpus exercised ${matched} matching headings, ${exact} with a forgiving-equal capture`);
 });
 
 test("strict heading parse is linear: a 200k-char space/hash run does not stall", async () => {
@@ -201,16 +227,25 @@ test("strict heading parse is linear: a 200k-char space/hash run does not stall"
 // --- mustCarry / blockLines ---------------------------------------------------
 
 test("mustCarry: case differs = green by default, red under strict; missing phrase named in the gap", async () => {
-  assert.equal((await one("mustCarry", { text: "Hello World" }, "say hello world now")).verdict, "green");
-  const strict = await one("mustCarry", { text: "Hello World", strict: true }, "say hello world now");
+  assert.equal((await one("mustCarry", { phrases: ["Hello World"] }, "say hello world now")).verdict, "green");
+  const strict = await one("mustCarry", { phrases: ["Hello World"], strict: true }, "say hello world now");
   assert.equal(strict.verdict, "red");
   assert.deepEqual([gap(strict).kind, gap(strict).items], ["missing", ["Hello World"]]);
-  assert.equal((await one("mustCarry", { text: "Hello World", strict: true }, "say Hello World now")).verdict, "green");
-  assert.equal((await one("mustCarry", { text: "xyz" }, "abc")).verdict, "red");
+  assert.equal((await one("mustCarry", { phrases: ["Hello World"], strict: true }, "say Hello World now")).verdict, "green");
+  assert.equal((await one("mustCarry", { phrases: ["xyz"] }, "abc")).verdict, "red");
+});
+
+test("mustCarry phrases: ALL must be present; the gap names only the missing ones; `text` is just the explanation and never decides", async () => {
+  const r = await one("mustCarry", { phrases: ["alpha", "BETA", "gamma"], text: "must mention three things" }, "alpha and gamma");
+  assert.deepEqual([r.verdict, gap(r).kind, gap(r).items], ["red", "missing", ["BETA"]]);
+  assert.equal((await one("mustCarry", { phrases: ["alpha", "BETA"], text: "irrelevant words zzz" }, "Alpha beta")).verdict, "green");
+  // an explanation that is not in the output changes nothing, and the explanation is not the phrase
+  assert.equal((await one("mustCarry", { phrases: ["alpha"], text: "NOT-IN-OUTPUT" }, "alpha")).verdict, "green");
+  assert.equal((await one("mustCarry", { phrases: ["alpha"], text: "alpha" }, "nothing")).verdict, "red");
 });
 
 test("blockLines: groups of N non-empty lines; phrase must be in EACH block", async () => {
-  const bl = (extra, text) => one("blockLines", { size: 2, mustCarry: ["Owner"], ...extra }, { text });
+  const bl = (extra, text) => one("blockLines", { size: 2, phrases: ["Owner"], ...extra }, { text });
   assert.equal((await bl({}, "task 1\nOwner: a\ntask 2\nOwner: b")).verdict, "green");
   // phrase in the joined block, not necessarily on the first line
   assert.equal((await bl({}, "Owner a\nx\nOwner b\ny")).verdict, "green");
@@ -226,22 +261,22 @@ test("blockLines: groups of N non-empty lines; phrase must be in EACH block", as
 });
 
 test("blockLines: zero non-empty lines = red 'zero-lines'", async () => {
-  const r = await one("blockLines", { size: 2, mustCarry: ["x"] }, { text: " \n\n \t\n" });
+  const r = await one("blockLines", { size: 2, phrases: ["x"] }, { text: " \n\n \t\n" });
   assert.equal(r.verdict, "red");
   assert.deepEqual([gap(r).kind, gap(r).measured, gap(r).limit], ["zero-lines", 0, 2]);
 });
 
 test("blockLines: case follows strict; several phrases must ALL be in each block", async () => {
   const text = "owner a\nDUE b";
-  assert.equal((await one("blockLines", { size: 2, mustCarry: ["Owner", "due"] }, { text })).verdict, "green");
-  const s = await one("blockLines", { size: 2, mustCarry: ["Owner", "due"], strict: true }, { text });
+  assert.equal((await one("blockLines", { size: 2, phrases: ["Owner", "due"] }, { text })).verdict, "green");
+  const s = await one("blockLines", { size: 2, phrases: ["Owner", "due"], strict: true }, { text });
   assert.equal(s.verdict, "red");
   assert.deepEqual(gap(s).items, ["block 1:Owner", "block 1:due"]);
 });
 
 test("blockLines: size 1 and a size larger than the line count", async () => {
-  assert.equal((await one("blockLines", { size: 1, mustCarry: ["a"] }, { text: "a\nab" })).verdict, "green");
-  assert.equal(gap(await one("blockLines", { size: 5, mustCarry: ["a"] }, { text: "a\na" })).kind, "not-multiple");
+  assert.equal((await one("blockLines", { size: 1, phrases: ["a"] }, { text: "a\nab" })).verdict, "green");
+  assert.equal(gap(await one("blockLines", { size: 5, phrases: ["a"] }, { text: "a\na" })).kind, "not-multiple");
 });
 
 // --- the output's shape ---------------------------------------------------------
@@ -254,14 +289,14 @@ test("a string output is the single field 'text'; any other field name is missin
 });
 
 test("a text rule on a non-string field is red 'wrong-type' naming the type", async () => {
-  const r = await run([{ id: "k", rule: "mustCarry", field: "f", text: "x" }], { f: 12 });
+  const r = await run([{ id: "k", rule: "mustCarry", field: "f", phrases: ["x"] }], { f: 12 });
   assert.deepEqual([gap(r).kind, gap(r).measured], ["wrong-type", "type:number"]);
 });
 
 test("gaps are minted in signed check order, each with a stable key, across repeated runs", async () => {
   const checks = [
     { id: "z-last-alpha", rule: "maxWords", field: "text", value: 1 },
-    { id: "a-first-alpha", rule: "mustCarry", field: "text", text: "nope" },
+    { id: "a-first-alpha", rule: "mustCarry", field: "text", phrases: ["nope"] },
   ];
   const a = await run(checks, "two words here");
   const b = await run(checks, "other words entirely here too");
@@ -278,8 +313,35 @@ test("green verdict: no gaps, no fault, outputSha is sha256 of the UTF-8 bytes o
   assert.notEqual(r.outputSha, createHash("sha256").update(Buffer.from(out, "latin1")).digest("hex"));
 });
 
-test("an object output has outputSha null (bareguard never serializes an object to hash it)", async () => {
+test("an object output with no outputBytes has outputSha null (bareguard never serializes an object to hash it)", async () => {
   assert.equal((await one("nonEmpty", {}, { text: "x" })).outputSha, null);
+});
+
+test("opts.outputBytes: outputSha is sha256 of EXACTLY those bytes, for any output type; a string is hashed as UTF-8", async () => {
+  const hex = (b) => createHash("sha256").update(b).digest("hex");
+  const artifact = { title: "Résumé", skills: ["a", "b"], n: 3 };
+  // fwdloop serialises its artifact as JSON.stringify(artifact, null, 2); the caller hands us those bytes
+  const text = JSON.stringify(artifact, null, 2);
+  const rubric = createRubric({ schema: 1, goal: "g", checkpoints: { cp: { gating: true, checks: [{ id: "k", rule: "nonEmpty", field: "title" }] } } });
+  const hand = hex(Buffer.from(text, "utf8")); // hand-computed over the same string
+  assert.equal((await checkStep(rubric, "cp", artifact, { outputBytes: text })).outputSha, hand);
+  assert.equal((await checkStep(rubric, "cp", artifact, { outputBytes: Buffer.from(text, "utf8") })).outputSha, hand);
+  assert.equal((await checkStep(rubric, "cp", artifact, { outputBytes: new Uint8Array(Buffer.from(text, "utf8")) })).outputSha, hand);
+  assert.equal((await checkStep(rubric, "cp", artifact)).outputSha, null, "object, no outputBytes: unbound");
+  // one byte of difference changes the sha: it hashes exactly what it is given
+  assert.notEqual((await checkStep(rubric, "cp", artifact, { outputBytes: text + "\n" })).outputSha, hand);
+  assert.notEqual((await checkStep(rubric, "cp", artifact, { outputBytes: JSON.stringify(artifact) })).outputSha, hand);
+  // also for a string output: the explicit bytes win over the string
+  const withBytes = await checkStep(rubric, "cp", { title: "t" }, { outputBytes: "other bytes" });
+  assert.equal(withBytes.outputSha, hex("other bytes"));
+  const str = createRubric({ schema: 1, goal: "g", checkpoints: { cp: { gating: true, checks: [] } } });
+  assert.equal((await checkStep(str, "cp", "plain", { outputBytes: "OTHER" })).outputSha, hex("OTHER"));
+  assert.equal((await checkStep(str, "cp", "plain")).outputSha, hex("plain"));
+  // the checked output and the hashed bytes are independent: green/red follow the object
+  assert.equal((await checkStep(rubric, "cp", artifact, { outputBytes: "x" })).verdict, "green");
+  for (const bad of [5, null, {}, [1], true]) {
+    await assert.rejects(() => checkStep(rubric, "cp", artifact, { outputBytes: bad }), TypeError, String(bad));
+  }
 });
 
 test("the result is deep-frozen and carries the rubric sha and checkpoint", async () => {

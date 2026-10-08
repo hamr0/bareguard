@@ -101,7 +101,7 @@ test("cited: red kinds are named per claim index: not found, empty quote, number
 });
 
 test("cited: the signed input must match; a missing or altered input is STOPPED, not red", async () => {
-  const mk = (inputs) => run([{ id: "c", rule: "cited", claims: "claims", source: "doc" }], { claims: [] }, { inputs }, { inputs: [{ name: "doc", sha256: sha(SOURCE) }] });
+  const mk = (inputs) => run([{ id: "c", rule: "cited", claims: "claims", source: "doc" }], { claims: [{ claim: "x", quote: SOURCE.slice(0, 10) }] }, { inputs }, { inputs: [{ name: "doc", sha256: sha(SOURCE) }] });
   for (const inputs of [undefined, {}, { doc: 5 }, { doc: SOURCE + " tampered" }]) {
     const r = await mk(inputs);
     assert.equal(r.verdict, "stopped", JSON.stringify(inputs));
@@ -111,11 +111,19 @@ test("cited: the signed input must match; a missing or altered input is STOPPED,
   assert.equal((await mk({ doc: SOURCE })).verdict, "green");
 });
 
-test("cited: claims field missing / not an array = red; an empty list is vacuously green (documented)", async () => {
+test("cited: claims field missing / not an array = red; an EMPTY list is red 'no-claims', never vacuous green", async () => {
   const mk = (out) => run([{ id: "c", rule: "cited", claims: "claims", source: "doc" }], out, { inputs: { doc: SOURCE } }, { inputs: [{ name: "doc", sha256: sha(SOURCE) }] });
   assert.equal(gap(await mk({ x: 1 })).kind, "missing");
   assert.equal(gap(await mk({ claims: "none" })).kind, "wrong-type");
-  assert.equal((await mk({ claims: [] })).verdict, "green");
+  const empty = await mk({ claims: [] });
+  assert.equal(empty.verdict, "red");
+  assert.deepEqual([gap(empty).kind, gap(empty).measured], ["no-claims", 0]);
+  // independent of `complete`: no complete check in the rubric, and the output itself is non-empty
+  const withText = await mk({ text: "a long, perfectly real output", claims: [] });
+  assert.equal(withText.verdict, "red");
+  assert.equal(gap(withText).kind, "no-claims");
+  // control: one valid claim is still green
+  assert.equal((await mk({ claims: [{ claim: "x", quote: SOURCE.slice(0, 10) }] })).verdict, "green");
 });
 
 // --- complete ---------------------------------------------------------------------

@@ -11,8 +11,8 @@ const checks = [
   { id: "n", rule: "nonEmpty", field: "text" },
   { id: "w", rule: "maxWords", field: "text", value: 5 },
   { id: "s", rule: "sections", field: "text", names: ["A"] },
-  { id: "m", rule: "mustCarry", field: "text", text: "x" },
-  { id: "b", rule: "blockLines", field: "text", size: 2, mustCarry: ["x"] },
+  { id: "m", rule: "mustCarry", field: "text", phrases: ["x"] },
+  { id: "b", rule: "blockLines", field: "text", size: 2, phrases: ["x"] },
   { id: "i", rule: "in", field: "text", values: ["x"] },
   { id: "mx", rule: "max", field: "text", value: 1 },
 ];
