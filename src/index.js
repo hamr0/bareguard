@@ -27,6 +27,11 @@
  * @typedef {import("./types.js").SecretsConfig} SecretsConfig
  * @typedef {import("./types.js").RateConfig} RateConfig
  * @typedef {import("./types.js").AuditConfig} AuditConfig
+ * @typedef {import("./primitives/rubric.js").Rubric} Rubric
+ * @typedef {import("./primitives/rubric.js").Check} Check
+ * @typedef {import("./primitives/rubric.js").Gap} Gap
+ * @typedef {import("./primitives/rubric.js").Fault} Fault
+ * @typedef {import("./primitives/rubric.js").StepResult} StepResult
  */
 
 export { Gate, routeAnnotation, addToGates } from "./gate.js";
@@ -45,3 +50,12 @@ export {
 export { BudgetUnavailableError } from "./primitives/budget.js";
 export { defaultAuditPath } from "./primitives/audit.js";
 export { globToRegex, matchAny } from "./glob.js";
+export {
+  createRubric,
+  rubricSha,
+  checkStep,
+  renderGaps,
+  quoteIn,
+  numbersInQuote,
+  rubricVocabulary,
+} from "./primitives/rubric.js";
