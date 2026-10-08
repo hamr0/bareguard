@@ -73,7 +73,7 @@ if (decision.outcome === "allow") {
 
 ## The primitives
 
-Small files, each readable in a sitting. The gate runs them in a fixed order (**deny → ask → scope → default**, first match wins). Building tool-calling automation? Read **`primitives.json`** first — a compact, machine-readable menu of every verb (17 entries across gate · classify · matching · content · secrets · audit · axis-b · rwx), each carrying `when`, `import`, `signature`, `fails`, and a runnable `example`, generated from the source so it never drifts. Browse it on unpkg (`unpkg.com/bareguard/primitives.json`), or `import menu from 'bareguard/primitives.json' with { type: 'json' }`.
+Small files, each readable in a sitting. The gate runs them in a fixed order (**deny → ask → scope → default**, first match wins). Building tool-calling automation? Read **`primitives.json`** first — a compact, machine-readable menu of every verb (27 entries across gate · classify · matching · content · secrets · audit · axis-b · rwx · rubric), each carrying `when`, `import`, `signature`, `fails`, and a runnable `example`, generated from the source so it never drifts. Browse it on unpkg (`unpkg.com/bareguard/primitives.json`), or `import menu from 'bareguard/primitives.json' with { type: 'json' }`.
 
 - **Scope what runs** — `bash` / `fs` / `net` bound which commands, paths, and domains are reachable. `net` gates on **any action carrying a `url`/`args.url` field**, not on `action.type === "fetch"`.
 - **Tier what's dangerous** — `bash.classify` ranks a command **safe → destructive → super-destructive**; `content` denies `rm -rf /` / `DROP TABLE` outright.
@@ -143,6 +143,7 @@ const signed = rubricSha(spec);                       // the human signs this fi
 const gate = new Gate({
   rubric: { spec, sha256: signed, advanceOn: ["step.done"] },
   runId: "report-2026-10-08",
+  audit: { path: null },   // no audit file, so every run starts clean; with a real audit path a stable runId RESUMES state (reds, ACCEPTs) across runs
   humanChannel: async (event) => ({ decision: "allow" }),   // event.rubric = { rubricSha, checkpoint, outputSha, verdict, gaps }
 });
 await gate.init();

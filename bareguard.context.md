@@ -16,12 +16,14 @@ agent family. One `humanChannel` callback for all human escalations.
 **rwx (PRD §23)** is not a fourteenth primitive — nothing in
 `src/primitives/rwx.js` is exported publicly or tagged `@when`. rwx is
 `Gate` **config wiring**: a second, mutually exclusive mode for the step-5
-slot `tools.allowlist` occupies today. `primitives.json`/`check:primitives`
-count 17 entries as of 0.18.1: the 13 domain primitives above, plus
-`addToGates()` and three of `Gate`'s own methods (`Gate#add`,
-`Gate#rwxTools`, `Gate#readAudit`) — harness-only rwx/audit verbs, tagged
-because the manifest is read by the AI **building** a harness, not the
-running agent (which never holds a `Gate` reference either way).
+slot `tools.allowlist` occupies today. `primitives.json` (checked by
+`npm run check:primitives`, which regenerates it and fails on drift) is the
+authoritative entry list — read the file for the count. It holds the 13
+domain primitives above, plus the rubric verbs, plus `addToGates()` and
+`Gate`'s own harness-only methods (`Gate#add`, `Gate#rwxTools`,
+`Gate#readAudit`, …) — tagged because the manifest is read by the AI
+**building** a harness, not the running agent (which never holds a `Gate`
+reference either way).
 See [rwx mode](#rwx-mode-operator-tagged-capability-letters-23) below.
 
 ```
@@ -742,7 +744,7 @@ A non-gating checkpoint records and returns gaps but never denies.
 **Resume: pass a stable `config.runId`.** Minted verdicts, red counts, seed baselines and ACCEPTs are rebuilt from the audit on cold start, matched by the gate's `runId` and `rubricSha`. Resume with the same `runId` AND the same audit path and a count survives; a gate with no `runId` gets a random one and starts fresh, as does a different `runId` or a re-signed spec. Nothing finds the earlier run for you.
 
 **Accept: `"live"` or `"later"`** (signed per `requiresHuman` checkpoint, default `"live"`, nothing inferred).
-- `"live"`: a green advance asks through `humanChannel` (rule `rubric.needs-accept`, event key `rubric: { rubricSha, checkpoint, outputSha, verdict, gaps }`), once per `outputSha`. Only `{ decision: "allow" }` accepts; any other reply, a timeout, a throw or no channel denies. A different `outputSha` asks again.
+- `"live"`: a green advance asks through `humanChannel` (rule `rubric.needs-accept`, event key `rubric: { rubricSha, checkpoint, outputSha, verdict, gaps }`), once per `outputSha`. Only `{ decision: "allow" }` accepts; any other reply, a timeout, a throw or no channel denies. A different `outputSha` asks again. Concurrent advances for the same `(checkpoint, outputSha)` share one ask and one `rubric_accept` line. A reply that arrives after the verdict moved on (no longer that green `outputSha`, or the checkpoint is exhausted) is discarded: no ACCEPT line, red count not reset.
 - `"later"`: no live ask; the advance is denied `rubric.needs-accept` until the harness calls `gate.recordAccept`, which throws (and writes a `rubric_accept_refused` audit line) unless the checkpoint is `requiresHuman` + `"later"` and the latest verdict is GREEN for exactly that `outputSha`. `recordAccept` is **harness-only**, like `gate.add`: never give the agent a handle on the gate that can call it.
 
 **Audit.** Phases `rubric` (one per mint), `rubric_baseline`, `rubric_accept` (`source: "live" | "later"`), `rubric_accept_refused`.

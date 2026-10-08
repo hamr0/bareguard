@@ -465,7 +465,7 @@ Non-gating checkpoints record and return gaps/faults but never deny.
     checkpoint, outputSha, verdict, gaps }` (`gaps` = the worker view, empty on a green). It is asked
     ONCE per `outputSha`: the reply `{ decision: "allow" }` is recorded as an ACCEPT bound to that
     sha; any other reply, a timeout, a throw, or no `humanChannel` denies and records nothing; a
-    different `outputSha` asks again. If the Axis A floor also asks on the advance, the floor's ask
+    different `outputSha` asks again. Concurrent advances for the same `(checkpoint, outputSha)` share ONE ask and one ACCEPT line. A reply that arrives after the verdict moved on (the latest verdict is no longer that green `outputSha`, or the checkpoint is exhausted) is discarded: nothing is recorded and the red count is not reset. If the Axis A floor also asks on the advance, the floor's ask
     comes first and the rubric ask follows it; no other action ever gets a rubric ask.
   - **`accept: "later"`** for a harness that parks and resumes in another process. There is no live
     ask: an advance without a recorded ACCEPT is denied `rubric.needs-accept`. The harness (never the

@@ -1221,60 +1221,89 @@ export class Gate {
       // rubric (S3): the requiresHuman ask carries the signed position and the bound sha.
       if (decision.rubric) event.rubric = { ...decision.rubric };
 
-      let response;
-      try {
-        const channelPromise = this.humanChannel(event);
-        if (this.humanChannelTimeoutMs != null && this.humanChannelTimeoutMs > 0) {
-          const timeoutMs = this.humanChannelTimeoutMs;
-          const TIMEOUT = Symbol("humanChannelTimeout");
-          // Deliberately NOT unref'd: the timer firing is the only way this
-          // promise (and therefore check()) can ever resolve when humanChannel
-          // never settles, so it must keep the event loop alive while the
-          // human decision is pending. It is always cleared below once the
-          // race settles (answer, timeout, or throw), so a finished check()
-          // never holds the process open for the remainder of timeoutMs.
-          let timer;
-          const timeoutPromise = new Promise((resolve) => {
-            timer = setTimeout(() => resolve(TIMEOUT), timeoutMs);
-          });
-          let raced;
-          try {
-            raced = await Promise.race([channelPromise, timeoutPromise]);
-          } finally {
-            clearTimeout(timer);
+      // Ask the human and audit what they SAID. Returns { human } or { fail: reason } (timeout / throw).
+      const obtain = async () => {
+        let response;
+        try {
+          const channelPromise = /** @type {Function} */ (this.humanChannel)(event);
+          if (this.humanChannelTimeoutMs != null && this.humanChannelTimeoutMs > 0) {
+            const timeoutMs = this.humanChannelTimeoutMs;
+            const TIMEOUT = Symbol("humanChannelTimeout");
+            // Deliberately NOT unref'd: the timer firing is the only way this
+            // promise (and therefore check()) can ever resolve when humanChannel
+            // never settles, so it must keep the event loop alive while the
+            // human decision is pending. It is always cleared below once the
+            // race settles (answer, timeout, or throw), so a finished check()
+            // never holds the process open for the remainder of timeoutMs.
+            let timer;
+            const timeoutPromise = new Promise((resolve) => {
+              timer = setTimeout(() => resolve(TIMEOUT), timeoutMs);
+            });
+            let raced;
+            try {
+              raced = await Promise.race([channelPromise, timeoutPromise]);
+            } finally {
+              clearTimeout(timer);
+            }
+            if (raced === TIMEOUT) return { fail: `humanChannel timeout after ${this.humanChannelTimeoutMs}ms`, timeout: true };
+            response = raced;
+          } else {
+            response = await channelPromise;
           }
-          if (raced === TIMEOUT) {
-            const reason = `humanChannel timeout after ${this.humanChannelTimeoutMs}ms`;
-            return this._commitDecision(
-              { outcome: "deny", severity: "halt", rule: decision.rule, reason, aid },
-              { action, phase: "approval" },
-            );
-          }
-          response = raced;
-        } else {
-          response = await channelPromise;
         }
+        catch (err) {
+          return { fail: `humanChannel threw: ${err.message}` };
+        }
+        const human = response ?? { decision: "deny", reason: "humanChannel returned nothing" };
+        // The raw human response is its OWN audit fact, written unconditionally
+        // and OUTSIDE the lock — it records what the human SAID, not what the
+        // gate finally decided; the branch below still commits the actual
+        // outcome (and, for "allow", still re-validates freshness).
+        await emit({
+          phase: "approval", action,
+          decision: human.decision, reason: human.reason ?? null,
+          newCap: human.newCap ?? null,
+        });
+        return { human };
+      };
+
+      let obtained;
+      if (decision.rule === "rubric.needs-accept" && decision.rubric && this._rb) {
+        // One in-flight ask per (checkpoint, outputSha): concurrent checks await the first's
+        // answer instead of asking the human again. The ACCEPT is written (through the stale
+        // guard) inside the shared promise, so a joiner never writes a second line. The lock is
+        // NOT held across the ask. The entry clears in `finally` (also on a reject/deny/throw),
+        // so a later retry asks again.
+        const rb = /** @type {any} */ (this._rb);
+        const key = acceptKey(decision.rubric.checkpoint, decision.rubric.outputSha);
+        // A late joiner that arrives after the accept landed sees it and re-evaluates instead of asking.
+        if (rb.accepts.has(key)) continue;
+        let shared = rb.inflight.get(key);
+        if (!shared) {
+          shared = (async () => {
+            try {
+              const o = await obtain();
+              if (o.human?.decision === "allow") {
+                await this._withLock(() => this._writeLiveAccept(decision.rubric.checkpoint, decision.rubric.outputSha, aid));
+              }
+              return o;
+            } finally {
+              rb.inflight.delete(key);
+            }
+          })();
+          rb.inflight.set(key, shared);
+        }
+        obtained = await shared;
+      } else {
+        obtained = await obtain();
       }
-      catch (err) {
+      if (obtained.fail !== undefined) {
         return this._commitDecision(
-          {
-            outcome: "deny", severity: "halt", rule: decision.rule,
-            reason: `humanChannel threw: ${err.message}`, aid,
-          },
+          { outcome: "deny", severity: "halt", rule: decision.rule, reason: obtained.fail, aid },
           { action, phase: "approval" },
         );
       }
-
-      const human = response ?? { decision: "deny", reason: "humanChannel returned nothing" };
-      // The raw human response is its OWN audit fact, written unconditionally
-      // and OUTSIDE the lock — it records what the human SAID, not what the
-      // gate finally decided; the branch below still commits the actual
-      // outcome (and, for "allow", still re-validates freshness).
-      await emit({
-        phase: "approval", action,
-        decision: human.decision, reason: human.reason ?? null,
-        newCap: human.newCap ?? null,
-      });
+      const human = obtained.human;
 
       // rubric: the ONLY thing that accepts is {decision:"allow"}; topup/terminate/anything else denies.
       if (decision.rule === "rubric.needs-accept" && human.decision !== "allow") {
@@ -1283,16 +1312,10 @@ export class Gate {
           { action },
         );
       }
-      if (human.decision === "allow" && this._rb) {
-        if (decision.rule === "rubric.needs-accept") {
-          // ACCEPT, bound to THIS outputSha. The in-lock recheck at commit confirms the
-          // verdict is still the one that was asked about.
-          await this._withLock(() => this._writeAccept(decision.rubric.checkpoint, decision.rubric.outputSha, { by: "humanChannel", askId: aid, source: "live" }));
-        } else {
-          // A floor ask was approved; the rubric still gets its say (deny, or its own ask).
-          const post = this._rubricEval(action);
-          if (post?.outcome === "askHuman") { forced = post; continue; }
-        }
+      if (human.decision === "allow" && this._rb && decision.rule !== "rubric.needs-accept") {
+        // A floor ask was approved; the rubric still gets its say (deny, or its own ask).
+        const post = this._rubricEval(action);
+        if (post?.outcome === "askHuman") { forced = post; continue; }
       }
       if (human.decision === "allow") {
         return this._commitDecision(
@@ -1533,6 +1556,25 @@ export class Gate {
       };
     }
     return null;
+  }
+
+  /**
+   * Write a LIVE-ask ACCEPT only if it is still about the current state: the checkpoint's latest
+   * verdict is the green for exactly this outputSha and the checkpoint is not exhausted. A stale
+   * answer (the verdict moved on while the human was deciding) is discarded: no accept line, no
+   * red-count reset. MUST run inside `_withLock`.
+   * @param {string} checkpoint
+   * @param {string} outputSha
+   * @param {string} askId
+   */
+  async _writeLiveAccept(checkpoint, outputSha, askId) {
+    const rb = /** @type {any} */ (this._rb);
+    const v = rb.verdicts.get(checkpoint);
+    const max = rb.rubric.maxReds;
+    const exhausted = max !== undefined && (rb.reds.get(checkpoint) ?? 0) >= max;
+    if (!v || v.verdict !== "green" || v.outputSha !== outputSha || exhausted) return;
+    if (rb.accepts.has(acceptKey(checkpoint, outputSha))) return;
+    await this._writeAccept(checkpoint, outputSha, { by: "humanChannel", askId, source: "live" });
   }
 
   /**

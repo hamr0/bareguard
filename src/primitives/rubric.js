@@ -1242,7 +1242,7 @@ export async function checkStep(rubric, checkpoint, output, opts) {
     }
   }
 
-  const ctx = { rubric: spec, fields, opts: optsRead, baselines: {}, callerItems: {} };
+  const ctx = { rubric: spec, fields, opts: optsRead, baselines: Object.create(null), callerItems: Object.create(null) };
   const reds = [];
   const faults = [];
 
@@ -1270,7 +1270,7 @@ export async function checkStep(rubric, checkpoint, output, opts) {
     gaps: verdict === "red" ? reds : [],
     fault: faults[0] ?? null,
     full: { gaps: reds, faults },
-    baselines: ctx.baselines,
-    callerItems: ctx.callerItems,
+    baselines: { ...ctx.baselines }, // plain object out; own "__proto__" etc. survive the spread
+    callerItems: { ...ctx.callerItems },
   });
 }

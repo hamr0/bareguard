@@ -50,6 +50,7 @@ export function newRubricState(rubric, sha) {
     reds: new Map(),     // checkpoint -> reds since the last re-sign/ACCEPT
     accepts: new Set(),  // `${checkpoint}\0${outputSha}`
     baselines: new Map(), // `${checkpoint}\0${checkId}` -> { baseline, baselineSource }
+    inflight: new Map(),  // acceptKey -> in-flight live-ask promise (never rebuilt)
     gaps: new Map(),     // checkpoint -> worker gaps awaiting drainGaps (NOT rebuilt: ephemeral)
   };
 }
@@ -114,5 +115,6 @@ export function auditGaps(gaps) {
  * @property {Map<string,number>} reds
  * @property {Set<string>} accepts
  * @property {Map<string,{baseline:number,baselineSource:any}>} baselines
+ * @property {Map<string,Promise<any>>} inflight
  * @property {Map<string,object[]>} gaps
  */
