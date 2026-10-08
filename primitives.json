@@ -74,6 +74,24 @@
       "example": "import { Gate } from \"bareguard\";\nconst gate = new Gate({\n  audit: { path: null },\n  rwx: { agent: \"fixer\", agents: { fixer: \"rwx\" }, tools: { read: \"r\" } },\n  humanChannel: async () => ({ decision: \"deny\" }),\n});\nawait gate.init();\nawait gate.add({ deploy: \"x\" }); // new key, mid-run — tighten-only from here\nconst decision = await gate.check({ type: \"deploy\", args: {} });\ndecision.outcome; // \"allow\""
     },
     {
+      "name": "Gate#checkStep",
+      "category": "rubric",
+      "when": "Reach for this instead of the exported `checkStep` whenever a Gate holds the rubric: it is the only call that makes a verdict real to `gate.check`. Call it each time the agent hands over output at a checkpoint, then let the advance action through `gate.check` carrying `{ type, checkpoint, outputSha }`.",
+      "import": "import { Gate } from 'bareguard'",
+      "signature": "gate.checkStep(checkpoint: string, output: string|object, opts?: { measurements?: object, items?: object, inputs?: object, outputBytes?: string|Uint8Array }) => Promise<StepResult>",
+      "fails": "Rejects with a TypeError when the gate has no `rubric` config, the checkpoint is unknown, `opts` is not an object, or `opts.priorBaselines` is passed; rejects when the rubric config was swapped after construct (`rubric.invalid`). Never rejects because of the output. An audit write failure propagates.",
+      "example": "const gate = new Gate({ rubric: { spec, sha256: rubricSha(spec), advanceOn: [\"done\"] } });\nconst r = await gate.checkStep(\"resume\", text);            // r.verdict, r.gaps, r.outputSha\nawait gate.check({ type: \"done\", checkpoint: \"resume\", outputSha: r.outputSha });"
+    },
+    {
+      "name": "Gate#drainGaps",
+      "category": "rubric",
+      "when": "Reach for this to build the retry prompt after a red verdict: feed the worker ONLY this, never the rubric.",
+      "import": "import { Gate } from 'bareguard'",
+      "signature": "gate.drainGaps() => Gap[]",
+      "fails": "Never throws.",
+      "example": "const r = await gate.checkStep(\"resume\", text);\nif (r.verdict === \"red\") retryPrompt = renderGaps(gate.drainGaps());"
+    },
+    {
       "name": "Gate#readAudit",
       "category": "audit",
       "when": "Reach for this to read this gate's own audit log back programmatically — e.g. to verify what a run actually did, replay it, or feed it to a dashboard — without risking a live in-memory line (fileless mode) being mutated out from under a still-running gate.",
@@ -81,6 +99,15 @@
       "signature": "gate.readAudit() => Promise<object[]>",
       "fails": "Never throws. A line containing something that cannot round-trip through JSON (this can only happen in fileless mode — `Audit.emit()` in file mode already degrades an unserializable payload before persisting, so a file-mode read is always JSON-shaped) falls back to {@link safeDeepClone}, a per-line deep, decoupled clone that tolerates a BigInt, a function/symbol/`undefined` value, a true cycle, or a throwing getter/`toJSON` — NEVER a shared reference into the live line and never a live function reference either — so one bad line can never sink an otherwise-good read, and mutating what comes back can never reach the gate's live audit state either way. `safeDeepClone` itself is called inside its own try/catch here too: a pathologically deep chain is bounded by {@link MAX_CLONE_DEPTH} internally, but the wrapping catch is defensive — a `RangeError` at this top-level call site would otherwise escape `lines.map` and this async function.",
       "example": "import { Gate } from \"bareguard\";\nconst gate = new Gate({\n  audit: { path: null },\n  tools: { allowlist: [\"read\"] },\n  humanChannel: async () => ({ decision: \"deny\" }),\n});\nawait gate.init();\nawait gate.check({ type: \"read\", args: {} });\nconst lines = await gate.readAudit();\nlines.length > 0; // true"
+    },
+    {
+      "name": "Gate#recordAccept",
+      "category": "rubric",
+      "when": "Reach for this from the harness when a parked run resumes with the human's answer: the advance of an `accept: \"later\"` checkpoint is denied `rubric.needs-accept` until this records the ACCEPT for the verdict's exact `outputSha`.",
+      "import": "import { Gate } from 'bareguard'",
+      "signature": "gate.recordAccept(accept: { checkpoint: string, outputSha: string, by: string, at?: string, askId?: string }) => Promise<void>",
+      "fails": "Rejects (after auditing the refusal) when the checkpoint is not requiresHuman, is not `accept: \"later\"`, has no green verdict, the sha differs from the verdict's, or `by` is blank; rejects with a TypeError when the gate has no rubric or the argument is not an object.",
+      "example": "await gate.recordAccept({ checkpoint: \"resume\", outputSha: r.outputSha, by: \"hamr\", askId: \"ask-17\" });"
     },
     {
       "name": "Gate#rwxTools",

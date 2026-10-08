@@ -222,6 +222,12 @@ test("audit truncation: the must-keep core, every field maxed, never exceeds MAX
     aid: long("aid-"),
     dimension: long("dimension-"),
     newCap: long("newcap-"),
+    rubricSha: long("rubricsha-"),
+    checkpoint: long("checkpoint-"),
+    outputSha: long("outputsha-"),
+    checkId: long("checkid-"),
+    verdict: long("verdict-"),
+    baseline: 3,
     action: { type: "tool" },
     result: { costUsd: 4.2, tokens: 17, pricing: "priced" },
   };
@@ -245,7 +251,8 @@ test("audit truncation: the must-keep core, every field maxed, never exceeds MAX
   assert.equal(line._dropped_core, undefined);
   // Every must-keep field survived, at its clipped (not dropped) worst-case length.
   for (const key of ["ts", "seq", "run_id", "parent_run_id", "spawn_depth",
-                      "phase", "decision", "severity", "rule", "aid", "dimension", "newCap"]) {
+                      "phase", "decision", "severity", "rule", "aid", "dimension", "newCap",
+                      "rubricSha", "checkpoint", "outputSha", "checkId", "verdict", "baseline"]) {
     assert.ok(Object.prototype.hasOwnProperty.call(line, key), `must-keep key "${key}" was dropped`);
   }
   assert.ok(line.run_id.startsWith("run-"));

@@ -52,7 +52,7 @@ import { resolveWithSymlinks, findSymlinkComponent, within, norm } from "./fs.js
  * A frozen, validated spec (the `createRubric` return value). Same shape as the spec.
  * @property {number} schema
  * @property {string} goal
- * @property {Object<string, {gating: boolean, requiresHuman?: true, checks: Check[]}>} checkpoints
+ * @property {Object<string, {gating: boolean, requiresHuman?: true, accept?: ("live"|"later"), checks: Check[]}>} checkpoints
  *
  * @typedef {Object} StepResult
  * @property {"green"|"red"|"stopped"} verdict
@@ -811,6 +811,11 @@ export const rubricVocabulary = deepFreeze({
     name: { maxLength: MAX_NAME_LEN },
     quoteSourceMaxBytes: SOURCE_CAP_BYTES,
   },
+  checkpoint: {
+    gating: { type: "boolean", required: true },
+    requiresHuman: { type: "boolean", required: false, enum: [true], requires: "gating" },
+    accept: { type: "enum", required: false, enum: ["live", "later"], default: "live", requires: "requiresHuman", description: "live: the gate asks through humanChannel at this position; later: a harness records the ACCEPT with gate.recordAccept (the harness parks and resumes in another process)" },
+  },
   foundational: [
     { name: "happened", description: "the output exists and is readable: a non-empty string, or an object with at least one own key" },
   ],
@@ -979,11 +984,15 @@ export function createRubric(spec, opts) {
     if (id.includes(":")) throw fail(w, 'checkpoint ids must not contain ":"');
     const cp = cps[id];
     if (cp === null || typeof cp !== "object" || Array.isArray(cp)) throw fail(w, "must be an object");
-    checkKeys(cp, ["gating", "requiresHuman", "checks"], w);
+    checkKeys(cp, ["gating", "requiresHuman", "accept", "checks"], w);
     if (typeof cp.gating !== "boolean") throw fail(`${w}.gating`, "must be a boolean");
     if (cp.requiresHuman !== undefined) {
       if (cp.requiresHuman !== true) throw fail(`${w}.requiresHuman`, "must be true when present");
       if (!cp.gating) throw fail(`${w}.requiresHuman`, "needs a gating checkpoint (it would never be enforced)");
+    }
+    if (cp.accept !== undefined) {
+      if (cp.accept !== "live" && cp.accept !== "later") throw fail(`${w}.accept`, 'must be "live" or "later"');
+      if (cp.requiresHuman !== true) throw fail(`${w}.accept`, "needs requiresHuman: true (nothing is asked otherwise)");
     }
     if (!Array.isArray(cp.checks)) throw fail(`${w}.checks`, "must be an array");
     const seen = new Set();
