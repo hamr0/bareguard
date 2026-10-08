@@ -236,7 +236,9 @@ test("rubricVocabulary: documents bounds and defaults (count >= 1 no max, strict
   assert.equal(v.commandExit.fields.noneExit, undefined, "commandExit has no noneExit");
   assert.ok(v.patternAbsent.fields.noneExit && v.notWorse.fields.noneExit && v.filesChanged.fields.noneExit);
   assert.equal(v.notWorse.fields.direction.required, true);
-  assert.deepEqual(v.sections.fields.names, { type: "string-list", required: true, minItems: 1, itemType: "string", nonBlank: true });
+  assert.deepEqual(v.sections.fields.names, { type: "string-list", required: true, minItems: 1, itemType: "string", nonBlank: true, itemMaxLength: 1000 });
+  assert.equal(rubricVocabulary.bounds.stringList.itemMaxLength, 1000);
+  assert.deepEqual(rubricVocabulary.bounds.signedString, { maxLength: 1000 });
   assert.equal(rubricVocabulary.bounds.quoteSourceMaxBytes, 5 * 1024 * 1024);
 });
 
@@ -274,4 +276,43 @@ test("an inherited Object.prototype name is not a check type", () => {
   for (const rule of ["constructor", "toString", "hasOwnProperty", "__proto__"]) {
     assert.throws(() => createRubric(spec([{ id: "a", rule, field: "t" }])), /not a known check type/);
   }
+});
+
+// --- RULED (hamr, 2026-10-08): signed names are never clipped; bounded at createRubric; no trailing ":" ---
+
+test("a signed name/phrase/value is refused past 1000 characters at createRubric, accepted AT 1000 (every signed string path)", () => {
+  const at = "n".repeat(1000);
+  const over = "n".repeat(1001);
+  const cases = [
+    (v) => ({ id: "a", rule: "sections", field: "text", names: [v] }),
+    (v) => ({ id: "a", rule: "sectionOrder", field: "text", names: [v] }),
+    (v) => ({ id: "a", rule: "mustCarry", field: "text", phrases: [v] }),
+    (v) => ({ id: "a", rule: "blockLines", field: "text", size: 1, phrases: [v] }),
+    (v) => ({ id: "a", rule: "in", field: "text", values: [v] }),
+    (v) => ({ id: "a", rule: "notIn", field: "text", values: [v] }),
+    (v) => ({ id: "a", rule: "atMost", field: "text", value: v, order: [v, "z"] }),
+    (v) => ({ id: "a", rule: "atMost", field: "text", value: "z", order: [v, "z"] }),
+    (v) => ({ id: "a", rule: "patternAbsent", patterns: [v] }),
+    (v) => ({ id: "a", rule: "filesChanged", allowPrefixes: [v], requireNonEmpty: false }),
+    (v) => ({ id: "a", rule: "notWorse", direction: "lower-is-better", baseline: 1, terms: [v] }),
+  ];
+  for (const mk of cases) {
+    assert.doesNotThrow(() => createRubric(spec([mk(at)])), `${mk(at).rule} at 1000`);
+    assert.throws(() => createRubric(spec([mk(over)])), /must be at most 1000 characters/, `${mk(over).rule} at 1001`);
+  }
+  assert.throws(() => createRubric(spec([{ id: "a", rule: "complete", claims: "c", items: [over] }])), /must be at most 1000 characters/);
+});
+
+test("a section name ending in ':' (after trim) is refused at createRubric and the error names it; sections AND sectionOrder; mustCarry unaffected", () => {
+  for (const rule of ["sections", "sectionOrder"]) {
+    for (const bad of ["Summary:", "Skills :", "Skills:  ", " Experience: "]) {
+      assert.throws(
+        () => createRubric(spec([{ id: "a", rule, field: "text", names: ["Fine", bad] }])),
+        (e) => e.path === "spec.checkpoints.resume.checks[0].names[1]" && e.message.includes(JSON.stringify(bad)) && /ends in ":"/.test(e.message),
+        `${rule} ${JSON.stringify(bad)}`,
+      );
+    }
+    assert.doesNotThrow(() => createRubric(spec([{ id: "a", rule, field: "text", names: ["Summary", "a:b", ":lead"] }])), "an inner/leading ':' is fine");
+  }
+  assert.doesNotThrow(() => createRubric(spec([{ id: "a", rule: "mustCarry", field: "text", phrases: ["Total:"] }])), "a phrase may end in ':'");
 });

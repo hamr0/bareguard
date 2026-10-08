@@ -161,11 +161,15 @@ test("complete: the claims' own list is never the item list (the judge/agent can
   assert.deepEqual(gap(r).items, ["b", "c"]);
 });
 
-test("gap item lists are bounded: 20 shown, the true total reported, long strings clipped", async () => {
+test("gap item lists are bounded: 20 shown, the true total reported; SIGNED items unclipped, CALLER items clipped", async () => {
   const items = Array.from({ length: 50 }, (_, i) => `item-${i}-${"x".repeat(300)}`);
   const r = await run([{ id: "k", rule: "complete", claims: "claims", items }], { claims: [] });
   assert.equal(gap(r).items.length, 20);
   assert.equal(gap(r).itemsTotal, 50);
-  assert.ok(gap(r).items.every((s) => s.length <= 120));
-  assert.ok(JSON.stringify(gap(r)).length < 4000);
+  assert.deepEqual(gap(r).items, items.slice(0, 20), "signed items ride the gap whole (the worker must reproduce them)");
+  assert.ok(JSON.stringify(gap(r)).length < 20 * 1100);
+  // caller-supplied (measured) items ARE clipped
+  const r2 = await run([{ id: "k", rule: "complete", claims: "claims", itemsFrom: "caller" }], { claims: [] }, { items: { k: items } });
+  assert.equal(gap(r2).items.length, 20);
+  assert.ok(gap(r2).items.every((x) => x.length <= 120));
 });

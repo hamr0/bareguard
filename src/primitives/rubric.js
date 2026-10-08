@@ -71,7 +71,8 @@ import { resolveWithSymlinks, findSymlinkComponent, within, norm } from "./fs.js
 const MAX_NAME_LEN = 128; // ids, checkpoint ids, field names (they land in keys and audit lines)
 const SOURCE_CAP_BYTES = 5 * 1024 * 1024; // PRD §4.2 / ruling 2026-10-06 #7
 const MAX_ITEMS = 20; // offender-list bound in a gap
-const CLIP = 120; // a string inside a gap
+const CLIP = 120; // a caller-MEASURED / output-derived string inside a gap (never a signed one)
+const MAX_SIGNED_LEN = 1000; // a signed name/phrase/value is refused past this at createRubric, so it rides a gap UNCLIPPED
 const FAULT_DETAIL_CLIP = 200;
 const MAX_LIST = 100_000; // caller/output list we will walk (each filesChanged path costs an lstat)
 const MAX_SNAPSHOT_DEPTH = 16;
@@ -194,7 +195,7 @@ export function rubricSha(spec) {
 const STRICT = { type: "boolean", required: false, default: false };
 const FIELD = { type: "name", required: true, nonBlank: true, maxLength: MAX_NAME_LEN };
 const COUNT = { type: "integer", required: true, min: 1, max: null };
-const LIST = { type: "string-list", required: true, minItems: 1, itemType: "string", nonBlank: true };
+const LIST = { type: "string-list", required: true, minItems: 1, itemType: "string", nonBlank: true, itemMaxLength: MAX_SIGNED_LEN };
 const OPT_LIST = { ...LIST, required: false };
 const NONE_EXIT = { type: "integer", required: false };
 // `text` on EVERY check is the signer's explanation only (Law 6): optional, a string, never decides.
@@ -319,8 +320,10 @@ function nameKey(name, strict) {
   return strict ? JSON.stringify([f, name]) : f;
 }
 
-function boundItems(items) {
-  const list = items.slice(0, MAX_ITEMS).map((s) => clip(s));
+// `signed`: the items are values the signer wrote (names, phrases, ids); they ride a gap UNCLIPPED (bounded at
+// createRubric), because the worker must be able to reproduce them. Measured / output-derived items are clipped.
+function boundItems(items, signed = false) {
+  const list = items.slice(0, MAX_ITEMS).map((s) => (signed ? String(s) : clip(s)));
   return items.length > MAX_ITEMS ? { items: list, itemsTotal: items.length } : { items: list };
 }
 
@@ -333,7 +336,7 @@ function runSections(ctx, c) {
   const set = new Set(heads);
   const missing = c.names.filter((n) => !set.has(nameKey(n, strict)));
   if (missing.length === 0) return OK;
-  return red("missing", { measured: missing.length, limit: c.names.length, ...boundItems(missing) });
+  return red("missing", { measured: missing.length, limit: c.names.length, ...boundItems(missing, true) });
 }
 
 function runSectionOrder(ctx, c) {
@@ -375,7 +378,7 @@ function runSectionOrder(ctx, c) {
   }
   if (offenders.length === 0) return OK;
   const kind = ["missing", "out-of-order"].filter((k) => kinds.has(k)).join(",");
-  return red(kind, { measured: offenders.length, limit: c.names.length, ...boundItems(offenders) });
+  return red(kind, { measured: offenders.length, limit: c.names.length, ...boundItems(offenders, true) });
 }
 
 /** Forgiving: case-insensitive substring. Strict: ALSO an exact substring (so never looser). */
@@ -390,7 +393,7 @@ function runMustCarry(ctx, c) {
   const strict = c.strict === true;
   const lower = t.text.toLowerCase();
   const missing = c.phrases.filter((p) => !carries(t.text, lower, p, strict));
-  return missing.length === 0 ? OK : red("missing", boundItems(missing));
+  return missing.length === 0 ? OK : red("missing", boundItems(missing, true));
 }
 
 function runBlockLines(ctx, c) {
@@ -409,7 +412,7 @@ function runBlockLines(ctx, c) {
   }
   if (missing.length > 0) kinds.push("block-missing");
   if (kinds.length === 0) return OK;
-  return red(kinds.join(","), { measured: lines.length, limit: c.size, ...(missing.length ? boundItems(missing) : {}) });
+  return red(kinds.join(","), { measured: lines.length, limit: c.size, ...(missing.length ? boundItems(missing, true) : {}) });
 }
 
 function runCountRule(measure, dir, over) {
@@ -447,7 +450,7 @@ function runIn(want) {
     if (typeof r.value !== "string") return red("wrong-type", { measured: typeName(r.value) });
     const inList = c.values.includes(r.value);
     if (inList === want) return OK;
-    return red(want ? "not-in" : "forbidden", { measured: clip(r.value), ...boundItems(c.values) });
+    return red(want ? "not-in" : "forbidden", { measured: clip(r.value), ...boundItems(c.values, true) });
   };
 }
 
@@ -556,7 +559,7 @@ function runComplete(ctx, c) {
     if (it !== undefined) covered.add(it);
   }
   const missing = items.filter((it) => !covered.has(it));
-  return missing.length === 0 ? OK : red("uncovered", { measured: missing.length, limit: items.length, ...boundItems(missing) });
+  return missing.length === 0 ? OK : red("uncovered", { measured: missing.length, limit: items.length, ...boundItems(missing, c.items !== undefined) });
 }
 
 // ---- caller-measured rules ----
@@ -648,7 +651,7 @@ function runNotWorse(ctx, c) {
       }
     }
   }
-  return red("worse", { measured: value, limit: baseline, direction: c.direction, ...(items.length ? boundItems(items) : {}) });
+  return red("worse", { measured: value, limit: baseline, direction: c.direction, ...(items.length ? boundItems(items, true) : {}) });
 }
 
 function runPatternAbsent(ctx, c) {
@@ -721,7 +724,7 @@ const RULES = {
   in: { fields: { field: FIELD, values: LIST }, run: runIn(true) },
   notIn: { fields: { field: FIELD, values: LIST }, run: runIn(false) },
   atMost: {
-    fields: { field: FIELD, value: { type: "string", required: true, nonBlank: true }, order: { ...LIST, unique: true } },
+    fields: { field: FIELD, value: { type: "string", required: true, nonBlank: true, maxLength: MAX_SIGNED_LEN }, order: { ...LIST, unique: true } },
     run: runAtMost,
   },
   max: { fields: { field: FIELD, value: { type: "number", required: true } }, run: runMaxMin("at-most") },
@@ -759,7 +762,7 @@ for (const r of Object.values(RULES)) r.fields.text = EXPLAIN;
 
 function describeField(name, d) {
   if (d.type === "explanation") return `${name}?: string (the signer's explanation; never decides)`;
-  let t = d.type === "string-list" ? "non-empty list of non-blank strings" : d.type === "name" ? `non-blank string, max ${d.maxLength} chars` : d.type === "string" ? "non-blank string" : d.type;
+  let t = d.type === "string-list" ? `non-empty list of non-blank strings, each max ${d.itemMaxLength} chars` : d.type === "name" ? `non-blank string, max ${d.maxLength} chars` : d.type === "string" ? `non-blank string, max ${d.maxLength} chars` : d.type;
   if (d.type === "integer" && d.min !== undefined) t = `integer >= ${d.min}`;
   if (d.type === "number") t = "finite number";
   if (d.type === "enum") t = d.enum.map((e) => JSON.stringify(e)).join(" | ");
@@ -803,7 +806,8 @@ export const rubricVocabulary = deepFreeze({
   },
   bounds: {
     count: { type: "integer", min: 1, max: null },
-    stringList: { type: "string-list", minItems: 1, itemType: "string", nonBlank: true },
+    stringList: { type: "string-list", minItems: 1, itemType: "string", nonBlank: true, itemMaxLength: MAX_SIGNED_LEN },
+    signedString: { maxLength: MAX_SIGNED_LEN },
     name: { maxLength: MAX_NAME_LEN },
     quoteSourceMaxBytes: SOURCE_CAP_BYTES,
   },
@@ -839,6 +843,7 @@ function checkValue(d, v, where) {
       return checkName(v, where);
     case "string":
       if (blank(v)) throw fail(where, "must be a non-blank string");
+      if (v.length > MAX_SIGNED_LEN) throw fail(where, `must be at most ${MAX_SIGNED_LEN} characters`);
       return;
     case "integer":
       if (!Number.isInteger(v) || (d.min !== undefined && v < d.min)) {
@@ -858,6 +863,7 @@ function checkValue(d, v, where) {
       if (!Array.isArray(v) || v.length < 1) throw fail(where, "must be a non-empty array of non-blank strings");
       v.forEach((s, i) => {
         if (blank(s)) throw fail(`${where}[${i}]`, "must be a non-blank string");
+        if (s.length > MAX_SIGNED_LEN) throw fail(`${where}[${i}]`, `must be at most ${MAX_SIGNED_LEN} characters`);
       });
       if (d.unique && new Set(v).size !== v.length) throw fail(where, "must not contain duplicates");
       return;
@@ -891,6 +897,12 @@ function validateCheck(c, where, inputNames) {
       continue;
     }
     checkValue(d, v, `${where}.${name}`);
+    if ((rule === "sections" || rule === "sectionOrder") && name === "names") {
+      // A heading line's trailing ":" is stripped from the LINE, never from the name, so such a name could never match.
+      v.forEach((n, i) => {
+        if (n.trim().endsWith(":")) throw fail(`${where}.names[${i}]`, `${JSON.stringify(n)} ends in ":", which can never match (the ":" is stripped from the heading line, not the name); drop the ":"`);
+      });
+    }
     if (d.ref === "input" && !inputNames.has(v)) throw fail(`${where}.${name}`, `names input ${JSON.stringify(clip(v))}, which is not in spec.inputs`);
   }
   if (def.exactlyOne) {
@@ -1114,7 +1126,6 @@ function mintGap(checkpoint, c, partial) {
   for (const k of ["kind", "measured", "limit", "direction", "items", "itemsTotal"]) {
     let v = partial[k];
     if (v === undefined) continue;
-    if (k === "measured" || k === "limit") v = typeof v === "string" ? clip(v) : v;
     g[k] = v;
   }
   return g;

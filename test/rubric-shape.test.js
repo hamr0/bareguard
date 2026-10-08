@@ -171,6 +171,8 @@ test("strict is NEVER looser than forgiving: over many generated inputs, forgivi
   const gen = () => Array.from({ length: 1 + rnd(3) }, () => (rnd(2) ? headingLine() : noise())).join(pick(["\n", "\r\n"]));
   const counts = { checked: 0, bothRed: 0, forgivingGreenStrictRed: 0 };
   const check = async (rule, extra, text) => {
+    // a section name ending in ":" is refused at createRubric (it could never match); pinned in rubric-create.test.js
+    if ((rule === "sections" || rule === "sectionOrder") && extra.names.some((n) => n.trim().endsWith(":"))) return;
     const f = (await one(rule, extra, { text })).verdict;
     const st = (await one(rule, { ...extra, strict: true }, { text })).verdict;
     counts.checked++;
@@ -213,7 +215,7 @@ test("strict heading parse equals the reference ^#{1,6} +([^ ][^]*)$ (the rest o
     if (!m) { assert.equal(gap(r).kind, "no-headings", `no heading in ${JSON.stringify(line)}`); continue; }
     matched++;
     assert.equal(gap(r).kind, "missing", `heading exists in ${JSON.stringify(line)}`);
-    if (m[1].trim() === "") continue; // a blank name is refused at createRubric
+    if (m[1].trim() === "" || m[1].trim().endsWith(":")) continue; // a blank name, or one ending in ":", is refused at createRubric
     // the capture is the heading text EXACTLY: it matches itself under strict iff the forgiving form also does
     const hit = await run([{ id: "k", rule: "sections", field: "text", names: [m[1]], strict: true }], { text: line });
     const fgv = await run([{ id: "k", rule: "sections", field: "text", names: [m[1]] }], { text: line });
@@ -373,4 +375,40 @@ test("a checkpoint with no opt-in checks still runs the foundational 'happened'"
 test("happened red short-circuits: no field checks pile on top of an empty output", async () => {
   const r = await run([{ id: "k", rule: "maxWords", field: "text", value: 1 }], "");
   assert.deepEqual(r.gaps.map((g) => g.check), ["happened"]);
+});
+
+// --- RULED (hamr, 2026-10-08): a signed name is NEVER clipped in a gap ----------
+
+test("a long SIGNED name (159 chars, then 1000) rides every gap path whole: sections, sectionOrder, mustCarry, blockLines, in/notIn, atMost", async () => {
+  for (const len of [159, 1000]) {
+    const n = "Z".repeat(len);
+    const r1 = await one("sections", { names: [n] }, "## other");
+    assert.deepEqual(gap(r1).items, [n], `sections ${len}`);
+    const r2 = await one("sectionOrder", { names: [n] }, "## other");
+    assert.deepEqual(gap(r2).items, [`missing:${n}`], `sectionOrder ${len}`);
+    const r3 = await one("mustCarry", { phrases: [n] }, "nope");
+    assert.deepEqual(gap(r3).items, [n], `mustCarry ${len}`);
+    const r4 = await one("blockLines", { size: 1, phrases: [n] }, "nope");
+    assert.deepEqual(gap(r4).items, [`block 1:${n}`], `blockLines ${len}`);
+    const r5 = await one("in", { values: [n] }, { text: "x" });
+    assert.deepEqual(gap(r5).items, [n], `in ${len}`);
+    const r6 = await one("atMost", { value: "lo", order: ["lo", n] }, { text: n });
+    assert.deepEqual([gap(r6).measured, gap(r6).kind], [n, "over"], `atMost measured ${len}`);
+    const r7 = await one("atMost", { value: n, order: [n, "hi"] }, { text: "nonsense" });
+    assert.equal(gap(r7).limit, n, `atMost limit ${len}`);
+  }
+});
+
+test("renderGaps does not clip a long signed item either", async () => {
+  const { renderGaps } = await import("../src/index.js");
+  const n = "Q".repeat(1000);
+  const r = await one("sections", { names: [n] }, "## other");
+  assert.ok(renderGaps(r.gaps).includes(n));
+});
+
+test("empty / whitespace-only output is red happened:empty BEFORE any check runs (blockLines never reaches zero-lines)", async () => {
+  for (const out of ["", "   ", "\n \t\n"]) {
+    const r = await run([{ id: "k", rule: "blockLines", field: "text", size: 2, phrases: ["x"] }], out);
+    assert.deepEqual(r.gaps.map((g) => `${g.check}:${g.kind}`), ["happened:empty"], JSON.stringify(out));
+  }
 });
