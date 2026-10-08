@@ -97,7 +97,7 @@ The harness is the structured answer: an externally-authored floor the agent can
 | D5 | **Two-tier floor.** Aggregate/closed (cumulative limits + closed allowlist) = the real wall. Per-action regex = HITL *trigger* only (decomposable → never a security boundary alone). Quantitative things go cumulative. | **LOCKED** |
 | D6 | **Closed allowlist:** deny-by-default, tuneable-to-loosen (never the reverse), fail-closed, safe defaults. | **LOCKED** |
 | D7 | **Axis B = detect-and-feed-A, never blocks alone.** Annotates A's stop with independent facts; B changes *what the human sees*, not *whether* you stop. Routing (§6.6, decisive 2026-06-15): the judge returns a decisive verdict (`honored`/`broke`), NOT a confidence scale (E6g showed the confidence framing hedges clean cases — a compliant €280 drew `unsure` and surfaced) and NOT violation/deviation (E6e showed `kind` unreliable). bareguard routes surface-vs-pass × reversibility: irreversible → the floor's HITL (B annotates); reversible → the escalation knob (strict default = surface anything not `honored`). B never auto-rejects; the LLM is caller-side only (§6.7). See [`axis-b.md`](axis-b.md) for the full spec. | **LOCKED** |
-| D8 | **Harness selection** is the agent's *proposal*, made at runtime, always (no ungoverned path). A probabilistic match-validator may *advise*; it is never the floor. | **PoC-VALIDATED (E5)** — mechanism shown; the *advisory* layer earns nothing yet (OQ2). Lives in the runner, not bareguard. |
+| D8 | **Harness selection** is the agent's *proposal*, made at runtime, always (no ungoverned path). A probabilistic match-validator may *advise*; it is never the floor. | **PoC-VALIDATED (E5)** — mechanism shown; the *advisory* layer earns nothing yet (OQ2). Lives in the runner, not bareguard. **DROPPED from the roadmap 2026-10-08** (rubric-prd.md §8): a runner concern. |
 
 ## 3. Core architecture: the two axes
 
@@ -158,7 +158,7 @@ A "harness" = a named preset of **{ tool menu + extra restrictions }** for a sit
 
 **Invariant: a harness can only TIGHTEN.** Smaller menu, more asks — never below the floor. ⇒ *if the agent picks the wrong harness, nothing unsafe happens* — the floor catches the irreversible action regardless. **The harness pick is not load-bearing for safety.** This is what keeps agent self-selection safe despite M1: selecting a *tighter* environment is harmless; the floor is the part the agent can't author (bareguard-prd.md:1975-1979).
 
-### 5.1 Selection (D8 · PROPOSED)
+### 5.1 Selection (D8 · PROPOSED · DROPPED from the roadmap 2026-10-08, a runner concern, rubric-prd.md §8)
 
 (bareguard-prd.md:1981-1989)
 - The agent picks a harness **at runtime, always** (default = most-permissive reversible, so there's never an unwrapped path). Same gesture as code mode picking *tools* from a list — the design north star is **tools-as-a-list → harnesses-as-a-list.**
@@ -185,7 +185,7 @@ The point of the separate doc: most of the spine **already exists** in bareguard
 | Floor: deny/ask refusal as structured error | `gate.run()` returns `{error:{type:"policy_denied",…}}` | **reuse** |
 | Floor: fail-closed safe defaults | Part 1 §11 + 0.4.5 stance | **reuse** |
 | Audit of ask-vs-return | `audit` JSONL (Part 1 §8 #9) | **reuse / extend** (log request + return so reconcile is reconstructable — a2a §12.2) |
-| Harness selection + code-mode execution | — (runner concern) | **NOT bareguard** → harness/runner layer (bareagent `Loop`); bareguard stays the chokepoint it calls |
+| Harness selection + code-mode execution | — (runner concern; DROPPED from the roadmap 2026-10-08, the `harness-code-mode/` POC is kept as archive) | **NOT bareguard** → harness/runner layer (bareagent `Loop`); bareguard stays the chokepoint it calls |
 | **Axis B: return reconciliation** | — (a2a **§12.4 DEFERRED**) | **NEW SURFACE** — see [`axis-b.md`](axis-b.md) |
 
 **Where it lives:** selection + code-mode execution belong to the **runner** (bareagent), which *uses* bareguard. bareguard never runs code — it decides. The only net-new bareguard *surface* this PRD introduces is Axis-B reconciliation (see [`axis-b.md`](axis-b.md)); the `bash.classify` severity tiering (§7.1) is an **extension of the existing ask floor**, not a new surface (bareguard-prd.md:2324-2328).

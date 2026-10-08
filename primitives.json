@@ -11,6 +11,15 @@
       "example": "import { Gate, addToGates } from \"bareguard\";\nconst gates = [\"searcher\", \"booker\"].map((agent) => new Gate({\n  audit: { path: null },\n  rwx: { agent, agents: { searcher: \"r--\", booker: \"rw-\" }, tools: {} },\n  humanChannel: async () => ({ decision: \"deny\" }),\n}));\nawait Promise.all(gates.map((g) => g.init()));\nconst results = await addToGates(gates, { search: \"r\" });\nresults.every((r) => r.ok); // true — both gates now admit \"search\""
     },
     {
+      "name": "checkStep",
+      "category": "rubric",
+      "when": "Reach for this each time an agent hands over output at a checkpoint: it grades the output against the signed rubric and returns the verdict, the structured gap to feed the retry, or the fault for the runner. Take any command/count measurements yourself first and pass them in — bareguard compares, it never runs a tool.",
+      "import": "import { checkStep } from 'bareguard'",
+      "signature": "checkStep(rubric: Rubric, checkpoint: string, output: string|object, opts?: { measurements?: object, items?: object, inputs?: object, priorBaselines?: object, outputBytes?: string|Uint8Array }) => Promise<StepResult>",
+      "fails": "Rejects with a TypeError only for CALLER misuse: a rubric not made by `createRubric`, an unknown checkpoint, a non-object `opts`, or a `judge` option (the judge path is not available yet — refused, not ignored). Never rejects because of the output: any shape, a throwing getter or a Proxy yields red (`happened`/field checks) and a throwing measurement yields stopped. An output that is not a string or a non-array object is red.",
+      "example": "import { createRubric, checkStep } from \"bareguard\";\nconst rubric = createRubric({ schema: 1, goal: \"g\", checkpoints: { resume: { gating: true,\n  checks: [{ id: \"words-cap\", rule: \"maxWords\", field: \"text\", value: 600 }] } } });\nconst r = await checkStep(rubric, \"resume\", \"word \".repeat(633));\n// r.verdict === \"red\"; r.gaps[0] -> { key: \"resume:words-cap\", measured: 633, limit: 600, direction: \"at-most\", ... }"
+    },
+    {
       "name": "classifyCommand",
       "category": "classify",
       "when": "Reach for this to tier a shell command's blast radius BEFORE running it — e.g. to pick how much ceremony your human channel demands. Use it standalone when you want the tiering without a Gate; inside a Gate, set `bash: { classify: true }` instead and the gate calls it for you.",
@@ -18,6 +27,15 @@
       "signature": "classifyCommand(command: string, opts?: object) => \"safe\"|\"destructive\"|\"super_destructive\"",
       "fails": "Never throws on its own: a non-string or empty `command` returns `\"safe\"`, an unknown `platform` falls back to the host's, and non-array `extra*` options are ignored. A `reclassify` callback you supply is called unguarded, so if IT throws the throw propagates. Best-effort and defeatable by construction (base64, heredocs, inline interpreter code) — a speed bump, never a sandbox.",
       "example": "import { classifyCommand } from \"bareguard\";\nclassifyCommand(\"git status\");        // \"safe\"\nclassifyCommand(\"rm -rf build\");      // \"destructive\"\nclassifyCommand(\"sudo rm -rf /\");     // \"super_destructive\""
+    },
+    {
+      "name": "createRubric",
+      "category": "rubric",
+      "when": "Reach for this the moment a rubric spec exists (a drafter produced it, or a signed one is being loaded): it is the draft-time gate that refuses a line mapping to no owned check, and the load-time gate that refuses an unsigned or tampered spec. Its result is what `checkStep` takes.",
+      "import": "import { createRubric } from 'bareguard'",
+      "signature": "createRubric(spec: object, opts?: { sha256: string }) => Rubric",
+      "fails": "Throws `Error(\"invalid rubric: <path> <reason>\")` (with `.path`) on any invalid spec — never returns a partial rubric. With `opts`, also throws when `opts.sha256` is missing or not equal to `rubricSha(spec)`. Day 1 refuses `judged` checks and `onExhausted: \"ask\"` (later work), and a `requiresHuman` checkpoint that is not `gating`.",
+      "example": "import { createRubric, rubricSha } from \"bareguard\";\nconst spec = { schema: 1, goal: \"Write the resume\", checkpoints: { resume: { gating: true,\n  checks: [{ id: \"words-cap\", rule: \"maxWords\", field: \"text\", value: 600 }] } } };\nconst rubric = createRubric(spec, { sha256: rubricSha(spec) }); // throws on a bad spec or a wrong sha"
     },
     {
       "name": "defaultAuditPath",
@@ -56,6 +74,24 @@
       "example": "import { Gate } from \"bareguard\";\nconst gate = new Gate({\n  audit: { path: null },\n  rwx: { agent: \"fixer\", agents: { fixer: \"rwx\" }, tools: { read: \"r\" } },\n  humanChannel: async () => ({ decision: \"deny\" }),\n});\nawait gate.init();\nawait gate.add({ deploy: \"x\" }); // new key, mid-run — tighten-only from here\nconst decision = await gate.check({ type: \"deploy\", args: {} });\ndecision.outcome; // \"allow\""
     },
     {
+      "name": "Gate#checkStep",
+      "category": "rubric",
+      "when": "Reach for this instead of the exported `checkStep` whenever a Gate holds the rubric: it is the only call that makes a verdict real to `gate.check`. Call it each time the agent hands over output at a checkpoint, then let the advance action through `gate.check` carrying `{ type, checkpoint, outputSha }`.",
+      "import": "import { Gate } from 'bareguard'",
+      "signature": "gate.checkStep(checkpoint: string, output: string|object, opts?: { measurements?: object, items?: object, inputs?: object, outputBytes?: string|Uint8Array }) => Promise<StepResult>",
+      "fails": "Rejects with a TypeError when the gate has no `rubric` config, the checkpoint is unknown, `opts` is not an object, or `opts.priorBaselines` is passed; rejects when the rubric config was swapped after construct (`rubric.invalid`). Never rejects because of the output. An audit write failure propagates.",
+      "example": "const gate = new Gate({ rubric: { spec, sha256: rubricSha(spec), advanceOn: [\"done\"] } });\nconst r = await gate.checkStep(\"resume\", text);            // r.verdict, r.gaps, r.outputSha\nawait gate.check({ type: \"done\", checkpoint: \"resume\", outputSha: r.outputSha });"
+    },
+    {
+      "name": "Gate#drainGaps",
+      "category": "rubric",
+      "when": "Reach for this to build the retry prompt after a red verdict: feed the worker ONLY this, never the rubric.",
+      "import": "import { Gate } from 'bareguard'",
+      "signature": "gate.drainGaps() => Gap[]",
+      "fails": "Never throws.",
+      "example": "const r = await gate.checkStep(\"resume\", text);\nif (r.verdict === \"red\") retryPrompt = renderGaps(gate.drainGaps());"
+    },
+    {
       "name": "Gate#readAudit",
       "category": "audit",
       "when": "Reach for this to read this gate's own audit log back programmatically — e.g. to verify what a run actually did, replay it, or feed it to a dashboard — without risking a live in-memory line (fileless mode) being mutated out from under a still-running gate.",
@@ -63,6 +99,15 @@
       "signature": "gate.readAudit() => Promise<object[]>",
       "fails": "Never throws. A line containing something that cannot round-trip through JSON (this can only happen in fileless mode — `Audit.emit()` in file mode already degrades an unserializable payload before persisting, so a file-mode read is always JSON-shaped) falls back to {@link safeDeepClone}, a per-line deep, decoupled clone that tolerates a BigInt, a function/symbol/`undefined` value, a true cycle, or a throwing getter/`toJSON` — NEVER a shared reference into the live line and never a live function reference either — so one bad line can never sink an otherwise-good read, and mutating what comes back can never reach the gate's live audit state either way. `safeDeepClone` itself is called inside its own try/catch here too: a pathologically deep chain is bounded by {@link MAX_CLONE_DEPTH} internally, but the wrapping catch is defensive — a `RangeError` at this top-level call site would otherwise escape `lines.map` and this async function.",
       "example": "import { Gate } from \"bareguard\";\nconst gate = new Gate({\n  audit: { path: null },\n  tools: { allowlist: [\"read\"] },\n  humanChannel: async () => ({ decision: \"deny\" }),\n});\nawait gate.init();\nawait gate.check({ type: \"read\", args: {} });\nconst lines = await gate.readAudit();\nlines.length > 0; // true"
+    },
+    {
+      "name": "Gate#recordAccept",
+      "category": "rubric",
+      "when": "Reach for this from the harness when a parked run resumes with the human's answer: the advance of an `accept: \"later\"` checkpoint is denied `rubric.needs-accept` until this records the ACCEPT for the verdict's exact `outputSha`.",
+      "import": "import { Gate } from 'bareguard'",
+      "signature": "gate.recordAccept(accept: { checkpoint: string, outputSha: string, by: string, at?: string, askId?: string }) => Promise<void>",
+      "fails": "Rejects (after auditing the refusal) when the checkpoint is not requiresHuman, is not `accept: \"later\"`, has no green verdict, the sha differs from the verdict's, or `by` is blank; rejects with a TypeError when the gate has no rubric or the argument is not an object.",
+      "example": "await gate.recordAccept({ checkpoint: \"resume\", outputSha: r.outputSha, by: \"hamr\", askId: \"ask-17\" });"
     },
     {
       "name": "Gate#rwxTools",
@@ -101,6 +146,15 @@
       "example": "import { matchAny } from \"bareguard\";\nmatchAny(\"read_file\", [\"read_*\", \"search\"]); // true"
     },
     {
+      "name": "numbersInQuote",
+      "category": "rubric",
+      "when": "Reach for this right after `quoteIn` passes, to catch a claim whose figures drifted from the quote that supposedly backs it (a quote saying \"2 weeks\" cannot back a claim of \"4 hours\").",
+      "import": "import { numbersInQuote } from 'bareguard'",
+      "signature": "numbersInQuote(claim: string, quote: string) => { ok: boolean, missing: string[], why?: \"not-a-string\" }",
+      "fails": "Never throws. A non-string argument returns `{ ok: false, missing: [] , why: \"not-a-string\" }`. `missing` lists the claim's unmatched tokens, de-duplicated and capped at 20.",
+      "example": "import { numbersInQuote } from \"bareguard\";\nnumbersInQuote(\"delivers 8x faster\", \"delivers 8x faster\").ok;   // true\nnumbersInQuote(\"delivers in 4 hours\", \"delivers in 2 weeks\");    // { ok: false, missing: [\"4\"] }"
+    },
+    {
       "name": "PAYLOAD_FIELDS",
       "category": "content",
       "when": "Read it to see which `action.args` fields `content` patterns deliberately do NOT scan — the write payload (the document being written), as opposed to the operation. Check it when a deny you expected did not fire on file contents.",
@@ -108,6 +162,15 @@
       "signature": "PAYLOAD_FIELDS: readonly string[]",
       "fails": "Frozen: an accidental push throws in strict mode rather than silently changing matching for every Gate in the process. There is no config knob — the scoping is fixed at the library.",
       "example": "import { PAYLOAD_FIELDS } from \"bareguard\";\nPAYLOAD_FIELDS; // [\"content\", \"contents\"] — a literal DROP TABLE inside these is not a deny"
+    },
+    {
+      "name": "quoteIn",
+      "category": "rubric",
+      "when": "Reach for this to check that a quote a model returned really appears in the frozen text it claims to cite, forgiving only markdown bold and reflowed whitespace — so a paraphrase or a changed word fails, but a quote copied across a line wrap or out of a bold run passes.",
+      "import": "import { quoteIn } from 'bareguard'",
+      "signature": "quoteIn(quote: string, source: string) => { ok: boolean, why?: \"not-a-string\"|\"source-too-large\"|\"empty-quote\"|\"not-found\" }",
+      "fails": "Never throws. A non-string argument, an empty quote and an oversize source each return `{ ok: false, why }`. Plain substring search, no regex built from input.",
+      "example": "import { quoteIn } from \"bareguard\";\nquoteIn(\"ships in 2 weeks\", \"It **ships in\\n2 weeks**.\").ok; // true\nquoteIn(\"ships in 3 weeks\", \"It ships in 2 weeks.\").ok;      // false"
     },
     {
       "name": "redact",
@@ -119,6 +182,15 @@
       "example": "import { redact } from \"bareguard\";\nredact({ apiKey: \"sk-live-abcdef0123456789\" });\n// => { apiKey: \"[REDACTED:key=apiKey]\" }"
     },
     {
+      "name": "renderGaps",
+      "category": "rubric",
+      "when": "Reach for this to detect a stuck retry loop: render the gaps of each try and compare the strings — an identical render means the worker changed nothing that the checks can see.",
+      "import": "import { renderGaps } from 'bareguard'",
+      "signature": "renderGaps(gaps: Gap[]) => string",
+      "fails": "Never throws. A non-array returns \"\"; an element that is not an object is skipped; a hostile getter is read as absent.",
+      "example": "import { renderGaps } from \"bareguard\";\nrenderGaps([{ key: \"resume:words-cap\", check: \"maxWords\", measured: 633, limit: 600, direction: \"at-most\" }]);\n// '[\"resume:words-cap\",\"maxWords\",null,null,633,600,\"at-most\",null,null]'"
+    },
+    {
       "name": "routeAnnotation",
       "category": "axis-b",
       "when": "Only when you are building the Axis-B path by hand and need to know where a fact WOULD go before you pay to compute it. `gate.annotate()` already routes internally, so most callers never call this directly.",
@@ -126,6 +198,24 @@
       "signature": "routeAnnotation(surface: boolean, reversible: boolean, knob?: \"strict\"|\"relaxed\") => \"pass\"|\"annotate-floor-ask\"|\"HITL\"|\"log\"",
       "fails": "Never throws and has no side effects — it is a pure four-way lookup over three booleans. Any `knob` value other than `\"strict\"` behaves as `\"relaxed\"`.",
       "example": "import { routeAnnotation } from \"bareguard\";\nrouteAnnotation(true, false);            // \"annotate-floor-ask\" — irreversible + broke\nrouteAnnotation(true, true, \"relaxed\"); // \"log\" — reversible + broke, no human"
+    },
+    {
+      "name": "rubricSha",
+      "category": "rubric",
+      "when": "Reach for this to get the fingerprint of a rubric spec — the value the human signs and the gate verifies — or to check that a harness's projection of a larger signed spec hashes the same fields. It covers EVERYTHING in the spec (goal, inputs, judge identity, every check), so any edit forces a re-sign.",
+      "import": "import { rubricSha } from 'bareguard'",
+      "signature": "rubricSha(spec: object) => string",
+      "fails": "Throws on a spec that is not plain JSON data: undefined, NaN/Infinity, a function/bigint/symbol, a class instance, a `__proto__`/`constructor`/`prototype` key, a throwing getter or Proxy, or nesting past 16 levels. Canonical form: sorted keys, JSON scalars; `-0` hashes as `0`. It does NOT validate the spec's meaning — that is `createRubric`.",
+      "example": "import { rubricSha } from \"bareguard\";\nrubricSha({ schema: 1, goal: \"g\", checkpoints: {} }) === rubricSha({ checkpoints: {}, goal: \"g\", schema: 1 }); // true"
+    },
+    {
+      "name": "rubricVocabulary",
+      "category": "rubric",
+      "when": "Read this to draft a rubric: it lists the ONLY check types you may use and each one's exact fields. A drafted line that maps to none of them must be refused, never bent onto the nearest rule. Every description shown to a person should be generated from this, not hand-written.",
+      "import": "import { rubricVocabulary } from 'bareguard'",
+      "signature": "rubricVocabulary: unknown",
+      "fails": "Plain frozen data; reading never throws, and mutating it throws in strict mode (it is deep-frozen). Day 1 lists the deterministic rules only — `judged`, `locate`/`verdict` judges and soft-green are not in it.",
+      "example": "import { rubricVocabulary } from \"bareguard\";\nrubricVocabulary.rules.maxWords.fields.value; // { type: \"integer\", required: true, min: 1, max: null }"
     },
     {
       "name": "SAFE_DEFAULT_ASK_PATTERNS",

@@ -16,12 +16,14 @@ agent family. One `humanChannel` callback for all human escalations.
 **rwx (PRD §23)** is not a fourteenth primitive — nothing in
 `src/primitives/rwx.js` is exported publicly or tagged `@when`. rwx is
 `Gate` **config wiring**: a second, mutually exclusive mode for the step-5
-slot `tools.allowlist` occupies today. `primitives.json`/`check:primitives`
-count 17 entries as of 0.18.1: the 13 domain primitives above, plus
-`addToGates()` and three of `Gate`'s own methods (`Gate#add`,
-`Gate#rwxTools`, `Gate#readAudit`) — harness-only rwx/audit verbs, tagged
-because the manifest is read by the AI **building** a harness, not the
-running agent (which never holds a `Gate` reference either way).
+slot `tools.allowlist` occupies today. `primitives.json` (checked by
+`npm run check:primitives`, which regenerates it and fails on drift) is the
+authoritative entry list — read the file for the count. It holds the 13
+domain primitives above, plus the rubric verbs, plus `addToGates()` and
+`Gate`'s own harness-only methods (`Gate#add`, `Gate#rwxTools`,
+`Gate#readAudit`, …) — tagged because the manifest is read by the AI
+**building** a harness, not the running agent (which never holds a `Gate`
+reference either way).
 See [rwx mode](#rwx-mode-operator-tagged-capability-letters-23) below.
 
 ```
@@ -269,6 +271,13 @@ THE 6 STEPS (first match wins; all action severity unless noted)
        joined/chained bash command not listed verbatim denies rwx.joined. See
        [rwx mode](#rwx-mode-operator-tagged-capability-letters-23) below.
   6. default                        → allow
+
+AFTER THE 6 STEPS (only when a `rubric` is configured; deny-only, Law 9)
+  R. rubric advance rules           → deny  (rubric.invalid on every action; for an action whose
+                                      `type` or valid `tool` is in `rubric.advanceOn`: rubric.unminted → rubric.exhausted →
+                                      rubric.stopped → rubric.red → rubric.output-mismatch → rubric.needs-accept,
+                                      which is an ask on an `accept: "live"` checkpoint). Runs after the floor,
+                                      so it can add a deny and never turn a floor deny/ask into an allow.
 ```
 
 **rwx runs where `tools.allowlist` runs — nothing earlier changes.** `flags` at
@@ -574,7 +583,7 @@ written to — `add()` mutates only the gate's own private, construct-time
 deep-copied map. Full contract: `src/gate.js`'s own `add()`/`_addOnce` JSDoc,
 PRD §23.21.
 
-**`gate.rwxTools()`** is `add()`'s read counterpart — added this session to
+**`gate.rwxTools()`** is `add()`'s read counterpart — added in 0.18.0 to
 close a gap the rwx-e2e bench flagged (a harness had no public way to read
 "what does the gate currently believe this key's letter is," only the
 private `gate.cfg.rwx.tools`). Returns a DECOUPLED deep copy of the current
@@ -597,7 +606,7 @@ DECOUPLED copy of every line, in both file and fileless mode — mutating the
 returned array or any line in it, at any depth, can never affect the gate's
 live audit state.
 
-This replaces an earlier documentation call (this session) that blessed
+This replaces an earlier documentation call that blessed
 `gate.audit.readAll()` itself as the replay path. That turned out to be a
 real gap, not just a naming one: `gate.audit` is the LIVE `Audit` instance,
 and `Audit` carries a public `emit()` — any caller holding a `Gate`
@@ -689,6 +698,112 @@ cap is kept **separate from the letter string** (`"rw-"` + `{ w: 20 }`, never
 `"rw+20"`), and N is the family's total across every helper sharing the
 budget file, not N per child.
 
+## Rubric: signed checks that gate an advance
+
+bareguard never runs an LLM; it checks deterministic facts against declared, enumerated rules. Reach for the rubric when a step must not be called "done" until its output passes checks the human signed in advance (word caps, headings, phrases carried, a lint count not worse than baseline), and the agent must not be able to talk its way past them. It is **not** for judging meaning: that stays the caller's job (`gate.annotate` carries a caller-computed fact).
+
+**Roles.** The *runner* (you, the harness) drafts the spec, takes measurements and calls `gate.checkStep`. The *human* signs `rubricSha(spec)` before and accepts after. *bareguard* grades and gates. The agent never holds the rubric, `gate.checkStep` or `gate.recordAccept`; it only sends the advance action.
+
+**Call shapes** (signatures, not a runnable script; the runnable example is at the end of this section).
+
+```text
+// import { createRubric, rubricSha, rubricVocabulary, renderGaps, checkStep, quoteIn, numbersInQuote, Gate } from "bareguard"
+
+createRubric(spec)                       // validate; throws on an unknown check, bad shape, unsigned/tampered spec
+rubricSha(spec)                          // the fingerprint the human signs
+new Gate({ rubric: { spec, sha256, advanceOn: ["step.done"] }, runId, audit: { path } })
+await gate.checkStep(checkpoint, output, { measurements?, items?, inputs?, outputBytes? })
+                                         // -> { verdict, gaps, fault, full, rubricSha, outputSha }
+gate.drainGaps()                         // SYNC read-and-clear: the WORKER view for the retry
+await gate.check({ type: "step.done", checkpoint, outputSha })   // the advance
+await gate.recordAccept({ checkpoint, outputSha, by, at?, askId? })  // HARNESS-ONLY, accept: "later"
+```
+
+A drafting LLM reads `rubricVocabulary` (frozen; every rule with its exact fields, types, bounds and defaults) and may use only those check types; do not hand-copy it into prompts or docs, generate from it. `maxReds` and `onExhausted` are fields of the SIGNED spec, never gate keys (a gate key of either name throws at construct). `gate.checkStep` takes no verdict and no `priorBaselines`: there is no way to hand the gate a verdict. The exported `checkStep(rubric, checkpoint, output, opts)` is the pure form for agents with no Gate; it mints nothing the gate can see.
+
+**Deny rules on the advance** (only actions whose `type` or valid `tool` is in `advanceOn` are examined; each rule can only ADD a deny). Name the advance action with a reserved name that is no real tool's name (e.g. `fwdloop.advance`): an `advanceOn` entry equal to a real tool name (e.g. `write`) would run the rubric on the model's ordinary tool calls and could deny them:
+
+| Rule | Meaning |
+|---|---|
+| `rubric.invalid` | the rubric config was swapped or its sha changed after construct; denies EVERY action |
+| `rubric.unminted` | no `checkStep` has minted a verdict for this checkpoint (or the action names none) |
+| `rubric.exhausted` | reds reached the signed `maxReds`; terminal until a re-sign or an ACCEPT |
+| `rubric.stopped` | the instrument failed (exception, failed liveness proof, missing measurement); the runner got a `fault`, the worker got nothing |
+| `rubric.red` | a check failed; the worker's retry is fed the gap only |
+| `rubric.output-mismatch` | `outputSha` is not the one the verdict was minted for, or the verdict is not bound to bytes (an object with no `outputBytes`) |
+| `rubric.needs-accept` | `requiresHuman` and no ACCEPT recorded for this exact `outputSha` |
+
+A non-gating checkpoint records and returns gaps but never denies.
+
+**Eval position and Law 9 (the floor is the ceiling).** The rubric runs AFTER the whole Axis A floor and only adds a deny. A green verdict never turns a floor deny or ask into an allow: an advance your `content.denyPatterns`, `fs`, `net`, `rwx` or `tools.allowlist` denies stays denied, and a floor ask is asked first (the rubric's own ask follows it). A rubric cannot widen a scope, raise a budget or add an allowlist entry.
+
+**Measurements and the liveness proof.** bareguard runs no command and reads no git; you measure and pass `measurements[checkId]`. For `notWorse`, `patternAbsent` and `filesChanged` pass the tool's `exit` and `matchedPreScope` (the match count BEFORE any scope filter); `commandExit` needs `exit` only. A missing proof, or a non-zero `exit` with zero `matchedPreScope`, is `stopped` ("a crashed tool is unknown, not zero"). A tool whose "none found" is a non-zero exit declares a signed `noneExit: <n>` on the check (not on `commandExit`); an `exit` equal to it with zero matches is a live zero.
+
+**`outputBytes` for objects.** `outputSha` is the sha256 of exactly the bytes the advance is bound to. For a string output that is its UTF-8 bytes. For an object, bareguard never serializes it, so pass `outputBytes` (a string, Buffer or Uint8Array; e.g. `JSON.stringify(artifact, null, 2)`) and keep those exact bytes for the artifact you ship; with no `outputBytes` an object gets `outputSha: null` and its advance is denied `rubric.output-mismatch`. A plain string output is the single field `text`.
+
+**Resume: pass a stable `config.runId`.** Minted verdicts, red counts, seed baselines and ACCEPTs are rebuilt from the audit on cold start, matched by the gate's `runId` and `rubricSha`. Resume with the same `runId` AND the same audit path and a count survives; a gate with no `runId` gets a random one and starts fresh, as does a different `runId` or a re-signed spec. Nothing finds the earlier run for you.
+
+**Accept: `"live"` or `"later"`** (signed per `requiresHuman` checkpoint, default `"live"`, nothing inferred).
+- `"live"`: a green advance asks through `humanChannel` (rule `rubric.needs-accept`, event key `rubric: { rubricSha, checkpoint, outputSha, verdict, gaps }`), once per `outputSha`. Only `{ decision: "allow" }` accepts; any other reply, a timeout, a throw or no channel denies. A different `outputSha` asks again. Concurrent advances for the same `(checkpoint, outputSha)` share one ask and one `rubric_accept` line. A reply that arrives after the verdict moved on (no longer that green `outputSha`, or the checkpoint is exhausted) is discarded: no ACCEPT line, red count not reset.
+- `"later"`: no live ask; the advance is denied `rubric.needs-accept` until the harness calls `gate.recordAccept`, which throws (and writes a `rubric_accept_refused` audit line) unless the checkpoint is `requiresHuman` + `"later"` and the latest verdict is GREEN for exactly that `outputSha`. `recordAccept` is **harness-only**, like `gate.add`: never give the agent a handle on the gate that can call it.
+
+**Audit.** Phases `rubric` (one per mint), `rubric_baseline`, `rubric_accept` (`source: "live" | "later"`), `rubric_accept_refused`.
+
+```javascript
+import { Gate, createRubric, rubricSha, rubricVocabulary } from "bareguard";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+console.log(Object.keys(rubricVocabulary.rules));                                  // every rule and its exact fields
+
+const spec = {
+  schema: 1, goal: "Ship the report artifact", inputs: [],
+  checkpoints: {
+    build: { gating: true, checks: [
+      { id: "lint-not-worse", rule: "notWorse", direction: "lower-is-better", baseline: 3, noneExit: 1 },
+      { id: "has-title",      rule: "nonEmpty", field: "title" },
+    ] },
+    publish: { gating: true, requiresHuman: true, accept: "later", checks: [
+      { id: "has-title", rule: "nonEmpty", field: "title" },
+    ] },
+  },
+  maxReds: 3,
+};
+const dir = mkdtempSync(join(tmpdir(), "bg-ctx-"));
+const mk = (runId) => new Gate({
+  rubric: { spec, sha256: rubricSha(spec), advanceOn: ["step.done"] },
+  runId, audit: { path: join(dir, "audit.jsonl") },
+});
+const gate = mk("job-1");
+await gate.init();
+
+// Object output: bareguard never serializes it, so bind the advance with outputBytes.
+const artifact = { title: "Q3", rows: [1, 2, 3] };
+const bytes = JSON.stringify(artifact, null, 2);
+const meas = { "lint-not-worse": { value: 2, exit: 0, matchedPreScope: 2 } };   // the proof: exit + pre-scope count
+let r = await gate.checkStep("build", artifact, { measurements: meas, outputBytes: bytes });
+console.log(r.verdict, r.outputSha === (await import("node:crypto")).createHash("sha256").update(bytes).digest("hex"));
+
+// A crashed tool (non-zero exit AND zero matches) is stopped, not green: the instrument failed.
+r = await gate.checkStep("build", artifact, { measurements: { "lint-not-worse": { value: 0, exit: 2, matchedPreScope: 0 } }, outputBytes: bytes });
+console.log(r.verdict, r.fault?.kind);                                            // stopped liveness
+console.log((await gate.check({ type: "step.done", checkpoint: "build", outputSha: r.outputSha })).rule); // rubric.stopped
+
+// accept: "later" - no live ask; the HARNESS records the human's answer.
+r = await gate.checkStep("publish", artifact, { outputBytes: bytes });
+const adv = { type: "step.done", checkpoint: "publish", outputSha: r.outputSha };
+console.log((await gate.check(adv)).rule);                                         // rubric.needs-accept
+await gate.recordAccept({ checkpoint: "publish", outputSha: r.outputSha, by: "hamr", askId: "ask-17" });
+console.log((await gate.check(adv)).outcome);                                      // allow
+
+// Resume: same runId + same audit path = the minted verdicts, red counts and ACCEPTs come back.
+const again = mk("job-1"); await again.init();
+console.log((await again.check(adv)).outcome);                                     // allow (rebuilt from the audit)
+```
+
+Spec: [`docs/product/rubric-prd.md`](docs/product/rubric-prd.md).
+
 ## Public API surface
 
 ```javascript
@@ -701,6 +816,7 @@ import {
   SAFE_DEFAULT_ASK_PATTERNS,      // exposed in case you want to extend
   routeAnnotation,                // pure Axis-B routing fn (surface × reversible × knob)
   addToGates,                     // §23.21: fan one gate.add() batch out to a fleet of gates
+  createRubric, rubricSha, checkStep, renderGaps, quoteIn, numbersInQuote, rubricVocabulary, // rubric (see the Rubric section)
   globToRegex, matchAny,          // glob helpers (v0.1: `*` only)
 } from "bareguard";
 
@@ -719,6 +835,9 @@ await gate.record(action, result);                // updates budget + emits reco
 await gate.run(action, executor);                 // check + execute + record (one call)
 await gate.annotate(fact);                         // Axis B: buffer a return-time judge fact (rides the next ask)
 gate.drainAnnotations();                           // SYNC — return + clear buffered facts (agent feedback)
+await gate.checkStep(checkpoint, output, opts);   // rubric: grade + mint the verdict (needs `rubric` config)
+gate.drainGaps();                                 // SYNC — rubric: worker-view gaps for the retry (read-and-clear)
+await gate.recordAccept({checkpoint,outputSha,by}); // rubric, HARNESS-ONLY: record an ACCEPT for an accept:"later" checkpoint
 await gate.terminate(reason);                     // sticky terminate
 await gate.raiseCap(dimension, newCap);           // explicit cap raise (separate from humanChannel topup)
 gate.clampRwxLetters(requestedLetters);           // SYNC — rwx mode only (§23.9): attenuate a child's letters, never wider than this gate's own grant
@@ -1040,7 +1159,7 @@ The wrapper caches `allow` returns (deny / halt / topup / terminate always bypas
 
 ### Recipe 11: Axis B — surface a return-time judge fact on the next approval
 
-The primitives gate the **action**; `gate.annotate` carries a fact about the **result** — did it honor the user's request? You compute the fact (a deterministic check, or a caller-side LLM judge returning a decisive `honored`/`broke` — bareguard never runs the LLM). bareguard buffers it, audits it, and lets it ride the next human ask so the approver sees independent facts, not the agent's spin. It never blocks alone.
+The primitives gate the **action**; `gate.annotate` carries a fact about the **result** — did it honor the user's request? The fact is the caller's (a deterministic check, or a caller-side LLM judge returning a decisive `honored`/`broke`); bareguard never runs an LLM and checks only deterministic facts against declared, enumerated rules (for checks bareguard itself grades, see the Rubric section). bareguard buffers it, audits it, and lets it ride the next human ask so the approver sees independent facts, not the agent's spin. It never blocks alone.
 
 ```javascript
 const gate = new Gate({

@@ -64,7 +64,7 @@ not configured" and falls through to the default. This matches every sibling sco
 primitive (`net.allowDomains`, `fs.readScope`/`writeScope`, `bash.allow`), which have
 always denied on `[]`.
 
-> **Changed — breaking, UNRELEASED (on `fix/empty-allowlist-fails-closed`).** Previously `[]` was folded into
+> **Changed — breaking (shipped in 0.15.0).** Previously `[]` was folded into
 > "not configured" and fell through to default **allow** — the tightest possible
 > scope produced the loosest possible outcome, silently. If you passed `[]`
 > expecting allow-all, remove the key instead.

@@ -73,6 +73,25 @@ const LINE_FIELDS = Object.freeze([
   // array's OWN serialized bytes are still oversize after that.
   Object.freeze({ key: "key",     redactIf: (v) => typeof v === "string",              bound: "clip" }),
   Object.freeze({ key: "keys",    redactIf: (v) => Array.isArray(v) && v.length > 0,   bound: "wholesale" }),
+  // rubric lines (Module 2): `rubric` / `rubric_baseline` / `rubric_accept` /
+  // `rubric_accept_refused`. The scalars below are the identifiers the cold-start
+  // rebuild keys on (sha256 hex or signer-chosen names, bounded at the source) and
+  // `by`/`askId`/`at` come straight from a harness's recordAccept call. The object
+  // views (`gaps` and `fault` derive from the OUTPUT under check, `baselineSource`
+  // and `callerItems` from caller measurements) are redacted then collapsed
+  // wholesale like `meta`. `rubricSha`/`checkpoint`/`outputSha`/`checkId` are also
+  // in MUST_KEEP_KEYS below: the rebuild reads them.
+  Object.freeze({ key: "rubricSha",  redactIf: (v) => typeof v === "string", bound: "clip" }),
+  Object.freeze({ key: "outputSha",  redactIf: (v) => typeof v === "string", bound: "clip" }),
+  Object.freeze({ key: "checkpoint", redactIf: (v) => typeof v === "string", bound: "clip" }),
+  Object.freeze({ key: "checkId",    redactIf: (v) => typeof v === "string", bound: "clip" }),
+  Object.freeze({ key: "by",         redactIf: (v) => typeof v === "string", bound: "clip" }),
+  Object.freeze({ key: "askId",      redactIf: (v) => typeof v === "string", bound: "clip" }),
+  Object.freeze({ key: "at",         redactIf: (v) => typeof v === "string", bound: "clip" }),
+  Object.freeze({ key: "gaps",           redactIf: (v) => Array.isArray(v) && v.length > 0,         bound: "wholesale" }),
+  Object.freeze({ key: "fault",          redactIf: (v) => v != null && typeof v === "object",       bound: "wholesale" }),
+  Object.freeze({ key: "baselineSource", redactIf: (v) => v != null && typeof v === "object",       bound: "wholesale" }),
+  Object.freeze({ key: "callerItems",    redactIf: (v) => v != null && typeof v === "object",       bound: "wholesale" }),
 ]);
 
 /** Keys whose object payload collapses wholesale when the LINE is still oversize. */
@@ -97,6 +116,8 @@ const PAYLOAD_KEYS = Object.freeze(LINE_FIELDS.filter((f) => f.bound === "perKey
  *     restart, the same fail-open class this table exists to close. (`oldCap`
  *     is written but never read back, so it is not included — it is safe to
  *     drop.)
+ *   - rubric state carriers: `rubricSha`, `checkpoint`, `outputSha`, `checkId`,
+ *     `verdict`, `baseline`, read by `rebuildRubricState` in `src/primitives/rubric-state.js`.
  * The markers this file stamps (`_truncated`, `_dropped`, `_dropped_carriers`,
  * `_dropped_keys`, `_dropped_bytes`) are protected separately, by their `_`
  * prefix, so they don't need a place in this list.
@@ -112,6 +133,10 @@ const MUST_KEEP_KEYS = Object.freeze([
   "ts", "seq", "run_id", "parent_run_id", "spawn_depth",
   "phase", "decision", "severity", "rule", "aid",
   "dimension", "newCap",
+  // Rubric state carriers (Module 2): the cold-start rebuild of minted verdicts,
+  // red counts, ACCEPTs and seed baselines (`rebuildRubricState` in rubric-state.js)
+  // reads exactly these. Losing one on a `rubric*` line silently resets a count.
+  "rubricSha", "checkpoint", "outputSha", "checkId", "verdict", "baseline",
 ]);
 
 /**

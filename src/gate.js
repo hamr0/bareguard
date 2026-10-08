@@ -16,11 +16,18 @@ import {
 } from "./primitives/tools.js";
 import { assertRwxConfig, rwxCheck, matchRwxLetter, resolveAgentLetters, clampLetters, normalizeEntry } from "./primitives/rwx.js";
 import { looseIdentity } from "./primitives/tool-identity.js";
+import { isPlainObject } from "./primitives/plain-object.js";
 import { assertArrayElementTypes, findInvalidIndex, findBlankStringIndex } from "./primitives/config-validate.js";
 import { contentDenyCheck, contentAskCheck } from "./primitives/content.js";
 import { flagsDenyCheck, flagsAskCheck } from "./primitives/flags.js";
 import { deferRateCheck } from "./primitives/defer-rate.js";
 import { spawnRateCheck } from "./primitives/spawn-rate.js";
+// rubric (Module 2). A STATIC import, not a lazy one: the constructor must verify the
+// signed rubric synchronously (tamper/unsigned = construct throw) and an ES module
+// cannot be lazy-loaded synchronously. rubric.js is pure (node:crypto only, no judge
+// code), and nothing below touches it unless `config.rubric` is set.
+import { createRubric, checkStep as rubricCheckStep } from "./primitives/rubric.js";
+import { readRubricConfig, newRubricState, rebuildRubricState, acceptKey, baselineKey, auditView, auditGaps } from "./primitives/rubric-state.js";
 
 const MAX_TOPUP_ITERATIONS = 5;
 
@@ -187,7 +194,8 @@ function safeAction(action) {
 /**
  * Pure Axis-B routing (§6.6/§8.2.2): a fact's surface flag × the gated action's
  * reversibility × the operator's escalation knob → where the fact goes. No LLM,
- * no side effects. `surface` comes from the caller-computed judge verdict
+ * no side effects (bareguard never runs an LLM; it checks deterministic facts
+ * against declared, enumerated rules). `surface` comes from the caller-computed judge verdict
  * (`broke` ⇒ true); `reversible` is read from the GATED ACTION's type via the
  * operator's config — never the fact, the agent, or the model.
  * @param {boolean} surface  true if the answer did NOT honor the request
@@ -451,30 +459,6 @@ function clipKey(k) {
 }
 
 /**
- * True for a plain object — `{}`-literal shaped, or the null-prototype shape
- * `safeAction()` deliberately produces gate-wide (0.6.0) — and false for
- * everything else a config section must not be: an array, a string/number/
- * boolean (primitives coerce through `Object.getPrototypeOf` to their wrapper
- * prototype, e.g. `String.prototype`, never `Object.prototype`), or an exotic
- * object like `Map`/`Set`/`Date`. The prior guard at each of these three call
- * sites was `typeof s !== "object" || Array.isArray(s)`, which a `Map` passes
- * (`typeof` is `"object"`, it is not an `Array`) — so `new Gate({ tools: new
- * Map([["allowlist",["x"]]]) })` constructed with no error, and `s["allowlist"]`
- * on a Map is always `undefined` (Map entries are not own properties), reading
- * as "unconfigured" — full fail-OPEN, same failure as the string-section bug
- * this replaces, just a different exotic type slipping through the same hole.
- * One structural check closes the whole family (Map, Set, Date, anything else
- * with a foreign prototype) instead of enumerating bad types one at a time.
- * @param {*} v value to check
- * @returns {boolean} true if `v` is a plain object (Object.prototype or null prototype)
- */
-function isPlainObject(v) {
-  if (v === null || typeof v !== "object") return false;
-  const proto = Object.getPrototypeOf(v);
-  return proto === Object.prototype || proto === null;
-}
-
-/**
  * Throw if any array-shaped config key is present but not an array.
  * `undefined`/`null` mean "not configured" and are left alone; `[]` is a legal
  * array (an empty scope, or the documented pure-allow opt-out).
@@ -646,6 +630,24 @@ export class Gate {
     // decisions (the hole §23.21 exists to close). `config` itself is never
     // mutated by `add()` — only this private copy is.
     this.cfg = config.rwx != null ? { ...config, rwx: deepCopyRwx(config.rwx) } : config;
+    // rubric (Module 2): `config.rubric = { spec, sha256, advanceOn }`. Verified HERE,
+    // loudly: a bad shape, an unsigned/tampered spec or a sha mismatch throws. The
+    // verified rubric is held privately (`_rb`); `cfg.rubric` is only re-read at
+    // check() time to catch a post-construct swap (`rubric.invalid`). maxReds and
+    // onExhausted come ONLY from the signed spec - one source - so a top-level key
+    // of either name is refused rather than silently ignored.
+    this._rb = null;
+    for (const k of ["maxReds", "onExhausted"]) {
+      if (config[k] !== undefined) {
+        throw new Error(`invalid bareguard config: ${k} is not a gate key; it is part of the SIGNED rubric spec (rubric.spec.${k})`);
+      }
+    }
+    if (config.rubric !== undefined && config.rubric !== null) {
+      const rc = readRubricConfig(config.rubric);
+      if (!rc.ok) throw new Error(`invalid bareguard config: ${rc.why}`);
+      const verified = createRubric(config.rubric.spec, { sha256: config.rubric.sha256 });
+      this._rb = newRubricState(verified, config.rubric.sha256);
+    }
     this.runId = config.runId ?? randomUUID();
     this.parentRunId = config.parentRunId ?? process.env.BAREGUARD_PARENT_RUN_ID ?? null;
     this.spawnDepth = config.spawnDepth ?? +(process.env.BAREGUARD_SPAWN_DEPTH ?? 0);
@@ -776,6 +778,7 @@ export class Gate {
           return rebuilt;
         },
       });
+      if (this._rb) rebuildRubricState(this._rb, await this.audit.readAll(), this.runId);
       this._initialized = true;
     })().catch((err) => {
       this._initPromise = null;
@@ -1006,6 +1009,13 @@ export class Gate {
           }
         }
       }
+      // rubric (Law 9, deny-only): the FINAL authority on an advance, evaluated inside
+      // the same lock the mint (`checkStep`) takes, so the audit order is the decision
+      // order. It can only turn an allow into a deny, never the reverse.
+      if (final.outcome === "allow" && this._rb && action != null) {
+        const r = this._rubricEval(action);
+        if (r) final = { outcome: "deny", severity: "action", rule: r.rule, reason: r.reason, aid: decision.aid };
+      }
       const isDowngraded = final !== decision;
       await this.audit.emit({
         aid: decision.aid, phase, action,
@@ -1055,6 +1065,7 @@ export class Gate {
     // decided, e.g. `flags`/`content`), the top-of-iteration default is
     // what `_commitDecision` compares against.
     let iterations = 0;
+    let forced = null; // a rubric ask raised AFTER a floor ask was approved (see the allow branch)
     while (true) {
       const raceSnapshot = {
         gen: this._addGeneration,
@@ -1062,7 +1073,20 @@ export class Gate {
       };
       // PRE-EVAL: halt, else the 6-step eval. `_stepEval` always returns a
       // terminal decision, so `??` makes `decision` provably non-null.
-      const decision = this._haltCheck() ?? await this._stepEval(action, raceSnapshot);
+      let decision;
+      if (forced) {
+        decision = forced;
+        forced = null;
+      } else {
+        decision = this._haltCheck() ?? await this._stepEval(action, raceSnapshot);
+        // rubric (Law 9: the floor is the ceiling). Axis A has already run and its
+        // answer stands: a floor DENY is never revisited, a floor ASK is not replaced.
+        // The rubric may only ADD a deny, or (floor allowed) raise its own ask.
+        if (this._rb && decision.outcome !== "deny") {
+          const r = this._rubricEval(action);
+          if (r && (r.outcome === "deny" || decision.outcome === "allow")) decision = r;
+        }
+      }
       // bash.classify (harness §7.1) may attach a severity tier; read it via a
       // widened view since not every decision shape carries these optionals.
       const cls = /** @type {{classification?: ("destructive"|"super_destructive"), tier?: (2|3)}} */ (decision);
@@ -1194,61 +1218,105 @@ export class Gate {
         if (surfacing.length) event.annotations = surfacing.map((a) => ({ ...a }));
       }
 
-      let response;
-      try {
-        const channelPromise = this.humanChannel(event);
-        if (this.humanChannelTimeoutMs != null && this.humanChannelTimeoutMs > 0) {
-          const timeoutMs = this.humanChannelTimeoutMs;
-          const TIMEOUT = Symbol("humanChannelTimeout");
-          // Deliberately NOT unref'd: the timer firing is the only way this
-          // promise (and therefore check()) can ever resolve when humanChannel
-          // never settles, so it must keep the event loop alive while the
-          // human decision is pending. It is always cleared below once the
-          // race settles (answer, timeout, or throw), so a finished check()
-          // never holds the process open for the remainder of timeoutMs.
-          let timer;
-          const timeoutPromise = new Promise((resolve) => {
-            timer = setTimeout(() => resolve(TIMEOUT), timeoutMs);
-          });
-          let raced;
-          try {
-            raced = await Promise.race([channelPromise, timeoutPromise]);
-          } finally {
-            clearTimeout(timer);
+      // rubric (S3): the requiresHuman ask carries the signed position and the bound sha.
+      if (decision.rubric) event.rubric = { ...decision.rubric };
+
+      // Ask the human and audit what they SAID. Returns { human } or { fail: reason } (timeout / throw).
+      const obtain = async () => {
+        let response;
+        try {
+          const channelPromise = /** @type {Function} */ (this.humanChannel)(event);
+          if (this.humanChannelTimeoutMs != null && this.humanChannelTimeoutMs > 0) {
+            const timeoutMs = this.humanChannelTimeoutMs;
+            const TIMEOUT = Symbol("humanChannelTimeout");
+            // Deliberately NOT unref'd: the timer firing is the only way this
+            // promise (and therefore check()) can ever resolve when humanChannel
+            // never settles, so it must keep the event loop alive while the
+            // human decision is pending. It is always cleared below once the
+            // race settles (answer, timeout, or throw), so a finished check()
+            // never holds the process open for the remainder of timeoutMs.
+            let timer;
+            const timeoutPromise = new Promise((resolve) => {
+              timer = setTimeout(() => resolve(TIMEOUT), timeoutMs);
+            });
+            let raced;
+            try {
+              raced = await Promise.race([channelPromise, timeoutPromise]);
+            } finally {
+              clearTimeout(timer);
+            }
+            if (raced === TIMEOUT) return { fail: `humanChannel timeout after ${this.humanChannelTimeoutMs}ms`, timeout: true };
+            response = raced;
+          } else {
+            response = await channelPromise;
           }
-          if (raced === TIMEOUT) {
-            const reason = `humanChannel timeout after ${this.humanChannelTimeoutMs}ms`;
-            return this._commitDecision(
-              { outcome: "deny", severity: "halt", rule: decision.rule, reason, aid },
-              { action, phase: "approval" },
-            );
-          }
-          response = raced;
-        } else {
-          response = await channelPromise;
         }
+        catch (err) {
+          return { fail: `humanChannel threw: ${err.message}` };
+        }
+        const human = response ?? { decision: "deny", reason: "humanChannel returned nothing" };
+        // The raw human response is its OWN audit fact, written unconditionally
+        // and OUTSIDE the lock — it records what the human SAID, not what the
+        // gate finally decided; the branch below still commits the actual
+        // outcome (and, for "allow", still re-validates freshness).
+        await emit({
+          phase: "approval", action,
+          decision: human.decision, reason: human.reason ?? null,
+          newCap: human.newCap ?? null,
+        });
+        return { human };
+      };
+
+      let obtained;
+      if (decision.rule === "rubric.needs-accept" && decision.rubric && this._rb) {
+        // One in-flight ask per (checkpoint, outputSha): concurrent checks await the first's
+        // answer instead of asking the human again. The ACCEPT is written (through the stale
+        // guard) inside the shared promise, so a joiner never writes a second line. The lock is
+        // NOT held across the ask. The entry clears in `finally` (also on a reject/deny/throw),
+        // so a later retry asks again.
+        const rb = /** @type {any} */ (this._rb);
+        const key = acceptKey(decision.rubric.checkpoint, decision.rubric.outputSha);
+        // A late joiner that arrives after the accept landed sees it and re-evaluates instead of asking.
+        if (rb.accepts.has(key)) continue;
+        let shared = rb.inflight.get(key);
+        if (!shared) {
+          shared = (async () => {
+            try {
+              const o = await obtain();
+              if (o.human?.decision === "allow") {
+                await this._withLock(() => this._writeLiveAccept(decision.rubric.checkpoint, decision.rubric.outputSha, aid));
+              }
+              return o;
+            } finally {
+              rb.inflight.delete(key);
+            }
+          })();
+          rb.inflight.set(key, shared);
+        }
+        obtained = await shared;
+      } else {
+        obtained = await obtain();
       }
-      catch (err) {
+      if (obtained.fail !== undefined) {
         return this._commitDecision(
-          {
-            outcome: "deny", severity: "halt", rule: decision.rule,
-            reason: `humanChannel threw: ${err.message}`, aid,
-          },
+          { outcome: "deny", severity: "halt", rule: decision.rule, reason: obtained.fail, aid },
           { action, phase: "approval" },
         );
       }
+      const human = obtained.human;
 
-      const human = response ?? { decision: "deny", reason: "humanChannel returned nothing" };
-      // The raw human response is its OWN audit fact, written unconditionally
-      // and OUTSIDE the lock — it records what the human SAID, not what the
-      // gate finally decided; the branch below still commits the actual
-      // outcome (and, for "allow", still re-validates freshness).
-      await emit({
-        phase: "approval", action,
-        decision: human.decision, reason: human.reason ?? null,
-        newCap: human.newCap ?? null,
-      });
-
+      // rubric: the ONLY thing that accepts is {decision:"allow"}; topup/terminate/anything else denies.
+      if (decision.rule === "rubric.needs-accept" && human.decision !== "allow") {
+        return this._commitDecision(
+          { outcome: "deny", severity: "action", rule: "rubric.needs-accept", reason: human.reason ?? "the human did not accept this output", aid },
+          { action },
+        );
+      }
+      if (human.decision === "allow" && this._rb && decision.rule !== "rubric.needs-accept") {
+        // A floor ask was approved; the rubric still gets its say (deny, or its own ask).
+        const post = this._rubricEval(action);
+        if (post?.outcome === "askHuman") { forced = post; continue; }
+      }
       if (human.decision === "allow") {
         return this._commitDecision(
           { outcome: "allow", severity: "action", rule: "humanChannel.allow", reason: human.reason ?? null, aid },
@@ -1389,8 +1457,8 @@ export class Gate {
 
   /**
    * Axis B (§6.6/§8.2) — buffer a return-time-judge FACT about whether a returned
-   * value honored the user's request. bareguard NEVER computes the fact (no LLM)
-   * and NEVER decides an outcome: it buffers, audits the fact (sink 1), lets it
+   * value honored the user's request. bareguard never runs an LLM; the fact is
+   * caller-computed, and annotate never decides an outcome: it buffers, audits the fact (sink 1), lets it
    * ride the next human ask `check()` raises (sink 3, §6.6 routing), and exposes
    * it for agent feedback via {@link Gate#drainAnnotations} (sink 2). Additive and
    * opt-in: with no `annotate()` call the decision path is byte-identical.
@@ -1439,6 +1507,243 @@ export class Gate {
     const out = this._annotations.map((a) => ({ ...a }));
     this._annotations = [];
     return out;
+  }
+
+  /**
+   * rubric Law 9 + the advance rules. Returns null (nothing to add), a deny, or - only
+   * for a `requiresHuman` checkpoint with `accept: "live"` and no ACCEPT yet - an
+   * `askHuman` carrying the `rubric` payload. Runs AFTER the Axis A floor and can only
+   * ADD a deny. Any action is denied `rubric.invalid` if the rubric config was swapped
+   * to an invalid shape (or a different signature) after construct.
+   * @param {object} action safeAction copy
+   * @returns {any}
+   */
+  _rubricEval(action) {
+    const rb = this._rb;
+    if (!rb) return null;
+    const deny = (/** @type {string} */ rule, /** @type {string} */ reason) => ({ outcome: "deny", severity: "action", rule, reason });
+    let cfg, sha;
+    try { cfg = readRubricConfig(this.cfg.rubric); sha = this.cfg.rubric?.sha256; } catch { cfg = { ok: false, why: "rubric config is unreadable" }; }
+    if (!cfg.ok) return deny("rubric.invalid", cfg.why);
+    if (sha !== rb.sha) return deny("rubric.invalid", "rubric.sha256 differs from the signed rubric this gate verified at construct");
+    // An advance is `type` OR a valid `tool` in advanceOn (`tool` is an identity field; ruled
+    // 2026-10-08). A non-string / empty `tool` never counts as a match (it cannot be a name),
+    // and never throws; `tools.invalidTool` is the floor's call, not the rubric's.
+    const t = action?.tool;
+    if (!(cfg.advanceOn?.has(action?.type) || (typeof t === "string" && t !== "" && cfg.advanceOn?.has(t)))) return null;
+    const cp = action.checkpoint;
+    if (typeof cp !== "string" || !Object.hasOwn(rb.rubric.checkpoints, cp)) {
+      return deny("rubric.unminted", `no rubric verdict exists for checkpoint ${typeof cp === "string" ? JSON.stringify(clipKey(cp)) : "(none given)"}`);
+    }
+    const def = rb.rubric.checkpoints[cp];
+    if (!def.gating) return null; // non-gating checkpoints record and return gaps but never deny
+    const v = rb.verdicts.get(cp);
+    if (!v) return deny("rubric.unminted", `no rubric verdict is minted for checkpoint "${cp}"`);
+    const max = rb.rubric.maxReds;
+    if (max !== undefined && (rb.reds.get(cp) ?? 0) >= max) {
+      return deny("rubric.exhausted", `checkpoint "${cp}" has had ${rb.reds.get(cp)} red verdicts (maxReds ${max}); onExhausted is "fail"`);
+    }
+    if (v.verdict === "stopped") return deny("rubric.stopped", `the rubric instrument stopped at checkpoint "${cp}" (a fault went to the runner, not the work)`);
+    if (v.verdict === "red") return deny("rubric.red", `the rubric verdict at checkpoint "${cp}" is red`);
+    if (v.outputSha === null || typeof action.outputSha !== "string" || action.outputSha !== v.outputSha) {
+      return deny("rubric.output-mismatch", v.outputSha === null
+        ? `the verdict at checkpoint "${cp}" is not bound to any output bytes (no outputSha), so this advance cannot be matched to it`
+        : `the advance's outputSha is not the one the verdict at checkpoint "${cp}" was minted for`);
+    }
+    if (def.requiresHuman === true) {
+      if (rb.accepts.has(acceptKey(cp, v.outputSha))) return null;
+      if (def.accept === "later") return deny("rubric.needs-accept", `checkpoint "${cp}" needs a human ACCEPT for this output (accept: "later"; none recorded yet)`);
+      return {
+        outcome: "askHuman", severity: "action", rule: "rubric.needs-accept",
+        reason: `checkpoint "${cp}" needs a human ACCEPT for this output`,
+        rubric: { rubricSha: rb.sha, checkpoint: cp, outputSha: v.outputSha, verdict: v.verdict, gaps: [] },
+      };
+    }
+    return null;
+  }
+
+  /**
+   * Write a LIVE-ask ACCEPT only if it is still about the current state: the checkpoint's latest
+   * verdict is the green for exactly this outputSha and the checkpoint is not exhausted. A stale
+   * answer (the verdict moved on while the human was deciding) is discarded: no accept line, no
+   * red-count reset. MUST run inside `_withLock`.
+   * @param {string} checkpoint
+   * @param {string} outputSha
+   * @param {string} askId
+   */
+  async _writeLiveAccept(checkpoint, outputSha, askId) {
+    const rb = /** @type {any} */ (this._rb);
+    const v = rb.verdicts.get(checkpoint);
+    const max = rb.rubric.maxReds;
+    const exhausted = max !== undefined && (rb.reds.get(checkpoint) ?? 0) >= max;
+    if (!v || v.verdict !== "green" || v.outputSha !== outputSha || exhausted) return;
+    if (rb.accepts.has(acceptKey(checkpoint, outputSha))) return;
+    await this._writeAccept(checkpoint, outputSha, { by: "humanChannel", askId, source: "live" });
+  }
+
+  /**
+   * Record an ACCEPT line and update state. MUST run inside `_withLock`.
+   * @param {string} checkpoint
+   * @param {string} outputSha
+   * @param {{by:string, askId?:string, at?:string, source:"live"|"later"}} f
+   */
+  async _writeAccept(checkpoint, outputSha, f) {
+    const rb = /** @type {any} */ (this._rb);
+    await this.audit.emit({
+      phase: "rubric_accept", action: null,
+      rubricSha: rb.sha, checkpoint, outputSha,
+      by: f.by, at: f.at ?? new Date(this._clock()).toISOString(),
+      ...(f.askId ? { askId: f.askId } : {}), source: f.source,
+    });
+    rb.accepts.add(acceptKey(checkpoint, outputSha));
+    rb.reds.set(checkpoint, 0); // an ACCEPT at the checkpoint resets its red count
+  }
+
+  /**
+   * Grade an output against this gate's SIGNED rubric and mint the verdict. The GATE runs the
+   * checks with its own verified rubric, feeds back the seed baselines it recorded for this
+   * `(rubricSha, runId)`, writes the audit `rubric` line, updates the red count and buffers the
+   * worker's gaps for {@link Gate#drainGaps}. Nothing a caller says about a verdict is trusted:
+   * there is no way to hand the gate a verdict. The advance action later carries
+   * `{ checkpoint, outputSha }` and is matched against what was minted here.
+   * Runner-side (harness) call; the agent never needs it. State survives a restart ONLY if the
+   * gate is constructed with the same stable `runId` (and audit path): a resume without one
+   * starts with fresh counts.
+   * @name Gate#checkStep
+   * @param {string} checkpoint a checkpoint id in the signed rubric
+   * @param {string|object} output the output to grade (a string is the field `text`)
+   * @param {{measurements?:object, items?:object, inputs?:object, outputBytes?:(string|Uint8Array)}} [opts] same as the exported `checkStep`; `priorBaselines` is the gate's and is refused here
+   * @returns {Promise<import("./primitives/rubric.js").StepResult>} the verdict, the worker `gaps`, the `fault` (stopped), `full`, `rubricSha`, `outputSha`
+   * @when Reach for this instead of the exported `checkStep` whenever a Gate holds the rubric: it is the only call that makes a verdict real to `gate.check`. Call it each time the agent hands over output at a checkpoint, then let the advance action through `gate.check` carrying `{ type, checkpoint, outputSha }`.
+   * @category rubric
+   * @signature gate.checkStep(checkpoint: string, output: string|object, opts?: { measurements?: object, items?: object, inputs?: object, outputBytes?: string|Uint8Array }) => Promise<StepResult>
+   * @fails Rejects with a TypeError when the gate has no `rubric` config, the checkpoint is unknown, `opts` is not an object, or `opts.priorBaselines` is passed; rejects when the rubric config was swapped after construct (`rubric.invalid`). Never rejects because of the output. An audit write failure propagates.
+   * @example
+   * const gate = new Gate({ rubric: { spec, sha256: rubricSha(spec), advanceOn: ["done"] } });
+   * const r = await gate.checkStep("resume", text);            // r.verdict, r.gaps, r.outputSha
+   * await gate.check({ type: "done", checkpoint: "resume", outputSha: r.outputSha });
+   */
+  async checkStep(checkpoint, output, opts) {
+    if (!this._initialized) await this.init();
+    const rb = /** @type {any} */ (this._rb);
+    if (!rb) throw new TypeError("gate.checkStep: this gate has no rubric configured");
+    if (opts !== undefined && (opts === null || typeof opts !== "object" || Array.isArray(opts))) {
+      throw new TypeError("gate.checkStep: opts must be an object");
+    }
+    if (opts !== undefined && Object.hasOwn(opts, "priorBaselines")) {
+      throw new TypeError("gate.checkStep: priorBaselines is the gate's to supply (it records seed baselines itself)");
+    }
+    return this._withLock(async () => {
+      const cfg = readRubricConfig(this.cfg.rubric);
+      if (!cfg.ok || this.cfg.rubric?.sha256 !== rb.sha) {
+        throw new Error("gate.checkStep: rubric.invalid - the rubric config was changed after construct");
+      }
+      const prior = Object.create(null);
+      for (const [k, v] of rb.baselines) {
+        const [cp, id] = k.split("\0");
+        if (cp === checkpoint) prior[id] = v.baseline;
+      }
+      const res = await rubricCheckStep(rb.rubric, checkpoint, output, { ...(opts ?? {}), priorBaselines: prior });
+      // Record newly measured seed baselines (first write wins; a conflict never gets here - the pure
+      // check already turned it into a stopped verdict against the baselines passed above).
+      for (const [id, b] of Object.entries(res.baselines ?? {})) {
+        const key = baselineKey(checkpoint, id);
+        if (rb.baselines.has(key)) continue;
+        await this.audit.emit({
+          phase: "rubric_baseline", action: null,
+          rubricSha: rb.sha, checkpoint, checkId: id, baseline: b.baseline,
+          baselineSource: auditView(b.baselineSource),
+        });
+        rb.baselines.set(key, { baseline: b.baseline, baselineSource: b.baselineSource });
+      }
+      const reds = (rb.reds.get(checkpoint) ?? 0) + (res.verdict === "red" ? 1 : 0);
+      await this.audit.emit({
+        phase: "rubric", action: null,
+        rubricSha: rb.sha, checkpoint, verdict: res.verdict, outputSha: res.outputSha, reds,
+        ...(res.verdict === "red" ? auditGaps(res.gaps) : {}),
+        ...(res.verdict === "stopped" && res.fault ? { fault: auditView(res.fault) } : {}),
+        ...(Object.keys(res.callerItems ?? {}).length ? { callerItems: auditView(res.callerItems) } : {}),
+      });
+      rb.verdicts.set(checkpoint, { verdict: res.verdict, outputSha: res.outputSha });
+      rb.reds.set(checkpoint, reds);
+      if (res.verdict === "red" && res.gaps.length) rb.gaps.set(checkpoint, JSON.parse(JSON.stringify(res.gaps)));
+      else rb.gaps.delete(checkpoint);
+      return res;
+    });
+  }
+
+  /**
+   * Read-and-clear the WORKER view of the gaps from red verdicts minted by {@link Gate#checkStep}
+   * since the last drain: what is wrong, as structured data (`key`, `check`, `measured`, `limit`,
+   * `direction`...), with no rule text and never a stopped fault. A newer mint for a checkpoint
+   * replaces that checkpoint's earlier gaps, so a retry is never fed a stale try.
+   * Modelled on {@link Gate#drainAnnotations}: one reader, clears on read.
+   * @name Gate#drainGaps
+   * @returns {import("./primitives/rubric.js").Gap[]} a copy of the buffered gaps (empty when none or no rubric)
+   * @when Reach for this to build the retry prompt after a red verdict: feed the worker ONLY this, never the rubric.
+   * @category rubric
+   * @signature gate.drainGaps() => Gap[]
+   * @fails Never throws.
+   * @example
+   * const r = await gate.checkStep("resume", text);
+   * if (r.verdict === "red") retryPrompt = renderGaps(gate.drainGaps());
+   */
+  drainGaps() {
+    if (!this._rb) return [];
+    const out = [];
+    for (const gs of this._rb.gaps.values()) for (const g of gs) out.push(JSON.parse(JSON.stringify(g)));
+    this._rb.gaps.clear();
+    return out;
+  }
+
+  /**
+   * HARNESS-ONLY (like {@link Gate#add}: the agent must never hold the gate handle that can call this).
+   * Record a human ACCEPT that was answered LATER, in another process, for a `requiresHuman` checkpoint
+   * signed `accept: "later"`. Refused - it throws, and a `rubric_accept_refused` audit line records the
+   * refusal - unless that checkpoint is `requiresHuman` AND `accept: "later"` AND the latest minted
+   * verdict for it is GREEN for exactly this `outputSha` (in this rubricSha and runId). Audited, survives
+   * a cold start, and resets the checkpoint's red count. A `"live"` checkpoint is asked through
+   * humanChannel by `check()` and cannot be accepted this way.
+   * @name Gate#recordAccept
+   * @param {{checkpoint:string, outputSha:string, by:string, at?:string, askId?:string}} accept who accepted, when, and which ask it answers
+   * @returns {Promise<void>}
+   * @when Reach for this from the harness when a parked run resumes with the human's answer: the advance of an `accept: "later"` checkpoint is denied `rubric.needs-accept` until this records the ACCEPT for the verdict's exact `outputSha`.
+   * @category rubric
+   * @signature gate.recordAccept(accept: { checkpoint: string, outputSha: string, by: string, at?: string, askId?: string }) => Promise<void>
+   * @fails Rejects (after auditing the refusal) when the checkpoint is not requiresHuman, is not `accept: "later"`, has no green verdict, the sha differs from the verdict's, or `by` is blank; rejects with a TypeError when the gate has no rubric or the argument is not an object.
+   * @example
+   * await gate.recordAccept({ checkpoint: "resume", outputSha: r.outputSha, by: "hamr", askId: "ask-17" });
+   */
+  async recordAccept(accept) {
+    if (!this._initialized) await this.init();
+    const rb = /** @type {any} */ (this._rb);
+    if (!rb) throw new TypeError("gate.recordAccept: this gate has no rubric configured");
+    if (!isPlainObject(accept)) throw new TypeError("gate.recordAccept: argument must be { checkpoint, outputSha, by, at?, askId? }");
+    const { checkpoint, outputSha, by, at, askId } = accept;
+    return this._withLock(async () => {
+      const refuse = async (why) => {
+        await this.audit.emit({
+          phase: "rubric_accept_refused", action: null, rubricSha: rb.sha,
+          ...(typeof checkpoint === "string" ? { checkpoint } : {}),
+          ...(typeof outputSha === "string" ? { outputSha } : {}),
+          reason: why,
+        });
+        throw new Error(`gate.recordAccept refused: ${why}`);
+      };
+      const cfg = readRubricConfig(this.cfg.rubric);
+      if (!cfg.ok || this.cfg.rubric?.sha256 !== rb.sha) return refuse("rubric.invalid - the rubric config was changed after construct");
+      if (typeof checkpoint !== "string" || !Object.hasOwn(rb.rubric.checkpoints, checkpoint)) return refuse("unknown checkpoint");
+      const def = rb.rubric.checkpoints[checkpoint];
+      if (def.requiresHuman !== true) return refuse(`checkpoint "${checkpoint}" is not requiresHuman`);
+      if (def.accept !== "later") return refuse(`checkpoint "${checkpoint}" is accept: "live" (asked through humanChannel), not "later"`);
+      if (typeof by !== "string" || by.trim() === "") return refuse("by must name who accepted");
+      if (at !== undefined && typeof at !== "string") return refuse("at must be a string");
+      if (askId !== undefined && typeof askId !== "string") return refuse("askId must be a string");
+      const v = rb.verdicts.get(checkpoint);
+      if (!v || v.verdict !== "green") return refuse(`no green verdict is minted for checkpoint "${checkpoint}"`);
+      if (typeof outputSha !== "string" || v.outputSha === null || outputSha !== v.outputSha) return refuse("outputSha is not the one the green verdict was minted for");
+      await this._writeAccept(checkpoint, outputSha, { by, at, askId, source: "later" });
+    });
   }
 
   // Convenience: gate.check + execute + gate.record. Caller supplies executor.

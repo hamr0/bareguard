@@ -380,7 +380,9 @@ phases.
 
 (bareguard-prd.md:1225-1245)
 
-#### Trial-first: dry-run routing for uncertain / irreversible actions (PROPOSED 2026-07-02; not built)
+#### Trial-first: dry-run routing for uncertain / irreversible actions (PROPOSED 2026-07-02; DROPPED from the roadmap 2026-10-08, never built)
+
+> **DROPPED (rubric-prd.md §8, 2026-10-08).** Never built and no longer planned; a dry-run is a runner concern. Kept below for the record only.
 
 A third lane beside allow/deny/ask: for an action whose type is *uncertain or unclassified*
 **and** whose effect is *contained and diffable*, route it to a **try-first** pass — the

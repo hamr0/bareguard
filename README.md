@@ -73,7 +73,7 @@ if (decision.outcome === "allow") {
 
 ## The primitives
 
-Small files, each readable in a sitting. The gate runs them in a fixed order (**deny → ask → scope → default**, first match wins). Building tool-calling automation? Read **`primitives.json`** first — a compact, machine-readable menu of every verb (17 entries across gate · classify · matching · content · secrets · audit · axis-b · rwx), each carrying `when`, `import`, `signature`, `fails`, and a runnable `example`, generated from the source so it never drifts. Browse it on unpkg (`unpkg.com/bareguard/primitives.json`), or `import menu from 'bareguard/primitives.json' with { type: 'json' }`.
+Small files, each readable in a sitting. The gate runs them in a fixed order (**deny → ask → scope → default**, first match wins). Building tool-calling automation? Read **`primitives.json`** first — a compact, machine-readable menu of every verb (27 entries across gate · classify · matching · content · secrets · audit · axis-b · rwx · rubric), each carrying `when`, `import`, `signature`, `fails`, and a runnable `example`, generated from the source so it never drifts. Browse it on unpkg (`unpkg.com/bareguard/primitives.json`), or `import menu from 'bareguard/primitives.json' with { type: 'json' }`.
 
 - **Scope what runs** — `bash` / `fs` / `net` bound which commands, paths, and domains are reachable. `net` gates on **any action carrying a `url`/`args.url` field**, not on `action.type === "fetch"`.
 - **Tier what's dangerous** — `bash.classify` ranks a command **safe → destructive → super-destructive**; `content` denies `rm -rf /` / `DROP TABLE` outright.
@@ -110,12 +110,73 @@ An unlisted tool, command, or agent is **denied, never asked** (`rwx.unlisted`) 
 
 Hand-labeling a fleet's tools doesn't scale — **[rwxmap](https://github.com/hamr0/rwxmap)** [WIP] labels every OpenAPI operation r/w/x as a mechanical starting point, marking rows it's unsure of (`tight`/`loose`) for a human to review. Its exporter (`exportGate`) writes those labels straight into a bareguard `rwx` config, and `askOn: "loose"` routes an unreviewed row to a human instead of allowing it silently; a site met mid-run goes through `gate.add()`/`addToGates()` instead — bareguard never imports rwxmap. rwxmap's labels are suggestions, not verdicts: it never refuses, it just labels. Unlike a bare MCP hint that nothing enforces, here the gate enforces every row, and the review markers say which ones still need a human.
 
-## Before and after: Axis A and Axis B
+## Rubric (checks the agent must green)
 
-bareguard never runs an LLM and never judges: you compute the fact.
+A **rubric** is a signed list of deterministic checks bound to a goal. bareguard never runs an LLM; it checks deterministic facts against declared, enumerated rules: word counts, headings present and in order, phrases carried, quotes found in a frozen source, and numbers a caller measured. It mints a verdict (`green` / `red` / `stopped`) and, at a checkpoint the operator marks **gating**, denies the advance action unless the verdict is green. The Axis A floor always runs first and a green verdict never turns a floor deny into an allow.
+
+Three roles:
+- **The runner** (your harness) drafts the rubric from `rubricVocabulary`, drives the agent, takes any measurements and calls `gate.checkStep`.
+- **The human** signs the rubric before the work (`rubricSha`) and accepts the result after (`requiresHuman`).
+- **bareguard** grades and gates. It never sees the agent's reasoning, and the agent never sees the rubric: a retry is fed only the gap (`gate.drainGaps()`).
 
 ```js
-// you compute the fact (a deterministic check); bareguard buffers it and rides the next ask
+import { Gate, createRubric, rubricSha, renderGaps, quoteIn, numbersInQuote } from "bareguard";
+
+// 1. The runner drafts the spec from `rubricVocabulary`; the human signs `rubricSha(spec)`.
+const spec = {
+  schema: 1, goal: "Write the status report", inputs: [],
+  checkpoints: {
+    draft: { gating: true, checks: [
+      { id: "short",  rule: "maxWords", field: "text", value: 120 },
+      { id: "heads",  rule: "sectionOrder", field: "text", names: ["Summary", "Risks"] },
+    ] },
+    send: { gating: true, requiresHuman: true, checks: [   // accept: "live" is the default
+      { id: "has-ref", rule: "mustCarry", field: "text", phrases: ["PROJ-42"] },
+    ] },
+  },
+  maxReds: 3,
+};
+createRubric(spec);                                   // throws on an unknown check type or bad shape
+const signed = rubricSha(spec);                       // the human signs this fingerprint
+
+// 2. The gate holds the signed rubric. Stable runId = counts survive a restart.
+const gate = new Gate({
+  rubric: { spec, sha256: signed, advanceOn: ["step.done"] },
+  runId: "report-2026-10-08",
+  audit: { path: null },   // no audit file, so every run starts clean; with a real audit path a stable runId RESUMES state (reds, ACCEPTs) across runs
+  humanChannel: async (event) => ({ decision: "allow" }),   // event.rubric = { rubricSha, checkpoint, outputSha, verdict, gaps }
+});
+await gate.init();
+
+// 3. Grade at the checkpoint. A red returns a gap (no rule text) for the retry.
+let r = await gate.checkStep("draft", "Summary\nall good");        // no Risks heading
+console.log(r.verdict, renderGaps(gate.drainGaps()));              // red + a one-string gap render (stable, for stuck-detection)
+const advance = (r) => ({ type: "step.done", checkpoint: "draft", outputSha: r.outputSha });
+console.log((await gate.check(advance(r))).rule);                  // rubric.red
+
+// 4. Fixed -> green -> the advance is allowed (the Axis A floor ran first).
+r = await gate.checkStep("draft", "Summary\nall good\nRisks\nnone");
+console.log(r.verdict, (await gate.check(advance(r))).outcome);    // green allow
+
+// 5. requiresHuman: a green advance asks humanChannel once per outputSha.
+const out = "Report for PROJ-42";
+const s = await gate.checkStep("send", out);
+const d = await gate.check({ type: "step.done", checkpoint: "send", outputSha: s.outputSha });
+console.log(s.verdict, d.outcome, d.rule);                          // green allow humanChannel.allow
+
+// Gate-less agents: the pure helpers.
+console.log(quoteIn("lead time", "The **lead  time** fell"));      // { ok: true }  (** and whitespace forgiven)
+console.log(numbersInQuote("4 hours", "2 weeks"));                 // { ok: false, missing: ["4"] }
+```
+
+`advanceOn` matches an action's `type` or its `tool`; give the advance a reserved name no real tool uses (e.g. `fwdloop.advance`), or the rubric would run on that tool's ordinary calls. Denies on the advance: `rubric.unminted`, `rubric.exhausted`, `rubric.stopped`, `rubric.red`, `rubric.output-mismatch`, `rubric.needs-accept`, and `rubric.invalid` (the config was swapped after construct). `accept: "later"` is for a harness that parks and resumes in another process: it records the answer with `gate.recordAccept(...)`, which is **harness-only**. Pass a stable `runId` (and audit path) on resume, or red counts start fresh. Full contract: [`docs/product/rubric-prd.md`](docs/product/rubric-prd.md); harness guide: [`bareguard.context.md`](bareguard.context.md#rubric-signed-checks-that-gate-an-advance).
+
+## Before and after: Axis A and Axis B
+
+bareguard never runs an LLM; it checks deterministic facts against declared, enumerated rules. `annotate` is transport for a fact you computed; for checks bareguard grades itself, see [Rubric](#rubric-checks-the-agent-must-green).
+
+```js
+// a fact you computed (a deterministic check); bareguard buffers it and rides the next ask
 await gate.annotate({ surface: true, verdict: "broke", where: "you said under €300; the booking is €400" });
 const facts = gate.drainAnnotations(); // feed them back to the agent, or read them off the audit line
 ```

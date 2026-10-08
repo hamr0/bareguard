@@ -77,7 +77,9 @@ The full pre-split original is archived at `../archive/bareguard-prd.md`.
   One gate, one audit log, one budget ledger, thirteen primitives. Small enough to
   read in an afternoon.
 - **The one boundary:** it constrains **actions against the world**, never **words
-  the model produces** (Part 1 §6). Content/toxicity/PII is somebody else's layer.
+  the model produces** (Part 1 §6). bareguard may measure declared, deterministic
+  properties of an output; it never interprets meaning. Content/toxicity/PII is
+  somebody else's layer.
 - **Part 1 (core, shipped):** start at §1–§2 for the summary, §8 for the primitive
   table, §9 for the load-bearing 6-step eval order, §10 for the API, §17 for the
   NO-GO list, §19 for the release history + the 1.0 HOLD.
@@ -203,7 +205,13 @@ primitive:
 > process), or constrain words the model produces?
 
 If the latter, refuse — that's a system prompt's job, or `guardrails-ai`'s.
-This rule keeps bareguard small forever. (bareguard-prd.md:169-176)
+This rule keeps bareguard small forever.
+
+**Amendment (RULED 2026-10-06, rubric):** bareguard may measure declared, deterministic
+properties of an output; it never interprets meaning. bareguard never runs an LLM; it
+checks deterministic facts against declared, enumerated rules. A word count, a heading
+that must be present, a quote that must appear in a frozen source: measured, never
+understood. Toxicity, tone, correctness and PII stay out. Spec: `rubric-prd.md` §2. (bareguard-prd.md:169-176)
 
 | Layer                  | Concern                                  | Owner                |
 | ---------------------- | ----------------------------------------- | -------------------- |

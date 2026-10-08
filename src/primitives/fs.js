@@ -365,3 +365,7 @@ export function fsCheck(action, cfg = {}) {
 }
 
 export { resolveFsConfig } from "./fs-config.js";
+
+// Shared with the rubric `filesChanged` check (rubric.js): ONE physical-path
+// resolver, not a second copy. Internal to src/ — not re-exported from index.js.
+export { resolveWithSymlinks, findSymlinkComponent, within, norm };

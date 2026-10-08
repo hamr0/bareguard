@@ -228,6 +228,98 @@ door and quarantine, per-run re-signing, "no-improvement" strike counting.
   rule as the budget.
 - **Estimated pricing = priced.** Only an unpriced round has no cost to account.
 
+### F. fwd spec sign-off (2026-10-08)
+
+fwd signed off the spec on 2026-10-08 with five asks, all RULED by hamr (PRD §12, 2026-10-08):
+`sectionOrder` keeps checking later names after a missing one; exported deterministic `renderGaps`
+so harnesses can detect "stuck" on the render; `blockLines` requires both `size` and `mustCarry`;
+bounds (counts integers >= 1 no max, non-empty string lists of non-empty strings, no
+whitespace-only strings); `outputSha` = sha256 of exactly the checked bytes. fwdloop's ordered
+"sections" maps to `sectionOrder`.
+
+### G. Module 1 build findings and the fwd / loop answers (2026-10-08)
+
+Module 1 (the pure core, `src/primitives/rubric.js`) surfaced nine questions; fwd and loop agreed
+and hamr RULED all nine (PRD §12, 2026-10-08 #6-#13).
+
+- **Strict could LOOSEN.** The first build counted markers under strict for both word rules, so
+  `minWords` strict passed `## Summary` at 2 where forgiving said 1 (the 2026-10-06 strict word rule
+  versus the "strict only tightens" law). Ruled: strict `maxWords` counts markers, strict `minWords`
+  counts like forgiving. The proof is a generated corpus (forgiving red implies strict red, every
+  strict-capable rule), not a reading of the rule.
+- **Headings and the "forgiving also matches" conjunction.** Strict headings now take the exact rest
+  of the line (`# Summary ##` is `Summary ##`, `## C#` is `C#`). The hand-coded parse stays linear
+  (the old regex's lazy capture before ` *#*$` backtracks quadratically). Two further loosenings
+  were found by the generated test and closed by making a strict match also require the forgiving
+  match: a name ending in `:` (strict kept the colon, forgiving strips it), and case folding that is
+  not substring-preserving (final-sigma: `"Σ"` is a strict substring of `"ΑΣ"` but its lowercase is
+  not a substring of the lowercased text). Consequence: a name ending in `:` matches in neither mode.
+- **`text` meant two things.** On `mustCarry`/`blockLines` it was the phrase, everywhere else the
+  signer's explanation (Law 6). Renamed the phrase field to `phrases` (a list on both); `text` is
+  now only the explanation, optional, never decides.
+- **Object outputs could not be bound.** bareguard never serializes an object, so an object output
+  had `outputSha` null and no way to match fwdloop's accept/send hash. Ruled: `opts.outputBytes`
+  (string or bytes) is hashed exactly, for any output type; with none, an object stays unbound and
+  Module 2's gate denies it. fwdloop serialises as `JSON.stringify(artifact, null, 2)`; a test pins
+  our sha256 of those bytes to a hand-computed one.
+- **Kept as built:** `opts.inputs[name]` with a sha256 check for `cited` (mismatch = stopped); a plain
+  string is the field `text`; `baselines` out / `priorBaselines` in with `baseline-conflict`;
+  stopped > red > green with the worker's gaps empty.
+- **`noneExit` on `commandExit` was a trap** (no match count, so it did nothing); now refused.
+- **Signed names are never clipped (fwd measured all 81 of its section names).** The longest real
+  name was 159 characters and was its own bug (fwdloop now caps names at 8 words); the next longest
+  is 35; 0 of 81 end in `:`. The old 120-character gap clip truncated a signed name so the worker
+  could not reproduce it. Ruled: signed values ride gaps whole and are bounded at `createRubric`
+  (over 1000 characters is refused); only measured or output-derived values are clipped. Empty
+  output stays red `happened:empty` before `blockLines`; a `sections`/`sectionOrder` name ending in
+  `:` is refused at `createRubric` (PRD §12 #14-#16).
+- **Fake-green hole (from loop).** `cited` with zero claims on a non-empty output was vacuously
+  green, so a worker could pass by citing nothing. Now red `no-claims`, independent of `complete`.
+
+## L8b. 2026-10-08 Module 2 (the gate): what the spec left open, and what was ruled
+
+Module 2 wired the rubric into the Gate. The PRD said "the runner mints, the gate reads" but never
+said how a verdict reaches the gate, where `runId` comes from, what the `requiresHuman` ask carries,
+or how the seed-baseline freeze reaches `checkStep`. The build stopped and asked rather than guess;
+hamr ruled (PRD §12 #17-#22) with fwd consulted.
+
+- **The gate mints; nothing is handed to it.** The first reading, a `gate.mint(stepResult)`, would
+  accept a verdict the caller built, so a harness holding the gate handle (or an agent that got it)
+  could forge a green. `gate.checkStep` takes only an output and measurements and runs the checks
+  itself, which also solves the baseline freeze: the gate already holds the recorded baselines, so it
+  feeds `priorBaselines` itself and a caller passing its own is refused.
+- **`runId` is the gate's `config.runId`, stated plainly.** The audit already stamps `run_id`; the
+  rebuild matches `run_id` + `rubricSha`. The price: a resume without a stable id starts with fresh
+  counts. Documented instead of papered over, because a hidden "find the earlier run" heuristic is
+  exactly the magic the rebuild must not have. fwd passes `"<flow>/<run>"`.
+- **Live vs later accept.** loop's runs park and resume in another process, so a live `humanChannel`
+  ask cannot always be answered in-process. A signed `accept: "later"` (nothing inferred) plus the
+  harness-only `gate.recordAccept` covers it. `recordAccept` is the dangerous call (it records a
+  human's yes), so it is refused unless the checkpoint is signed `later`, requiresHuman, and holds a
+  green verdict for that exact sha; every refusal is an audit line.
+- **Floor first, twice.** Law 9 is enforced by order in `check()` (floor, then rubric, deny-only) and
+  again inside the commit lock (`_commitDecision`), because a mint can land between the first
+  evaluation and the commit, and a floor ask the human approves still has to pass the rubric.
+  Falsified: letting a green verdict short-circuit the floor turns the Law 9 tests red.
+- **Audit-bound lesson.** The rebuild reads `rubricSha`, `checkpoint`, `outputSha`, `checkId`,
+  `verdict` and `baseline` off lines the audit may cut down, so they joined `MUST_KEEP_KEYS` (and the
+  must-keep test) in the same change, per the repo rule; a test with oversize red lines proves the
+  count survives the bound.
+- **Maxreds is terminal by design.** At the cap every advance at that checkpoint denies
+  `rubric.exhausted`, even after a later green, until a re-sign or an ACCEPT; a stale green must not
+  silently re-open a spent backstop.
+- **Live and later accept differ on an exhausted checkpoint (PRD §12 #23).** Evidence: self-review
+  2026-10-08, repro p5: a live answer that arrived after the verdict moved on still wrote an ACCEPT,
+  which reset the red count and lifted the signed `maxReds` wall (fixed in aa9cbc7: the live write
+  re-checks, inside the lock, that the latest verdict is the green for that `outputSha` and that the
+  checkpoint is not exhausted). `recordAccept` keeps working on an exhausted checkpoint on purpose:
+  it is a deliberate human decision about a known green, which §6 already names as a way out
+  ("terminal until a re-sign or ACCEPT"). Rejected: make both identical so only a re-sign lifts it.
+- **To try: Needle** (cactus-compute/needle). A 29-121M on-device tool-calling model with
+  grammar-constrained JSON (would remove the malformed-reply class) and a 0-1 confidence it may never
+  decide on (Law 8). Candidate caller-side cheap `locate` judge, quotes verified by bareguard. Its own
+  docs show the base model failing 5 of 6 suites, so it needs calibration before any use.
+
 ## L9. Superseded 2026-10-06 entries (history)
 
 | 2026-10-06 ruling | Superseded by (2026-10-07) |

@@ -83,6 +83,7 @@ export {};
  * @property {string} rule
  * @property {string|null} reason
  * @property {HaltContext} context
+ * @property {{rubricSha:string, checkpoint:string, outputSha:string, verdict:string, gaps:object[]}} [rubric]  Present only on a rubric `requiresHuman` ask (rule `rubric.needs-accept`): the signed position, the exact output sha the ACCEPT binds to, the (green) verdict and the worker-view gaps.
  * @property {Annotation[]} [annotations]  Axis-B facts riding this ask (§6.6);
  *   absent when none buffered or none should surface (so the event is unchanged
  *   for callers that never use `annotate()`).
@@ -102,8 +103,8 @@ export {};
 
 /**
  * Axis-B annotation fact (§6.6/§8.2) — a caller-computed verdict on whether a
- * returned value honored the user's request. bareguard never computes this (no
- * LLM) and never decides an outcome; it buffers, audits, lets it ride the next
+ * returned value honored the user's request. bareguard never runs an LLM and does not compute
+ * this fact; it never decides an outcome; it buffers, audits, lets it ride the next
  * human ask, and exposes it for agent feedback via `gate.drainAnnotations()`.
  * `surface` is the one load-bearing field — the caller sets it (e.g. to
  * `verdict !== "honored"`); the rest is carried, not interpreted.
@@ -399,6 +400,9 @@ export {};
  * @property {AxisBConfig} [axisB]  Axis-B return-time-judge routing (§6.6/§8.2).
  * @property {RwxConfig} [rwx]  Operator-tagged capability letters (§23) —
  *   mutually exclusive with `tools.allowlist`/`bash.allow`/`bash.classify`.
+ * @property {RubricConfig} [rubric]  A signed rubric the gate verifies at construct and
+ *   enforces on advance actions (deny-only, after the Axis A floor). `maxReds` and
+ *   `onExhausted` are fields of the SIGNED spec, not gate keys.
  * @property {SecretsConfig} [secrets]
  * @property {RateConfig} [defer]
  * @property {RateConfig} [spawn]
@@ -411,6 +415,20 @@ export {};
  * @property {string|null} [parentRunId]  Falls back to `BAREGUARD_PARENT_RUN_ID`.
  * @property {string} [rootRunId]    Falls back to `BAREGUARD_ROOT_RUN_ID` / parent / self.
  * @property {number} [spawnDepth]   Falls back to `BAREGUARD_SPAWN_DEPTH`.
+ */
+
+/**
+ * `rubric` config: the signed rubric the gate holds. Construct throws on a bad
+ * shape, an unsigned or tampered spec, or a sha mismatch; a value swapped to an
+ * invalid shape afterwards denies every action `rubric.invalid`. Rebuilt state
+ * (verdicts, red counts, ACCEPTs, seed baselines) is matched by the gate's
+ * `runId` + the rubric sha, so pass a STABLE `runId` on resume: without one a
+ * resume starts with fresh counts.
+ *
+ * @typedef {object} RubricConfig
+ * @property {object} spec  The rubric spec (see `createRubric`).
+ * @property {string} sha256  `rubricSha(spec)`, the fingerprint the human signed.
+ * @property {string|string[]} advanceOn  Action name(s) that count as "advance": an action whose `type` OR valid `tool` is listed. Use a reserved name that is no real tool's name (e.g. `fwdloop.advance`).
  */
 
 /**
