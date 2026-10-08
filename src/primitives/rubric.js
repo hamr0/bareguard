@@ -1151,7 +1151,7 @@ function normalizeForQuote(s) {
 // collapsed, nothing else removed). Applied identically to quote and source lines.
 function wholeLineKey(line) {
   const t = line.trim();
-  if (t === "") return "";
+  if (t === "") return { key: "", deco: false };
   let rest = t;
   if (t.startsWith("/**")) rest = t.slice(3);
   else if (t.startsWith("*/")) rest = t.slice(2);
@@ -1159,17 +1159,38 @@ function wholeLineKey(line) {
   else if (t === "*" || t.startsWith("* ") || t.startsWith("*\t")) rest = t.slice(1);
   else if (t.startsWith("# ") || t.startsWith("#\t")) rest = t.slice(1); // "#include", "#!" stay whole
   const n = normalizeForQuote(rest);
-  if (n !== "") return n;
-  return rest === t ? "" : t.replace(/\s+/g, " "); // only-decoration line is itself; only-markers is empty
+  if (n !== "") return { key: n, deco: false };
+  // only-decoration line is itself (and skippable for adjacency); only-markers is empty
+  return rest === t ? { key: "", deco: false } : { key: t.replace(/\s+/g, " "), deco: true };
 }
 
+// all: every non-empty key. subst: the same minus decoration-only lines (the skippable ones).
 function wholeLineKeys(text) {
-  const keys = [];
+  const all = [];
+  const subst = [];
   for (const line of text.split(/\r\n|\r|\n/)) {
-    const k = wholeLineKey(line);
-    if (k !== "") keys.push(k);
+    const { key, deco } = wholeLineKey(line);
+    if (key === "") continue;
+    all.push(key);
+    if (!deco) subst.push(key);
   }
-  return keys;
+  return { all, subst };
+}
+
+// KMP: does `pat` occur as a contiguous run in `text`? Linear in both; arrays of strings.
+function hasRun(pat, text) {
+  const fail = new Array(pat.length).fill(0);
+  for (let i = 1, k = 0; i < pat.length; i++) {
+    while (k > 0 && pat[i] !== pat[k]) k = fail[k - 1];
+    if (pat[i] === pat[k]) k++;
+    fail[i] = k;
+  }
+  for (let i = 0, k = 0; i < text.length; i++) {
+    while (k > 0 && text[i] !== pat[k]) k = fail[k - 1];
+    if (text[i] === pat[k]) k++;
+    if (k === pat.length) return true;
+  }
+  return false;
 }
 
 /**
@@ -1182,10 +1203,16 @@ function wholeLineKeys(text) {
  * source are split into lines (CRLF ok), each line is normalized on its own and one
  * leading comment decoration is stripped (`/**`, `*` + space or a lone `*`, `*` + `/`, `//`,
  * and `#` only when a space follows, so `#include` stays whole; a `//` mid-line is never
- * touched). A line that is only decoration (`/**`, `*` + `/`) is compared as itself. Every
- * non-empty quote line must EQUAL a whole non-empty source line (equality, not substring), so a
- * fragment of a line is not-found. Any `opts` other than an object with `wholeLines === true`
- * (absent, non-object, non-boolean `wholeLines`) means the default mode; it never throws.
+ * touched). A line that is only decoration (`/**`, `*` + `/`) is compared as itself. Lines are
+ * compared by equality (not substring), so a fragment of a line is not-found. The quote's lines
+ * must match a CONTIGUOUS run of source lines, in order; empty and decoration-only lines
+ * (`/**`, `*` + `/`, `*`, `//`, `#`) are skipped on BOTH sides when checking adjacency, so a doc
+ * block's blank ` *` line may be left out or included. A quote that is ENTIRELY decoration-only
+ * (e.g. `/**` alone) falls back to: every non-empty quote line equals some source line. Such a
+ * quote matches any source holding that line and proves nothing about WHERE it sits; a caller
+ * that needs location must check it itself. Any `opts` other than an object with
+ * `wholeLines === true` (absent, non-object, non-boolean `wholeLines`, or a throwing getter or
+ * Proxy) means the default mode; it never throws.
  * @param {string} quote
  * @param {string} source
  * @param {{wholeLines?: boolean}} [opts]
@@ -1193,7 +1220,7 @@ function wholeLineKeys(text) {
  * @when Reach for this to check that a quote a model returned really appears in the frozen text it claims to cite, forgiving only markdown bold and reflowed whitespace — so a paraphrase or a changed word fails, but a quote copied across a line wrap or out of a bold run passes. Pass `{ wholeLines: true }` when a bare word like "return" must not pass by hiding inside a longer line.
  * @category rubric
  * @signature quoteIn(quote: string, source: string, opts?: { wholeLines?: boolean }) => { ok: boolean, why?: "not-a-string"|"source-too-large"|"empty-quote"|"not-found" }
- * @fails Never throws. A non-string argument, an empty quote and an oversize source each return `{ ok: false, why }`. A bad `opts` is ignored (default mode). Plain substring or Set lookup, no regex built from input.
+ * @fails Never throws. A non-string argument, an empty quote and an oversize source each return `{ ok: false, why }`. A bad `opts` is ignored (default mode). Plain substring, Set lookup and a linear KMP run search; no regex built from input.
  * @example
  * import { quoteIn } from "bareguard";
  * quoteIn("ships in 2 weeks", "It **ships in\n2 weeks**.").ok; // true
@@ -1203,11 +1230,21 @@ function wholeLineKeys(text) {
 export function quoteIn(quote, source, opts) {
   if (typeof quote !== "string" || typeof source !== "string") return { ok: false, why: "not-a-string" };
   if (Buffer.byteLength(source, "utf8") > SOURCE_CAP_BYTES) return { ok: false, why: "source-too-large" };
-  if (opts !== null && typeof opts === "object" && opts.wholeLines === true) {
-    const qLines = wholeLineKeys(quote);
-    if (qLines.length === 0) return { ok: false, why: "empty-quote" };
-    const have = new Set(wholeLineKeys(source));
-    return qLines.every((k) => have.has(k)) ? { ok: true } : { ok: false, why: "not-found" };
+  let whole = false;
+  try {
+    whole = opts !== null && typeof opts === "object" && opts.wholeLines === true; // hostile getter/Proxy: default mode
+  } catch {
+    whole = false;
+  }
+  if (whole) {
+    const q = wholeLineKeys(quote);
+    if (q.all.length === 0) return { ok: false, why: "empty-quote" };
+    const src = wholeLineKeys(source);
+    if (q.subst.length === 0) {
+      const have = new Set(src.all); // all decoration-only: per-line equality, proves nothing about location
+      return q.all.every((k) => have.has(k)) ? { ok: true } : { ok: false, why: "not-found" };
+    }
+    return hasRun(q.subst, src.subst) ? { ok: true } : { ok: false, why: "not-found" };
   }
   const q = normalizeForQuote(quote);
   if (q === "") return { ok: false, why: "empty-quote" };

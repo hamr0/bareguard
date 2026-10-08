@@ -90,3 +90,55 @@ test("wholeLines: guards (not-a-string, empty-quote, source-too-large) still app
   assert.deepEqual(quoteIn("**\n__", "x", W), { ok: false, why: "empty-quote" });
   assert.deepEqual(quoteIn("x", "x".repeat(5 * 1024 * 1024 + 1), W), { ok: false, why: "source-too-large" });
 });
+
+test("wholeLines: reordered lines are not-found (order matters)", () => {
+  assert.deepEqual(quoteIn("line three\nline one", "line one\nline two\nline three", W), { ok: false, why: "not-found" });
+  assert.deepEqual(quoteIn("line one\nline two", "line one\nline two\nline three", W), { ok: true });
+});
+
+test("wholeLines: two non-adjacent source lines are not-found", () => {
+  assert.deepEqual(quoteIn("line one\nline three", "line one\nline two\nline three", W), { ok: false, why: "not-found" });
+});
+
+test("wholeLines: blank ' *' decoration line is skippable on either side", () => {
+  const src = "/**\n * first sentence.\n *\n * second sentence.\n */";
+  assert.deepEqual(quoteIn("first sentence.\nsecond sentence.", src, W), { ok: true }, "quote omits the blank");
+  assert.deepEqual(quoteIn(" * first sentence.\n *\n * second sentence.", src, W), { ok: true }, "quote includes the blank");
+  assert.deepEqual(quoteIn("first sentence.\n\nsecond sentence.", src, W), { ok: true }, "empty line in quote");
+  assert.deepEqual(quoteIn("first sentence.\nsecond sentence.", "first sentence.\n\n\nsecond sentence.", W), { ok: true }, "empty lines in source");
+  assert.deepEqual(quoteIn("first sentence.\nsecond sentence.", "first sentence.\n * other.\nsecond sentence.", W), { ok: false, why: "not-found" });
+});
+
+test("wholeLines: a 3-line contiguous JSDoc quote is ok", () => {
+  assert.deepEqual(quoteIn("Parses an ISO string.\n@param {string} s\n@returns {Date} the parsed date, in the local time zone.", DOC, W), { ok: true });
+  assert.deepEqual(quoteIn("Parses an ISO string.\n@returns {Date} the parsed date, in the local time zone.", DOC, W), { ok: false, why: "not-found" });
+});
+
+test("wholeLines: repeated lines (KMP correctness)", () => {
+  assert.deepEqual(quoteIn("a\nc", "a\nb\na\nc", W), { ok: true });
+  assert.deepEqual(quoteIn("a\nb\nc", "a\nb\na\nb\nc", W), { ok: true });
+  assert.deepEqual(quoteIn("a\nb\nc", "a\nb\na\nb\nd", W), { ok: false, why: "not-found" });
+  assert.deepEqual(quoteIn("a\na\nb", "a\na\na\nb", W), { ok: true });
+  assert.deepEqual(quoteIn("a\nb\nb", "a\nb\nc\nb", W), { ok: false, why: "not-found" });
+});
+
+test("wholeLines: decoration-only quote falls back to per-line equality (proves nothing about location)", () => {
+  assert.deepEqual(quoteIn("/**", "x\ny\n/**", W), { ok: true });
+  assert.deepEqual(quoteIn("/**\n*/", "*/\nmid\n/**", W), { ok: true }, "order/adjacency not checked");
+  assert.deepEqual(quoteIn("#", "text\n#", W), { ok: true });
+  assert.deepEqual(quoteIn("//", "text", W), { ok: false, why: "not-found" });
+});
+
+test("wholeLines: hostile opts never throw and give the default-mode result", () => {
+  const thrower = {};
+  Object.defineProperty(thrower, "wholeLines", { get() { throw new Error("boom"); } });
+  const getTrap = new Proxy({}, { get() { throw new Error("get"); } });
+  const protoTrap = new Proxy({}, { getPrototypeOf() { throw new Error("proto"); }, has() { throw new Error("has"); }, getOwnPropertyDescriptor() { throw new Error("gopd"); } });
+  const revoked = Proxy.revocable({}, {});
+  revoked.revoke();
+  for (const o of [thrower, getTrap, protoTrap, revoked.proxy]) {
+    // "return" is a substring (ok in default mode) but not a whole line (would fail in wholeLines mode)
+    assert.deepEqual(quoteIn("return", DOC, o), { ok: true });
+    assert.deepEqual(quoteIn("zzz", DOC, o), { ok: false, why: "not-found" });
+  }
+});
