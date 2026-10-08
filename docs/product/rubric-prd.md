@@ -43,7 +43,7 @@ replanning, cadence, spend caps) stays outside bareguard.
    gate calls inside). The deterministic checks run, then the judge if any. The gate mints green /
    soft-green / red / stopped. Nothing a caller says about a verdict is trusted: there is no way to hand
    the gate a verdict, only an output to grade.
-6. The agent or runner sends the advance action `{ type: <advanceOn>, checkpoint, outputSha }`
+6. The agent or runner sends the advance action `{ type: <advanceOn>, checkpoint, outputSha }` (a `tool` equal to an `advanceOn` entry counts too, §7)
    through `gate.check`. The Axis A floor runs first (Law 9); then the advance is denied if there
    is no minted verdict, the verdict is red or stopped, the sha does not match, or the checkpoint
    is `requiresHuman` and no ACCEPT is recorded for the sha.
@@ -75,7 +75,7 @@ end -> human ACCEPT
 | `gate.drainGaps()` | read-and-clear the gap view for the retry (§7) |
 | `gate.recordAccept({...})` | harness-only: record an ACCEPT answered later, for `accept: "later"` checkpoints (§6) |
 | config `rubric` | `{ spec, sha256, advanceOn }`, the signed rubric the gate holds (§9) |
-| config `rubric.advanceOn` | the action type(s) that count as "advance", nested in `rubric` (§7) |
+| config `rubric.advanceOn` | the action type(s) or tool name(s) that count as "advance" (matches `action.type` OR a valid `action.tool`), nested in `rubric` (§7) |
 | spec `onExhausted` | `"fail"` (default) or `"ask"` (Later) when reds run out; a field of the SIGNED spec, not a gate key (§6) |
 | spec `maxReds` | cap on reds per `(rubricSha, checkpoint)`; OFF unless set; a field of the SIGNED spec, not a gate key (§6) |
 
@@ -497,7 +497,7 @@ marks which gate the advance.
    buffers the worker gaps for `gate.drainGaps()`. It returns the full StepResult (verdict, worker
    `gaps`, `fault`, `full`, `rubricSha`, `outputSha`) so a harness can render its own page.
    The whole call runs under the gate's ordering lock, so the audit line order is the decision order.
-3. The advance action, an action type listed in `rubric.advanceOn`, carries `{ checkpoint,
+3. The advance action, one whose `type` or valid `tool` is listed in `rubric.advanceOn`, carries `{ checkpoint,
    outputSha }`. `gate.check` looks up the minted verdict and **denies if** none exists
    (`rubric.unminted`), it is red (`rubric.red`), it is stopped (`rubric.stopped`), `outputSha`
    differs (`rubric.output-mismatch`), or a required ACCEPT is missing (`rubric.needs-accept`).
