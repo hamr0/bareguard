@@ -34,7 +34,7 @@ export function readRubricConfig(r) {
     const a = r.advanceOn;
     const list = typeof a === "string" ? [a] : a;
     if (!Array.isArray(list) || list.length === 0 || list.some(blank)) {
-      return { ok: false, why: "rubric.advanceOn must be an action type string or a non-empty array of non-blank strings" };
+      return { ok: false, why: "rubric.advanceOn must be an action type or tool name string (or a non-empty array of non-blank strings)" };
     }
     return { ok: true, advanceOn: new Set(list) };
   } catch {

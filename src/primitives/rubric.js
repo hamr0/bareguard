@@ -70,6 +70,7 @@ import { resolveWithSymlinks, findSymlinkComponent, within, norm } from "./fs.js
 
 const MAX_NAME_LEN = 128; // ids, checkpoint ids, field names (they land in keys and audit lines)
 const SOURCE_CAP_BYTES = 5 * 1024 * 1024; // PRD §4.2 / ruling 2026-10-06 #7
+const QUOTE_WORK_CAP = 128 * 1024 * 1024; // `cited`: distinct quotes x normalized source length (UTF-16 units) searched per check; over it = red too-many. Deterministic, never a clock (Law 8)
 const MAX_ITEMS = 20; // offender-list bound in a gap
 const CLIP = 120; // a caller-MEASURED / output-derived string inside a gap (never a signed one)
 const MAX_SIGNED_LEN = 1000; // a signed name/phrase/value is refused past this at createRubric, so it rides a gap UNCLIPPED
@@ -520,16 +521,32 @@ function runCited(ctx, c) {
   if (cl.claims.length === 0) return red("no-claims", { measured: 0 });
   const tooBig = Buffer.byteLength(text, "utf8") > SOURCE_CAP_BYTES;
   const src = tooBig ? "" : normalizeForQuote(text);
-  const bad = [];
-  cl.claims.forEach((cc, i) => {
+  // Work cap, checked BEFORE any search: each distinct normalized quote costs one linear
+  // `includes` over the source, whatever the quote's length (measured flat in quote length).
+  // Over the cap = the existing `too-many` gap (measured = distinct quotes, limit = how many
+  // this source size allows). Pure function of the inputs, so the verdict is deterministic.
+  const norm = cl.claims.map((cc) => {
     const claim = ownString(cc, "claim");
     const quote = ownString(cc, "quote");
-    if (claim === undefined || quote === undefined) return bad.push(`#${i}:malformed`);
+    return claim === undefined || quote === undefined ? undefined : normalizeForQuote(quote);
+  });
+  if (!tooBig) {
+    const distinct = new Set();
+    for (const q of norm) if (q !== undefined && q !== "") distinct.add(q);
+    const limit = Math.floor(QUOTE_WORK_CAP / Math.max(src.length, 1));
+    if (distinct.size > limit) return { gap: { kind: "too-many", measured: distinct.size, limit } };
+  }
+  const found = new Map(); // normalized quote -> found in src (identical quotes searched once; same verdict)
+  const bad = [];
+  cl.claims.forEach((cc, i) => {
+    const q = norm[i];
+    if (q === undefined) return bad.push(`#${i}:malformed`);
     if (tooBig) return bad.push(`#${i}:source-too-large`);
-    const q = normalizeForQuote(quote);
     if (q === "") return bad.push(`#${i}:empty-quote`);
-    if (!src.includes(q)) return bad.push(`#${i}:quote-not-found`);
-    const n = numbersInQuote(claim, quote);
+    let hit = found.get(q);
+    if (hit === undefined) found.set(q, (hit = src.includes(q)));
+    if (!hit) return bad.push(`#${i}:quote-not-found`);
+    const n = numbersInQuote(/** @type {string} */ (ownString(cc, "claim")), /** @type {string} */ (ownString(cc, "quote")));
     if (!n.ok) return bad.push(`#${i}:numbers:${n.missing.join(",")}`);
   });
   return bad.length === 0 ? OK : red("unsupported", { measured: bad.length, limit: cl.claims.length, ...boundItems(bad) });
@@ -810,6 +827,7 @@ export const rubricVocabulary = deepFreeze({
     signedString: { maxLength: MAX_SIGNED_LEN },
     name: { maxLength: MAX_NAME_LEN },
     quoteSourceMaxBytes: SOURCE_CAP_BYTES,
+    quoteWorkMax: QUOTE_WORK_CAP,
   },
   checkpoint: {
     gating: { type: "boolean", required: true },

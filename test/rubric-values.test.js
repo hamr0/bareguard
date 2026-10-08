@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { createRubric, checkStep } from "../src/index.js";
+import { createRubric, checkStep, rubricVocabulary } from "../src/index.js";
 
 // ---------------------------------------------------------------------------
 // checkStep — value rules, cited, complete (docs/product/rubric-prd.md §4.1, §4.4)
@@ -172,4 +172,71 @@ test("gap item lists are bounded: 20 shown, the true total reported; SIGNED item
   const r2 = await run([{ id: "k", rule: "complete", claims: "claims", itemsFrom: "caller" }], { claims: [] }, { items: { k: items } });
   assert.equal(gap(r2).items.length, 20);
   assert.ok(gap(r2).items.every((x) => x.length <= 120));
+});
+
+// --- cited: deterministic work cap (docs/product/rubric-prd.md §4.4, §12 #24) -----------------
+
+const WORK_CAP = 128 * 1024 * 1024; // distinct quotes x normalized source length; a 1.0 SemVer-surface constant
+const citedOver = (src, claims) =>
+  checkStep(
+    createRubric({ schema: 1, goal: "g", inputs: [{ name: "doc", sha256: sha(src) }], checkpoints: { cp: { gating: true, checks: [{ id: "c", rule: "cited", claims: "claims", source: "doc" }] } } }),
+    "cp",
+    { claims },
+    { inputs: { doc: src } },
+  );
+const padded = (n, len) => (Array.from({ length: n }, (_, i) => `t${i}x`).join(" ") + " ").padEnd(len, ".");
+
+test("cited work cap: AT/UNDER the cap behaves normally, OVER is red too-many with measured/limit", async () => {
+  const LEN = 128 * 1024;
+  const limit = WORK_CAP / LEN; // 1024 distinct quotes
+  const src = padded(limit + 1, LEN);
+  assert.equal(src.length, LEN);
+  const mk = (n, off = 0) => Array.from({ length: n }, (_, i) => ({ claim: "c", quote: `t${i + off}x` }));
+  assert.equal((await citedOver(src, mk(limit - 1))).verdict, "green", "UNDER");
+  assert.equal((await citedOver(src, mk(limit))).verdict, "green", "AT the cap is allowed");
+  // AT the cap, a miss is still the ordinary per-claim red
+  const atBad = mk(limit); atBad[3] = { claim: "c", quote: "not here" };
+  const rAt = await citedOver(src, atBad);
+  assert.equal(gap(rAt).kind, "unsupported");
+  assert.deepEqual(gap(rAt).items, ["#3:quote-not-found"]);
+  const rOver = await citedOver(src, mk(limit + 1));
+  assert.equal(rOver.verdict, "red", "OVER");
+  assert.equal(gap(rOver).kind, "too-many");
+  assert.equal(gap(rOver).measured, limit + 1);
+  assert.equal(gap(rOver).limit, limit);
+  assert.equal(gap(rOver).field, "claims");
+});
+
+test("cited work cap: the measured worst-case shape (5 MiB of 'a', 'aaa...b' quotes) is bounded, verdict not time", async () => {
+  const LEN = 5 * 1024 * 1024;
+  const src = "a".repeat(LEN);
+  const limit = Math.floor(WORK_CAP / LEN); // 25
+  const q = (i) => "a".repeat(2 + (i % 40)) + "b" + "a".repeat(Math.floor(i / 40)) + "b";
+  const mk = (n) => Array.from({ length: n }, (_, i) => ({ claim: "c", quote: q(i) }));
+  const over = await citedOver(src, mk(1000));
+  assert.equal(gap(over).kind, "too-many");
+  assert.equal(gap(over).measured, 1000);
+  assert.equal(gap(over).limit, limit);
+  assert.equal(gap(await citedOver(src, mk(limit + 1))).kind, "too-many");
+  assert.equal(gap(await citedOver(src, mk(limit))).kind, "unsupported", "AT the cap still searches");
+  assert.equal(rubricVocabulary.bounds.quoteWorkMax, WORK_CAP);
+});
+
+test("cited dedupe: identical normalized quotes count once toward the cap and give the same per-claim verdicts", async () => {
+  const LEN = 128 * 1024;
+  const src = padded(10, LEN);
+  // thousands of duplicates of one quote: well past 1024 claims, but ONE distinct quote
+  const dup = Array.from({ length: 5000 }, () => ({ claim: "c", quote: "t3x" }));
+  assert.equal((await citedOver(src, dup)).verdict, "green");
+  // normalization-identical quotes (whitespace, **) are the same quote
+  assert.equal((await citedOver(src, [{ claim: "c", quote: "t3x" }, { claim: "c", quote: "**t3x**" }, { claim: "c", quote: "  t3x " }])).verdict, "green");
+  // verdicts stay per claim: same quote, different claim text -> numbers check still runs per claim
+  const r = await citedOver(src, [
+    { claim: "c", quote: "t3x" }, { claim: "c", quote: "t3x" }, { claim: "c", quote: "nope" }, { claim: "c", quote: "nope" },
+    { claim: "42", quote: "t3x" }, { claim: "c", quote: "" }, { claim: "c" },
+  ]);
+  assert.equal(gap(r).kind, "unsupported");
+  assert.deepEqual(gap(r).items, ["#2:quote-not-found", "#3:quote-not-found", "#4:numbers:42", "#5:empty-quote", "#6:malformed"]);
+  assert.equal(gap(r).measured, 5);
+  assert.equal(gap(r).limit, 7);
 });

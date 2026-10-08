@@ -283,11 +283,20 @@ empty fails with kind `no-claims`, never a vacuous green, whether or not a `comp
 The signed input's frozen text comes from `opts.inputs[name]` and must hash to the signed `sha256`,
 or the check is `stopped` (RULED 2026-10-08 #8).
 
+**`cited`: work cap** (RULED 2026-10-08 #24). Each distinct normalized quote costs one linear search
+of the source, whatever the quote's length. Before searching, the check counts the DISTINCT
+non-empty normalized quotes (identical quotes are searched once); if that count exceeds
+`floor(128 MiB / normalized-source-length)` (128 MiB = 134,217,728; 25 quotes at the 5 MiB source
+cap, 1,024 at 128 KiB) the check is red with the existing `too-many` gap, `measured` = the distinct
+quotes, `limit` = the count this source size allows. A pure function of the inputs, never a clock,
+so a verdict is reproducible (Law 8). Exposed as `rubricVocabulary.bounds.quoteWorkMax`.
+
 ### 4.2 Pure helpers
 
 **`quoteIn(quote, source)`**: collapse whitespace (`\s+` to one space, trim) and strip `**` and `__`
 on both sides, then substring containment. Substring, not line-wise. Empty quote = red. Source cap
 **5 MB**; over it = red "source too large". Linear time.
+The `cited` rule also caps total search work per check (§4.1, ruling #24).
 
 **`numbersInQuote(claim, quote)`**: number tokens are `/\d+(?:\.\d+)?/g`; every token in the claim
 must appear as a token in the quote (`8` does not match `2018`). `8x` is 8, `1.2k` is 1.2, `50%` is
@@ -465,7 +474,7 @@ Non-gating checkpoints record and return gaps/faults but never deny.
     checkpoint, outputSha, verdict, gaps }` (`gaps` = the worker view, empty on a green). It is asked
     ONCE per `outputSha`: the reply `{ decision: "allow" }` is recorded as an ACCEPT bound to that
     sha; any other reply, a timeout, a throw, or no `humanChannel` denies and records nothing; a
-    different `outputSha` asks again. Concurrent advances for the same `(checkpoint, outputSha)` share ONE ask and one ACCEPT line. A reply that arrives after the verdict moved on (the latest verdict is no longer that green `outputSha`, or the checkpoint is exhausted) is discarded: nothing is recorded and the red count is not reset. If the Axis A floor also asks on the advance, the floor's ask
+    different `outputSha` asks again. Concurrent advances for the same `(checkpoint, outputSha)` share ONE ask and one ACCEPT line. A concurrent advance that JOINS an in-flight ask gets no `approval` audit line of its own: only the ask's owner (the first advance) has one, and the `rubric_accept` line carries the owner's `askId`. A reader joining approvals to decisions by `aid` will see a joiner `allow` with no approval line under its own `aid`; follow the shared `(checkpoint, outputSha)` to the owner's. A reply that arrives after the verdict moved on (the latest verdict is no longer that green `outputSha`, or the checkpoint is exhausted) is discarded: nothing is recorded and the red count is not reset. If the Axis A floor also asks on the advance, the floor's ask
     comes first and the rubric ask follows it; no other action ever gets a rubric ask.
   - **`accept: "later"`** for a harness that parks and resumes in another process. There is no live
     ask: an advance without a recorded ACCEPT is denied `rubric.needs-accept`. The harness (never the
@@ -772,3 +781,4 @@ All RULED by hamr. Superseded entries are kept for the record.
 21. RULED (hamr, 2026-10-08): `advanceOn` is nested in the `rubric` config; `maxReds`/`onExhausted` come ONLY from the signed spec (one source, no top-level gate keys); the red count resets on a re-sign (new `rubricSha`) or an ACCEPT at that `requiresHuman` checkpoint, and on nothing else.
 22. RULED (hamr, 2026-10-08): add Needle to the Later table as a "to try" row (a candidate caller-side cheap `locate` judge; needs calibration first).
 23. RULED (hamr, 2026-10-08): the two ACCEPT paths differ on an exhausted checkpoint, and that is intended. A LIVE accept (`humanChannel` ask) is written only if, inside the lock, the checkpoint's latest verdict is still the green for exactly the asked `outputSha` AND the checkpoint is not exhausted; otherwise the answer is discarded (no accept line, no red reset), so a stale answer can never reset the red count and lift the signed `maxReds` wall. A LATER accept (`accept: "later"` + `gate.recordAccept`) needs a green for the exact `outputSha` but MAY be recorded on an exhausted checkpoint and resets the reds, matching §6 "terminal until a re-sign or ACCEPT": it is a deliberate human decision about a known green output, while the live guard only rejects answers that went stale while pending. Rejected: making both identical so only a re-sign lifts exhaustion.
+24. RULED (hamr, 2026-10-08): `cited` has a deterministic WORK cap, not a clock. Distinct normalized quotes x normalized source length is capped at 128 MiB (`floor(128 MiB / source length)` distinct quotes); over it = the existing `too-many` gap (`measured` = distinct quotes, `limit` = allowed), checked before any search. Identical normalized quotes are searched once (pure performance, same verdict). Measured: per-quote cost is flat in quote length, so claims x source length bounds the work (worst case ~70 ms per quote at 5 MiB; capped worst case about 1 s). No new rule name or gap kind; a wall-clock budget was rejected because verdicts must be deterministic (Law 8).
