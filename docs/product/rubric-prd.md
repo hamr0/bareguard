@@ -37,10 +37,12 @@ replanning, cadence, spend caps) stays outside bareguard.
 3. The human signs. `rubricSha(spec)` is the fingerprint both sides compute. A judge model or
    cutoff change means re-sign.
 4. The agent works. It never sees the rubric.
-5. The runner takes any caller measurements, then calls
-   `checkStep(rubric, checkpoint, output, { judge?, deadlineMs?, measurements?, items?, inputs?,
-   priorBaselines?, outputBytes? })` (signature in §7). The
-   deterministic checks run, then the judge if any. It mints green / soft-green / red / stopped.
+5. The runner takes any caller measurements, then calls `gate.checkStep(checkpoint, output, { measurements?,
+   items?, inputs?, outputBytes? })` (§7). The GATE runs the checks with its own verified rubric (the
+   exported pure `checkStep(rubric, checkpoint, output, opts)` is for gate-less agents and is what the
+   gate calls inside). The deterministic checks run, then the judge if any. The gate mints green /
+   soft-green / red / stopped. Nothing a caller says about a verdict is trusted: there is no way to hand
+   the gate a verdict, only an output to grade.
 6. The agent or runner sends the advance action `{ type: <advanceOn>, checkpoint, outputSha }`
    through `gate.check`. The Axis A floor runs first (Law 9); then the advance is denied if there
    is no minted verdict, the verdict is red or stopped, the sha does not match, or the checkpoint
@@ -69,11 +71,13 @@ end -> human ACCEPT
 | `quoteIn(quote, source)` | pure: is the quote in the source, whitespace and `**` forgiven (§4.2) |
 | `numbersInQuote(claim, quote)` | pure: does every number in the claim appear in the quote (§4.2) |
 | `rubricVocabulary` | frozen, machine-readable list of every rule: field names, types, required/optional, bounds, defaults; descriptions are generated from it (§9) |
+| `gate.checkStep(checkpoint, output, opts)` | the gate runs the checks with its OWN signed rubric, mints the verdict, records it, buffers the worker gaps (§7) |
 | `gate.drainGaps()` | read-and-clear the gap view for the retry (§7) |
-| config `rubric` | `{ spec, sha256 }`, the signed rubric the gate holds (§9) |
-| config `rubric.advanceOn` | the action type(s) that count as "advance" (§7) |
-| config `onExhausted` | `"fail"` (default) or `"ask"` when reds run out (§6) |
-| config `maxReds` | gate-side cap on reds per `(rubricSha, checkpoint)`; OFF unless set (§6) |
+| `gate.recordAccept({...})` | harness-only: record an ACCEPT answered later, for `accept: "later"` checkpoints (§6) |
+| config `rubric` | `{ spec, sha256, advanceOn }`, the signed rubric the gate holds (§9) |
+| config `rubric.advanceOn` | the action type(s) that count as "advance", nested in `rubric` (§7) |
+| spec `onExhausted` | `"fail"` (default) or `"ask"` (Later) when reds run out; a field of the SIGNED spec, not a gate key (§6) |
+| spec `maxReds` | cap on reds per `(rubricSha, checkpoint)`; OFF unless set; a field of the SIGNED spec, not a gate key (§6) |
 
 **The check shapes.** Every type, one line; exact rules in §4.
 
@@ -173,7 +177,7 @@ own module; the Axis A floor never imports judge code.
   judge: { provider, model, cutoff?, band? } | null,  // identity; any change forces a re-sign
   reads: <int>,                                       // signed; absent = 1 (§5)
   checkpoints: {
-    "<id>": { gating: true|false, requiresHuman?: true, checks: [ Check, ... ] },
+    "<id>": { gating: true|false, requiresHuman?: true, accept?: "live"|"later", checks: [ Check, ... ] },
   },
   onExhausted: "fail" | "ask",                        // default "fail"
   maxReds: <int>,                                     // optional; absent = no cap (§6)
@@ -449,15 +453,33 @@ Non-gating checkpoints record and return gaps/faults but never deny.
 - A soft-green result must be confirmed at ACCEPT. With no ACCEPT moment configured, soft-green
   fails closed (it behaves as red at the last gating checkpoint).
 - **`requiresHuman` checkpoint** (signer-set only, tighten-only): the advance is denied until a human
-  ACCEPT is recorded for that checkpoint's `outputSha`, even when the verdict is green. The ask goes
-  through bareguard's existing `humanChannel` at that signed position; the reply `{ decision:
-  "allow" }` is recorded as ACCEPT bound to `outputSha`; any other reply, or no `humanChannel`,
-  denies. `outputSha` = sha256 of exactly the bytes bound to the advance (see §7 `outputBytes`).
-  bareguard never serializes an object to hash it. A red or stopped verdict denies before any ask.
+  ACCEPT is recorded for that checkpoint's `outputSha`, even when the verdict is green. A red or
+  stopped verdict denies before any ask. `outputSha` = sha256 of exactly the bytes bound to the
+  advance (see §7 `outputBytes`); bareguard never serializes an object to hash it. How the ACCEPT is
+  obtained is a SIGNED per-checkpoint field `accept: "live" | "later"` (default `"live"`; nothing is
+  inferred; it is refused on a checkpoint that is not `requiresHuman`, and it is in the hash):
+  - **`accept: "live"`** (default). A green advance asks through bareguard's existing `humanChannel`
+    at that signed position, with rule `rubric.needs-accept` and an event key `rubric: { rubricSha,
+    checkpoint, outputSha, verdict, gaps }` (`gaps` = the worker view, empty on a green). It is asked
+    ONCE per `outputSha`: the reply `{ decision: "allow" }` is recorded as an ACCEPT bound to that
+    sha; any other reply, a timeout, a throw, or no `humanChannel` denies and records nothing; a
+    different `outputSha` asks again. If the Axis A floor also asks on the advance, the floor's ask
+    comes first and the rubric ask follows it; no other action ever gets a rubric ask.
+  - **`accept: "later"`** for a harness that parks and resumes in another process. There is no live
+    ask: an advance without a recorded ACCEPT is denied `rubric.needs-accept`. The harness (never the
+    agent, same trust rule as `gate.add`) records the answer with `gate.recordAccept({ checkpoint,
+    outputSha, by, at?, askId? })`. It is REFUSED (throws, and a `rubric_accept_refused` audit line
+    records why) unless the checkpoint is `requiresHuman` AND `accept: "later"` AND the latest minted
+    verdict for it is GREEN for exactly that `outputSha` in this `rubricSha` and `runId`. Audited,
+    rebuilt on cold start.
 
 **Exhaustion.** The loop owns retries and strikes. `maxReds` is OFF unless set: when set, the gate
-counts reds (not stopped) per `(rubricSha, checkpointId)` as a backstop, reusing budget's countable
-resources, reset on re-sign or ACCEPT. On exhaustion `onExhausted: "fail"` (default; terminal red)
+counts reds (not stopped) per `(rubricSha, checkpointId)` as a backstop, rebuilt from the audit like
+the budget. The count resets on a re-sign (a new `rubricSha`) or on an ACCEPT at that `requiresHuman`
+checkpoint, and on nothing else. `maxReds` and `onExhausted` are fields of the SIGNED spec (one
+source); a gate key of either name is refused at construct. Once the count reaches `maxReds` every
+advance at that checkpoint is denied `rubric.exhausted` (terminal until a re-sign or ACCEPT), whatever
+the latest verdict. On exhaustion `onExhausted: "fail"` (default; terminal red)
 or `"ask"` (Later; for loops with no end door). The machine never adds an ask by default.
 
 ## 7. Mechanics
@@ -466,13 +488,22 @@ or `"ask"` (Later; for loops with no end door). The machine never adds an ask by
 marks which gate the advance.
 
 **Flow (runner mints, gate reads):**
-1. Runner (or agent) calls `checkStep(rubric, checkpointId, output, opts)`.
-2. bareguard runs the checks, mints `{ verdict, gaps | fault, outputSha }`, records it (audit) keyed
-   by `(rubricSha, checkpointId)`.
+1. The runner calls `gate.checkStep(checkpointId, output, opts)` (async). The gate holds the verified
+   rubric, so the caller names the checkpoint and supplies the output and measurements, never a verdict.
+2. The gate runs the checks, mints `{ verdict, gaps | fault, outputSha }`, records it (audit `rubric`
+   line) keyed by `(rubricSha, checkpointId)`, records any new seed baseline, updates the red count and
+   buffers the worker gaps for `gate.drainGaps()`. It returns the full StepResult (verdict, worker
+   `gaps`, `fault`, `full`, `rubricSha`, `outputSha`) so a harness can render its own page.
+   The whole call runs under the gate's ordering lock, so the audit line order is the decision order.
 3. The advance action, an action type listed in `rubric.advanceOn`, carries `{ checkpoint,
    outputSha }`. `gate.check` looks up the minted verdict and **denies if** none exists
    (`rubric.unminted`), it is red (`rubric.red`), it is stopped (`rubric.stopped`), `outputSha`
    differs (`rubric.output-mismatch`), or a required ACCEPT is missing (`rubric.needs-accept`).
+   The same lookup runs again inside the commit lock, so a mint that lands between the first check and
+   the commit is honoured. Deny order: `rubric.invalid`, `rubric.unminted`, `rubric.exhausted`,
+   `rubric.stopped`, `rubric.red`, `rubric.output-mismatch`, `rubric.needs-accept`. A non-gating
+   checkpoint never denies. `rubric.invalid` (a config swapped to an invalid shape or a different
+   signature after construct) denies EVERY action, after the floor.
 Big outputs never enter the action or the audit line. Either an agent or a runner may send the
 advance.
 
@@ -520,12 +551,21 @@ checkStep(rubric, checkpoint, output, {
 
 **State rebuilt from the audit.** Gate state that enforces a limit (minted verdicts, red counts,
 recorded seed baselines, ACCEPTs) is rebuilt from the audit on cold start/resume, like the budget.
-A resume never resets a count.
+A resume never resets a count. Lines are matched by the audit line's `run_id` (the gate's `runId`,
+RULED 2026-10-08 #18: use `config.runId`) and `rubricSha`. **The harness must pass a stable `runId`
+(and audit path) on resume; a gate with no stable `runId` gets a fresh random one and starts with
+fresh counts. There is no magic that finds the earlier run.** Seed baselines are keyed
+`(rubricSha, runId, checkpoint, checkId)` (check ids are only unique within a checkpoint).
 
 **Audit bounds.** Quotes and sources never go on an audit line whole. Gap, fault and full views are
 bounded at the source, redacted, then line-capped by the existing `LINE_FIELDS` path
 (`MAX_LINE_BYTES` 3500). New rows needed for any new top-level field (e.g. `outputSha`,
-`rubricSha`, `baselineSource`; fixed-length hex is `clip`ped).
+`rubricSha`, `baselineSource`; fixed-length hex is `clip`ped). Built: scalar carriers `rubricSha`,
+`outputSha`, `checkpoint`, `checkId`, `by`, `askId`, `at` are `clip` rows; `gaps`, `fault`,
+`baselineSource`, `callerItems` are `wholesale` rows; `rubricSha`, `checkpoint`, `outputSha`, `checkId`,
+`verdict`, `baseline` are also in `MUST_KEEP_KEYS` because the cold-start reader needs them. Audit
+phases: `rubric` (one per mint: verdict, bounded gaps with `gapsTotal`, `fault` for stopped, `reds`),
+`rubric_baseline`, `rubric_accept` (`source: "live" | "later"`) and `rubric_accept_refused`.
 
 **Interactions.** Independent of `rwx` / `tools.allowlist` mode (`advanceOn` keys on
 `action.type`). A check spends no budget; a judge call's cost is the caller's to report through the
@@ -557,12 +597,13 @@ audit write failure still propagates.
 |---|---|
 | exports | `createRubric(spec)`, `rubricSha(spec)`, `checkStep(rubric, checkpointId, output, opts)`, `quoteIn(quote, source)`, `numbersInQuote(claim, quote)`, `renderGaps(gaps)`, `rubricVocabulary` |
 | `rubricVocabulary` | frozen, machine-readable; lists every rule with its field names, types, required/optional, bounds (count fields integers >= 1, no max; string lists non-empty arrays of non-empty strings; no whitespace-only strings) and defaults (including `strict`); a drafting LLM reads it; every check description shown to anyone is GENERATED from it, never hand-written |
-| gate methods | `drainGaps()` |
-| config keys | `rubric: { spec, sha256 }`, `rubric.advanceOn`, `onExhausted`, `maxReds`; spec keys `reads`, `requiresHuman`, per-check `id`, `text`, `strict`, `phrases`, `noneExit`, `expectExit`, `direction`, `baseline`, `patterns`, `allowPrefixes`, `requireNonEmpty`, `size`, `items`, `itemsFrom` |
+| gate methods | `checkStep(checkpoint, output, opts)`, `drainGaps()`, `recordAccept({...})` (harness-only) |
+| config keys | `rubric: { spec, sha256, advanceOn }`; signed spec keys `onExhausted`, `maxReds`, `reads`, `requiresHuman`, per-checkpoint `accept`, per-check `id`, `text`, `strict`, `phrases`, `noneExit`, `expectExit`, `direction`, `baseline`, `patterns`, `allowPrefixes`, `requireNonEmpty`, `size`, `items`, `itemsFrom` |
 | rule strings | every rule in §4; deny rules `rubric.invalid`, `rubric.red`, `rubric.stopped`, `rubric.unminted`, `rubric.output-mismatch`, `rubric.exhausted`, `rubric.needs-accept` |
-| audit | a `rubric` phase carrying `rubricSha`, `checkpoint`, `verdict`, `outputSha`, bounded `gaps` / `fault`, recorded `baselineSource`, ACCEPT records |
+| audit | phases `rubric` (`rubricSha`, `checkpoint`, `verdict`, `outputSha`, bounded `gaps` / `fault`), `rubric_baseline` (`baselineSource`), `rubric_accept`, `rubric_accept_refused` |
+| event | the `humanChannel` event gains `rubric: { rubricSha, checkpoint, outputSha, verdict, gaps }` on a `rubric.needs-accept` ask |
 | types | `Rubric`, `Check`, `Gap`, `Fault`, `LocateJudge`, `VerdictJudge` (JSDoc typedefs) |
-| primitives.json | entries for the seven exports + `drainGaps` |
+| primitives.json | entries for the seven exports + `Gate#checkStep`, `Gate#drainGaps`, `Gate#recordAccept` |
 
 Name: **rubric**.
 
@@ -631,6 +672,12 @@ Name: **rubric**.
   accepted; no verb or a score = red.
 - An adapter whose model != the signed identity's model = red (`clean`); cutoff/band come from the
   signed identity.
+- Module 2 (built): `gate.checkStep` ignores any caller-supplied verdict and there is no `gate.mint`;
+  `accept: "live"|"later"` is validated, signed and refused off a non-`requiresHuman` checkpoint;
+  `recordAccept` is refused on a live checkpoint, a non-`requiresHuman` one, a non-green verdict, a wrong
+  sha, a blank `by`; verdicts, red counts, ACCEPTs and seed baselines survive a cold start with the same
+  `runId`, and a different `runId` or a re-sign starts fresh; concurrent mint + advance keep audit order
+  = decision order.
 - Distinct names: every deny rule string is unique.
 - Byte-identical decision path when `rubric` is unset.
 
@@ -641,6 +688,7 @@ Name: **rubric**.
 | **Day 1** | `quoteIn`, `numbersInQuote` · `rubricVocabulary` · `createRubric` / `rubricSha` · `checkStep` with all deterministic checks (shape rules incl. `blockLines` and `strict`, value rules, `complete`, `cited`, and the four borrowed shapes `commandExit` / `notWorse` / `patternAbsent` / `filesChanged`) · the four verdicts minus soft-green (green / red / stopped) · liveness proof · gating checkpoint + `outputSha` + `requiresHuman` · `drainGaps` · `renderGaps` · audit-backed state · `onExhausted: "fail"` |
 | Next | `locate` judge in `checkStep` (deadline, one retry on malformed only, clipped quote, foundational judge-quote checks) · `verdict` judge (jev, via a caller-passed adapter; quote optional) · soft-green + ACCEPT fail-closed · `reads` / `agree` |
 | Later | bareguard's own judge calibration (in the hash) · `onExhausted: "ask"` |
+| To try | **Needle** (https://github.com/cactus-compute/needle, `llms.txt`): a 29-121M-parameter on-device tool-calling/extraction model with grammar-constrained JSON (would cure the malformed-reply class) and a 0-1 confidence score (can never decide, Law 8). A candidate CALLER-side cheap `locate` judge; bareguard would verify its quotes. Its own docs say the base model fails 5 of 6 test suites, so it needs calibration first. Not built; try when a rubric job needs a cheap judge. |
 
 ## 12. Decisions
 
@@ -709,3 +757,11 @@ All RULED by hamr. Superseded entries are kept for the record.
 14. RULED (hamr, 2026-10-08): empty or whitespace-only output is red `happened:empty` before `blockLines` (or any check) runs; the foundational check short-circuits.
 15. RULED (hamr, 2026-10-08): a `sections`/`sectionOrder` name whose trimmed form ends in `:` is refused at `createRubric`, the error naming it.
 16. RULED (hamr, 2026-10-08): a signed name is NEVER clipped in a gap (fwd's longest real name, 159 characters, reached the worker truncated and unreproducible). Signed strings over 1000 characters are refused at `createRubric`; only caller-measured or output-derived values are clipped (120).
+
+**2026-10-08** (Module 2 build; fwd consulted)
+17. RULED (hamr, 2026-10-08): the gate mints. New public `gate.checkStep(checkpoint, output, opts)` (async): the GATE runs the checks with its own signed rubric, injects the recorded `priorBaselines` itself, mints the verdict, writes the audit `rubric` line, updates the red counts and buffers the worker gaps for `drainGaps`. Nothing the caller says about a verdict is trusted and there is NO `gate.mint`. It returns the StepResult. The pure exported `checkStep` stays for gate-less agents. (Day 1 imports `rubric.js` statically: the constructor verifies the signature synchronously, and an ES module cannot be lazy-loaded synchronously.) Law 9 unchanged.
+18. RULED (hamr, 2026-10-08): `runId` is `config.runId`. The harness passes a stable id on resume (fwd passes `"<flow>/<run>"`); the cold-start rebuild matches audit lines by `run_id` + `rubricSha`. A missing stable `runId` means a resume starts with fresh counts, stated plainly in the docs; no magic.
+19. RULED (hamr, 2026-10-08): the `requiresHuman` ask is LIVE by default: rule `rubric.needs-accept`, event key `rubric: { rubricSha, checkpoint, outputSha, verdict, gaps (worker view) }`, asked ONCE per `outputSha`; `{decision:"allow"}` records the ACCEPT bound to that sha; anything else or a timeout denies; a different `outputSha` asks again.
+20. RULED (hamr, 2026-10-08): "answer later" is a SIGNED per-checkpoint `accept: "live" | "later"` (default `"live"`, nothing inferred). Only for `"later"`, the harness-only `gate.recordAccept({ checkpoint, outputSha, by, at, askId })` records the ACCEPT; refused (throws + audit line) unless the checkpoint is `requiresHuman` AND `accept: "later"` AND a minted GREEN verdict exists for that exact `outputSha` in this `rubricSha`/`runId`. On a `"later"` checkpoint an advance without an ACCEPT is denied `rubric.needs-accept` with no live ask. Audited, survives cold start.
+21. RULED (hamr, 2026-10-08): `advanceOn` is nested in the `rubric` config; `maxReds`/`onExhausted` come ONLY from the signed spec (one source, no top-level gate keys); the red count resets on a re-sign (new `rubricSha`) or an ACCEPT at that `requiresHuman` checkpoint, and on nothing else.
+22. RULED (hamr, 2026-10-08): add Needle to the Later table as a "to try" row (a candidate caller-side cheap `locate` judge; needs calibration first).
