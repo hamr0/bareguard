@@ -142,3 +142,26 @@ test("wholeLines: hostile opts never throw and give the default-mode result", ()
     assert.deepEqual(quoteIn("zzz", DOC, o), { ok: false, why: "not-found" });
   }
 });
+
+test("wholeLines: a lone '#' line is decoration-only, skippable like a lone '*'", () => {
+  assert.deepEqual(quoteIn("A\nB", "A\n#\nB", W), { ok: true });
+  assert.deepEqual(quoteIn("A\nB", "A\n#   \nB", W), { ok: true });
+  assert.deepEqual(quoteIn("#", "x\n#\ny", W), { ok: true }, "all-decoration fallback");
+});
+
+test("wholeLines: '#include' stays whole; '##' is not stripped", () => {
+  assert.deepEqual(quoteIn("#include <x>", "#include <x>\nint a;", W), { ok: true });
+  assert.deepEqual(quoteIn("include <x>", "#include <x>\nint a;", W), { ok: false, why: "not-found" });
+  assert.deepEqual(quoteIn("## x", "## x", W), { ok: true });
+  assert.deepEqual(quoteIn("x", "## x", W), { ok: false, why: "not-found" });
+  assert.deepEqual(quoteIn("# x", "## x", W), { ok: false, why: "not-found" });
+});
+
+test("wholeLines: current behaviour, '/** /**' vs a lone '/**' line is not-found", () => {
+  assert.deepEqual(quoteIn("/** /**", "/**\nfoo", W), { ok: false, why: "not-found" });
+});
+
+test("wholeLines: a mixed quote's decoration-only lines are skipped (not required)", () => {
+  assert.deepEqual(quoteIn("/**\nfoo\n*/", "foo", W), { ok: true });
+  assert.deepEqual(quoteIn("compute total\nthen return it", "def f():\n    # compute total\n    #\n    # then return it\n", W), { ok: true });
+});

@@ -1157,7 +1157,7 @@ function wholeLineKey(line) {
   else if (t.startsWith("*/")) rest = t.slice(2);
   else if (t.startsWith("//")) rest = t.slice(2);
   else if (t === "*" || t.startsWith("* ") || t.startsWith("*\t")) rest = t.slice(1);
-  else if (t.startsWith("# ") || t.startsWith("#\t")) rest = t.slice(1); // "#include", "#!" stay whole
+  else if (t === "#" || t.startsWith("# ") || t.startsWith("#\t")) rest = t.slice(1); // "#include", "#!" stay whole
   const n = normalizeForQuote(rest);
   if (n !== "") return { key: n, deco: false };
   // only-decoration line is itself (and skippable for adjacency); only-markers is empty
@@ -1212,7 +1212,9 @@ function hasRun(pat, text) {
  * quote matches any source holding that line and proves nothing about WHERE it sits; a caller
  * that needs location must check it itself. Any `opts` other than an object with
  * `wholeLines === true` (absent, non-object, non-boolean `wholeLines`, or a throwing getter or
- * Proxy) means the default mode; it never throws.
+ * Proxy) means the default mode; it never throws. In a MIXED quote, decoration-only lines are
+ * skipped too, so a quote's `/**` or `*` + `/` lines need not appear in the source (`/**`, `foo`,
+ * `*` + `/` matches a source `foo`); only the substantive lines are proven.
  * @param {string} quote
  * @param {string} source
  * @param {{wholeLines?: boolean}} [opts]
