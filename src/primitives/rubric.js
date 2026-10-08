@@ -615,10 +615,14 @@ function runCited(ctx, c) {
   // `includes` over the source, whatever the quote's length (measured flat in quote length).
   // Over the cap = the existing `too-many` gap (measured = distinct quotes, limit = how many
   // this source size allows). Pure function of the inputs, so the verdict is deterministic.
+  const normMemo = new Map(); // RAW quote -> normalized (each distinct raw quote is normalized once, not per claim)
   const normQuotes = cl.claims.map((cc) => {
     const claim = ownString(cc, "claim");
     const quote = ownString(cc, "quote");
-    return claim === undefined || quote === undefined ? undefined : normalizeForQuote(quote);
+    if (claim === undefined || quote === undefined) return undefined;
+    let n = normMemo.get(quote);
+    if (n === undefined) normMemo.set(quote, (n = normalizeForQuote(quote)));
+    return n;
   });
   if (!tooBig) {
     const distinct = new Set();

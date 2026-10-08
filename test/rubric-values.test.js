@@ -259,6 +259,22 @@ test("cited dedupe: N claims sharing ONE big number-heavy quote scan that quote'
   assert.equal(bigScans, 1, "the shared raw quote's numbers are scanned once, not once per claim");
 });
 
+test("cited dedupe: N claims sharing ONE big raw quote normalize that quote once (counted, not timed)", async () => {
+  const bigQuote = Array.from({ length: 100000 }, (_, i) => `n${i}`).join(" ");
+  const src = `intro ${bigQuote} outro`;
+  const claims = Array.from({ length: 2000 }, () => ({ claim: "uses n5 and n77", quote: bigQuote }));
+  const orig = String.prototype.replace;
+  let bigNorms = 0;
+  String.prototype.replace = function (re, ...rest) {
+    if (this.length > 100000 && re instanceof RegExp && re.source === "\\s+") bigNorms++;
+    return orig.call(this, re, ...rest);
+  };
+  let r;
+  try { r = await citedOver(src, claims); } finally { String.prototype.replace = orig; }
+  assert.equal(r.verdict, "green");
+  assert.equal(bigNorms, 2, "one normalization of the source + one of the shared quote, not one per claim");
+});
+
 test("cited dedupe: differently-worded claims sharing one quote each keep their own #i:numbers: entry", async () => {
   const src = "pays 2 weeks and 8 days, plus 3.5 percent";
   const quote = "pays 2 weeks and 8 days";
