@@ -237,13 +237,18 @@ keys.
 - **Word**: per line, strip a leading `/^#+\s*/`, split on `/\s+/`, count the non-empty tokens; the
   total over all lines.
 - **Heading line**: the line with a leading `/^#+\s*/` stripped, a trailing `/:\s*$/` stripped,
-  trimmed, then ONE leading ordered-list marker stripped (ASCII digits, then `.` or `)`, then at
-  least one space/tab, then a non-empty rest: `## 1. Work History` is `work history`, `## 2) Skills`
-  is `skills`), and lowercased; it must be non-empty. Not a marker, so left as is: `2024 results`,
-  `1.5 Skills`, `1.Work`, a bare `1.`, `a) Skills`, bold `**1.** X`, non-ASCII digits; only one is
-  stripped (`1. 2. X` is `2. x`). A section name matches a heading line equal to the name trimmed,
-  marker-stripped the same way, and lowercased (so a signed `1. Intro` still matches `## 1. Intro`),
-  so a bare line counts. A `sections`/`sectionOrder` name whose trimmed
+  trimmed, and lowercased; it must be non-empty. A line whose FIRST character is `#` (a `#`-run,
+  no leading whitespace) carries a SECOND key as well: the same text with ONE leading ordered-list
+  marker stripped (ASCII digits, then `.` or `)`, then at least one space/tab, then a non-empty rest:
+  `## 1. Work History` has keys `1. work history` and `work history`; `## 2) Skills` has `2) skills`
+  and `skills`). A bare line (no leading `#`) has only the plain key: a bare numbered line is never
+  marker-stripped, so `2. Summary` does not satisfy `Summary`. Not a marker, so no second key:
+  `2024 results`, `1.5 Skills`, `1.Work`, a bare `1.`, `a) Skills`, bold `**1.** X`, non-ASCII
+  digits; only one marker is stripped (`## 1. 2. X` has `1. 2. x` and `2. x`). A section name is
+  the name trimmed and lowercased (signed names are NOT marker-stripped); it matches a heading line
+  if EITHER key equals it (so `## 1. Intro` matches `Intro` and a signed `1. Intro`; a bare
+  `1. Intro` matches a signed `1. Intro`; `## Intro` does not match a signed `1. Intro`). A line
+  is one heading position, however many keys it has, so it starts at most one section. A `sections`/`sectionOrder` name whose trimmed
   form ends in `:` is REFUSED at `createRubric` (the `:` is stripped from the line, not the name, so
   it could never match; the error names it) (RULED 2026-10-08 #15).
 - **`sections`**: each name must match a heading line anywhere; absent = red "missing".
@@ -819,4 +824,4 @@ All RULED by hamr. Superseded entries are kept for the record.
 26. RULED (hamr, 2026-10-08): `allowedKeys` (`keys`) is ported from fwdloop's softgreen extra-key check with a GENERAL wording (no "softgreen"): an object output with an own key outside the signed list is red, `{kind:"extra-keys", keys, allowed}`; the caller strips `done`/`blocker` first (no `ignoreKeys`); `renderGaps` text `artifact has key(s) "<k>", ... besides "<allowed>"; the check reads "<allowed>" only, so put the whole answer in "<allowed>"`.
 27. RULED (hamr, 2026-10-08): `quoteIn(quote, source, opts?)` gains an opt-in `{ wholeLines: true }`, asked by bareloop (F192). Default unchanged (byte-for-byte); any `opts` other than an object with `wholeLines === true` is the default mode. Whole-line mode: both sides split into lines (CRLF ok), each normalized per line after stripping ONE leading comment decoration (`/**`, `*/`, `//`, `* ` or a lone `*`, and `#` only when a space or tab follows, or alone on its line, so `#include` stays whole); a decoration-only line keys as itself; every non-empty quote line must EQUAL a whole source line (not a substring). Tighten-only; the `cited` rule is not changed.
 28. RULED (hamr, 2026-10-08): `quoteIn` wholeLines: the quote's lines must be a contiguous run of source lines, in order, with empty and decoration-only lines skippable on both sides (bareloop); a decoration-only quote falls back to per-line equality and is documented as proving nothing about location; in a MIXED quote decoration-only lines are skipped too, so a quote's `/**` or `*/` lines are not required to appear (`/**\nfoo\n*/` matches a source `foo`) and only the substantive lines are proven; a lone `#` line is decoration-only like a lone `*`; never-throws on a hostile `opts` (a throwing getter or Proxy means default mode).
-29. RULED (hamr): forgiving headings strip ONE leading ordered-list marker (`1. `, `2) `) after the `#` run, asked by fwd from a live run (numbered headings like `## 1. Work History` never matched `Work history`); the signed name is normalized the same way, strict is unchanged (its exact-text half still sees the marker).
+29. RULED (hamr): forgiving headings strip ONE leading ordered-list marker (`1. `, `2) `) after the `#` run, asked by fwd from a live run (numbered headings like `## 1. Work History` never matched `Work history`); the strip applies only to `#`-run lines, as a second key beside the plain one (a name matches either); signed names and bare lines are NOT stripped (a first cut that stripped every line and the signed side let a bare `2. Summary` satisfy `Summary` and split `sectionWords` sections), strict is unchanged (its exact-text half still sees the marker).

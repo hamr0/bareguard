@@ -287,8 +287,9 @@ test("list marker: '1.' / '1. ' stay as before (a heading '1.', not empty)", asy
 test("list marker: a signed name with a marker still matches its own numbered heading", async () => {
   assert.ok(await green(["1. Intro"], "## 1. Intro\nx"));
   assert.ok(await green(["1. Intro"], "## 1. Intro\nx", true));
-  assert.ok(await green(["1. Intro"], "## Intro\nx"));
+  assert.ok(!(await green(["1. Intro"], "## Intro\nx"))); // signed names are NOT stripped (as on main)
   assert.ok(!(await green(["1. Intro"], "## Intro\nx", true)));
+  assert.ok(await green(["1. Intro"], "1. Intro\nx")); // bare line matches as on main
   const r = await run([{ id: "o", rule: "sectionOrder", field: "text", names: ["1. A", "2. B"] }], { text: "## 1. A\n## 2. B\n" });
   assert.equal(r.verdict, "green");
 });
@@ -300,4 +301,31 @@ test("list marker: sectionWords splits on numbered headings and counts body word
   const r = await sw(bad);
   assert.equal(r.verdict, "red");
   assert.deepEqual(r.gaps.map((g) => [g.section, g.words]), [["soft skills", 143]]);
+});
+
+test("list marker: only a '#' line is stripped; a bare numbered line is not", async () => {
+  // failure 1: a plain numbered list item must not satisfy a required section
+  assert.ok(!(await green(["Summary"], "intro\n1. Summary of facts\n2. Summary\n")));
+  assert.ok(!(await green(["Summary"], "2. Summary\nx")));
+  assert.ok(await green(["Summary"], "Summary\nx")); // bare unnumbered still a heading
+  assert.ok(await green(["Summary"], "## 1. Summary\nx"));
+  assert.ok(await green(["Summary"], "## Summary\nx"));
+  assert.ok(await green(["1. Summary"], "## 1. Summary\nx", true)); // strict unchanged
+  assert.ok(!(await green(["Work history"], "## 1. Work History\nx", true)));
+});
+
+test("list marker: sectionWords - a bare numbered line neither starts nor splits a section", async () => {
+  // failure 2: the bare "1. Skills" line (2 words) stays INSIDE Summary: 38 + 2 + 80 = 120, in band (80..120)
+  const t = `## Summary\n${words(38)}\n1. Skills\n${words(80)}\n## Skills\n${words(100)}`;
+  const r = await sw(t, 100, ["Summary", "Skills"]);
+  assert.equal(r.verdict, "green");
+});
+
+test("list marker: a '## 1. X' line starts ONE section even when both signed forms are listed", async () => {
+  const t = `## 1. Intro\n${words(100)}\n## Intro\n${words(100)}`;
+  // names ["1. Intro","Intro"]: the first line matches both keys but starts only the first name
+  const r = await sw(t, 100, ["1. Intro", "Intro"]);
+  assert.equal(r.verdict, "green");
+  const o = await run([{ id: "o", rule: "sectionOrder", field: "text", names: ["1. Intro", "Intro"] }], { text: "## 1. Intro\nx" });
+  assert.equal(o.verdict, "red"); // one line cannot satisfy two ordered names
 });
