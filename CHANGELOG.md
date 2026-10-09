@@ -3,6 +3,15 @@
 All notable changes to bareguard are documented here. Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [SemVer](https://semver.org/).
 
 
+## [0.21.1] - 2026-10-09
+
+### Docs
+
+- `bareguard.context.md`: `gate.drainGaps()` returns the gaps of every checkpoint that went red since the last drain (it clears on read). A failing check yields one gap, except `sectionWords`, which yields up to 20 (`itemsTotal` has the true count); each gap's own `items`/`keys` list is capped at 20. The audit line is bounded on its own (8 gaps plus `gapsTotal`). Clip or bound the drained list before putting it in a retry prompt.
+- `bareguard.context.md`: the `cited` work cap counts distinct NORMALIZED quotes, so many large raw quotes that normalize to the same text are not capped by it. bareguard sets no output cap (the 5 MiB `cited` source cap is a sensible ceiling), so cap the model's output size before calling `checkStep`. Only `gate.checkStep` runs inside the gate's ordering lock; the pure `checkStep` does not.
+- `quoteIn` JSDoc (and so the generated types): the `#` decoration wording now reads "a lone `#` line or before a space or tab", matching 0.21.0 behaviour.
+- No code or behaviour change.
+
 ## [0.21.0] - 2026-10-08
 
 ### Added
