@@ -288,11 +288,34 @@ function countNonEmptyLines(text) {
   return n;
 }
 
-/** Forgiving heading line (PRD §4.1): '#'-run, trailing ':' stripped, trimmed, lowercased. "" = not a heading. */
+/**
+ * Strip ONE leading ordered-list marker from an already-trimmed string: ASCII digits, then '.' or ')',
+ * then at least one space/tab, then a non-empty rest ("1. Work" -> "Work", "2) Skills" -> "Skills").
+ * Anything else comes back unchanged: "2024 results", "1.5 Skills", "1.Work", "1." , "a) X", "**1.** X".
+ * Linear charCodeAt scan (no regex).
+ */
+function stripListMarker(s) {
+  let i = 0;
+  while (i < s.length && s.charCodeAt(i) >= 48 && s.charCodeAt(i) <= 57) i++;
+  if (i === 0 || i >= s.length) return s;
+  const d = s.charCodeAt(i);
+  if (d !== 46 && d !== 41) return s; // '.' or ')'
+  i++;
+  const ws = i;
+  while (i < s.length && (s.charCodeAt(i) === 32 || s.charCodeAt(i) === 9)) i++;
+  if (i === ws || i >= s.length) return s; // no whitespace after the marker, or nothing after it
+  return s.slice(i);
+}
+
+/**
+ * Forgiving heading line (PRD §4.1): '#'-run, trailing ':' stripped, trimmed, ONE leading ordered-list
+ * marker ("1. ", "2) ") stripped, lowercased. "" = not a heading. The signed side (`nameKey`) is
+ * normalized the same way, so a signed "1. Intro" still matches "## 1. Intro".
+ */
 function forgivingHeading(line) {
   let s = stripLeadingHashes(line).trimEnd();
   if (s.endsWith(":")) s = s.slice(0, -1);
-  return s.trim().toLowerCase();
+  return stripListMarker(s.trim()).toLowerCase();
 }
 
 /**
@@ -330,7 +353,7 @@ function headingsOf(text, strict) {
 }
 
 function nameKey(name, strict) {
-  const f = name.trim().toLowerCase();
+  const f = stripListMarker(name.trim()).toLowerCase(); // same marker rule as forgivingHeading (also the strict pair's forgiving half)
   return strict ? JSON.stringify([f, name]) : f;
 }
 
