@@ -274,8 +274,8 @@ test("list marker: non-markers are left alone", async () => {
 });
 
 test("list marker: only ONE marker is stripped", async () => {
-  assert.ok(await green(["1. 2. X"], "## 1. 2. X\nbody text"));
-  assert.ok(!(await green(["X"], "## 1. 2. X\nbody text")));
+  assert.ok(await green(["Skills"], "## 1. Skills\nbody text")); // one marker: stripped
+  assert.ok(!(await green(["Skills"], "## 1. 2. Skills\nbody text")));
 });
 
 test("list marker: '1.' / '1. ' stay as before (a heading '1.', not empty)", async () => {
