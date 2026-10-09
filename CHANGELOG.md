@@ -3,6 +3,14 @@
 All notable changes to bareguard are documented here. Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [SemVer](https://semver.org/).
 
 
+## [0.21.2] - 2026-10-09
+
+### Changed
+
+- **Forgiving headings match `#` lines that carry a leading list marker (behavior change).** In forgiving mode a heading line that starts with `#` now also matches with ONE leading ordered-list marker stripped: ASCII digits, then `.` or `)`, then a space or tab, then a non-empty rest. `## 1. Work History` matches the section `Work history`. A `#` line is matched by its plain key OR its marker-stripped key, so a signed name that itself includes the marker (`1. Work history`) still matches its own numbered heading. It applies to `sections`, `sectionOrder` and `sectionWords`; in `sectionWords` a numbered `#` heading starts and splits a section like any other. Asked by fwdloop from a live run.
+- **What does not change.** Signed names are never stripped. A bare (non-`#`) line is never marker-stripped, exactly as before: bare `2. Summary` does not satisfy `Summary`, and bare `1. Skills` does not split a `sectionWords` span for `Skills` (a bare `1. Intro` still matches a signed `1. Intro`). Strict mode is unchanged. Not stripped: `## 2024 results`, `## 1.5 Skills`, `## 1.Work`, `## a) Skills`, bold (`## **Skills**`), non-ASCII digits, and a second marker (only one is removed).
+- **Consequence for existing specs.** A forgiving spec can change verdict on an output with numbered `#` headings: a section that was previously not found is now found, and is then measured (for example by `sectionWords`) instead of reported missing.
+
 ## [0.21.1] - 2026-10-09
 
 ### Docs

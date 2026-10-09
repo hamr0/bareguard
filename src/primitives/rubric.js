@@ -288,11 +288,46 @@ function countNonEmptyLines(text) {
   return n;
 }
 
+/**
+ * Strip ONE leading ordered-list marker from an already-trimmed string: ASCII digits, then '.' or ')',
+ * then at least one space/tab, then a non-empty rest ("1. Work" -> "Work", "2) Skills" -> "Skills").
+ * Anything else comes back unchanged: "2024 results", "1.5 Skills", "1.Work", "1." , "a) X", "**1.** X".
+ * Linear charCodeAt scan (no regex).
+ */
+function stripListMarker(s) {
+  let i = 0;
+  while (i < s.length && s.charCodeAt(i) >= 48 && s.charCodeAt(i) <= 57) i++;
+  if (i === 0 || i >= s.length) return s;
+  const d = s.charCodeAt(i);
+  if (d !== 46 && d !== 41) return s; // '.' or ')'
+  i++;
+  const ws = i;
+  while (i < s.length && (s.charCodeAt(i) === 32 || s.charCodeAt(i) === 9)) i++;
+  if (i === ws || i >= s.length) return s; // no whitespace after the marker, or nothing after it
+  return s.slice(i);
+}
+
 /** Forgiving heading line (PRD §4.1): '#'-run, trailing ':' stripped, trimmed, lowercased. "" = not a heading. */
 function forgivingHeading(line) {
   let s = stripLeadingHashes(line).trimEnd();
   if (s.endsWith(":")) s = s.slice(0, -1);
   return s.trim().toLowerCase();
+}
+
+/**
+ * The forgiving comparable keys of ONE line (empty = not a heading). Always the plain key (`forgivingHeading`).
+ * A line whose first char is '#' (the same '#'-run `stripLeadingHashes` recognizes) ALSO carries the key with
+ * ONE leading ordered-list marker stripped, when that differs: "## 1. Work History" -> ["1. work history",
+ * "work history"]. A bare line carries only the plain key. A name matches the line if EITHER key equals it.
+ */
+function forgivingKeys(line) {
+  const h = forgivingHeading(line);
+  if (h === "") return [];
+  if (line.charCodeAt(0) === 35) {
+    const m = stripListMarker(h);
+    if (m !== h && m !== "") return [h, m];
+  }
+  return [h];
 }
 
 /**
@@ -316,14 +351,14 @@ function strictHeading(line) {
  * forgiving (a name ending in ':' therefore matches in neither mode).
  */
 function headingsOf(text, strict) {
-  const out = [];
+  const out = []; // one entry per heading line: its list of keys
   for (const line of splitLines(text)) {
     if (strict) {
       const sh = strictHeading(line);
-      if (sh !== null) out.push(JSON.stringify([forgivingHeading(line), sh]));
+      if (sh !== null) out.push([JSON.stringify([forgivingHeading(line), sh])]);
     } else {
-      const h = forgivingHeading(line);
-      if (h !== "") out.push(h);
+      const ks = forgivingKeys(line);
+      if (ks.length > 0) out.push(ks);
     }
   }
   return out;
@@ -347,7 +382,7 @@ function runSections(ctx, c) {
   const strict = c.strict === true;
   const heads = headingsOf(t.text, strict);
   if (strict && heads.length === 0) return red("no-headings");
-  const set = new Set(heads);
+  const set = new Set(heads.flat());
   const missing = c.names.filter((n) => !set.has(nameKey(n, strict)));
   if (missing.length === 0) return OK;
   return red("missing", { measured: missing.length, limit: c.names.length, ...boundItems(missing, true) });
@@ -361,10 +396,12 @@ function runSectionOrder(ctx, c) {
   if (strict && heads.length === 0) return red("no-headings");
   /** @type {Map<string, number[]>} */
   const positions = new Map();
-  heads.forEach((h, i) => {
-    const l = positions.get(h);
-    if (l) l.push(i);
-    else positions.set(h, [i]);
+  heads.forEach((keys, i) => {
+    for (const h of keys) {
+      const l = positions.get(h);
+      if (l) l.push(i); // keys of one line are distinct, so a line is in a given list at most once
+      else positions.set(h, [i]);
+    }
   });
   const offenders = [];
   const kinds = new Set();
@@ -411,11 +448,11 @@ function runSectionWords(ctx, c) {
   /** @type {Map<string, number[]>} heading text -> line indexes */
   const positions = new Map();
   lines.forEach((line, k) => {
-    const h = forgivingHeading(line);
-    if (h === "") return;
-    const l = positions.get(h);
-    if (l) l.push(k);
-    else positions.set(h, [k]);
+    for (const h of forgivingKeys(line)) {
+      const l = positions.get(h);
+      if (l) l.push(k); // keys of one line are distinct: one entry per line per list
+      else positions.set(h, [k]);
+    }
   });
   const starts = [];
   let from = 0; // a line index; the search moves past a FOUND heading only
