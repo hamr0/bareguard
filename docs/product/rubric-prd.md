@@ -669,6 +669,12 @@ Name: **rubric**.
   order". Strict: setext not a heading, bare line not a heading, case differs = red, no ATX heading
   = red "no headings found". Strict never looser: a generated corpus where forgiving red
   implies strict red for every strict-capable rule (falsified by reverting the source).
+- Headings forgiving, list marker (RULED 2026-10-09 #29): `## 1. Work History` matches `Work history`
+  (also `2) `, `10. `, a tab); not markers: `2024 results`, `1.5 Skills`, `1.Work`, `a) X`, `**1.** X`,
+  non-ASCII digits; only ONE marker is stripped; a signed `1. Intro` matches `## 1. Intro` but not
+  `## Intro`; a bare `2. Summary` does NOT satisfy `Summary` and does not split a `sectionWords`
+  span; strict is unchanged; one `## 1. Intro` line starts one section even if `1. Intro` and
+  `Intro` are both listed. Tests: `test/rubric-fwd-ports.test.js`.
 - `mustCarry`: case differs green by default, red under `strict`; every listed phrase is needed.
 - `cited` with zero claims on a non-empty output = red `no-claims`; `commandExit` with `noneExit`
   refused at `createRubric`.
