@@ -677,7 +677,7 @@ claim = one quote per read = one list of decides, all of which must pass on that
 **Today (verified in `src/primitives/rubric.js` and `src/primitives/rubric-locate.js`).** The pure decide core is BUILT in
 `rubric-locate.js` (`parseBound`, `extractValue`, `evalDecide`, `decideQuote`) and is imported by `cited`
 in `rubric.js` (§4.6, built df699b9, unreleased) and by its own test (`test/rubric-locate-decide.test.js`); it is
-not exported from `src/index.js`, and no `judged` rule uses it (PARKED; the per-read outcome comparator of §5.2 (#38) is not built, it belongs to the parked judge). `createRubric` refuses a `judged` rule as an
+not exported from `src/index.js`. Its default test keeps only a 16 KiB -> 64 KiB linearity guard; the pathological 5 MiB cases run in the opt-in `npm run bench:rubric` (`bench/rubric-locate.bench.mjs`, not in CI or `npm test`). No `judged` rule uses it (PARKED; the per-read outcome comparator of §5.2 (#38) is not built, it belongs to the parked judge). `createRubric` refuses a `judged` rule as an
 unknown rule, and `checkStep` throws a `TypeError` when given a `judge` option. The spec keys
 `judge` (identity: `provider`, `model`, `cutoff?`, `band?`) and `reads` (integer >= 1) are already
 validated and already in `rubricSha`. `quoteIn` normalizes both sides with `normalizeForQuote` (strip
@@ -1287,7 +1287,7 @@ audit write failure still propagates.
 | rule strings | every rule in §4; deny rules `rubric.invalid`, `rubric.red`, `rubric.stopped`, `rubric.unminted`, `rubric.output-mismatch`, `rubric.exhausted`, `rubric.needs-accept` |
 | audit | phases `rubric` (`rubricSha`, `checkpoint`, `verdict`, `outputSha`, bounded `gaps` / `fault`), `rubric_baseline` (`baselineSource`), `rubric_accept`, `rubric_accept_refused` |
 | event | the `humanChannel` event gains `rubric: { rubricSha, checkpoint, outputSha, verdict, gaps }` on a `rubric.needs-accept` ask |
-| types | `Rubric`, `Check`, `Gap`, `Fault`, `LocateJudge`, `VerdictJudge` (JSDoc typedefs) |
+| types | `Rubric`, `Check`, `Decide`, `Claim`, `Gap`, `Fault`, `StepResult` (JSDoc typedefs; `LocateJudge` and `VerdictJudge` are NOT built, they ride with the PARKED judges) |
 | primitives.json | entries for the seven exports + `Gate#checkStep`, `Gate#drainGaps`, `Gate#recordAccept` |
 
 Name: **rubric**.
