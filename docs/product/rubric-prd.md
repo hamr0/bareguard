@@ -8,7 +8,7 @@ status: draft
 
 Evidence, rationale and history: docs/logs/rubric-learnings.md.
 
-*Specs only. Nothing is built. No versions picked. Last updated 2026-10-08. Every decision is
+*Specs only. Nothing is built. No versions picked. Last updated 2026-10-12 (the `locate` judge and value decide, §5.2, rulings #30-#33). Every decision is
 RULED by hamr and listed in §12.*
 
 ## 0. In one paragraph
@@ -231,7 +231,7 @@ keys.
 | `max` / `min` | `field`, `value` | finite number <= / >= |
 | `cited` | `claims` field, `source` input name | every claim's quote passes `quoteIn` against the frozen input AND `numbersInQuote` |
 | `complete` | `items:[...]` or `itemsFrom:"caller"`, `claims` field | every item is covered by a claim (§4.4) |
-| `judged` | `kind:"locate"\|"verdict"`, `ask` | see §5 |
+| `judged` | `kind:"locate"\|"verdict"`, `ask`; for `locate`: `sources`, `valueKind`, `compare`, `bound` or `lo`+`hi`, `currency?`, `anchor?` | see §5 and §5.2 (`locate` is the next build, RULED 2026-10-12; `verdict` follows it, §5.1) |
 
 **Forgiving defaults:**
 - **Word**: per line, strip a leading `/^#+\s*/`, split on `/\s+/`, count the non-empty tokens; the
@@ -447,7 +447,7 @@ verb, is malformed = red. A quote a verdict judge does return is checked with `q
 forces a re-sign. It should grade each case `reads` times and require all N correct. An
 uncalibrated judge's soft-green is acceptable only because the final ACCEPT exists (§6).
 
-### 5.1 Using bareagent's jev as a verdict judge (Next)
+### 5.1 Using bareagent's jev as a verdict judge (Next, right after the `locate` build in §5.2)
 
 - **Structural only.** bareguard never names or calls jev; the caller passes a judge function.
   bareguard does not import bareagent and bareagent does not require bareguard.
@@ -466,6 +466,322 @@ uncalibrated judge's soft-green is acceptable only because the final ACCEPT exis
 - **Cost** flows through bareagent's `onLlmResult` / budget path.
 - **Who builds what:** bareguard = the verdict-judge slot in `checkStep`; bareagent = the adapter.
 
+### 5.2 The `locate` judge and the value decide (RULED 2026-10-12, #30-#33; spec, not built)
+
+The first judge to build, and the only consumer that needs one is bareloop (fwd needs none; its PRD
+says "No LLM judge"). The shape: the judge only POINTS. It returns quote(s) and which signed source
+each came from; bareguard's own code proves the quote is in that source, extracts ONE value of a
+signed kind from it, and compares it with a signed bound. The judge never supplies a value, a
+verdict or a score (Laws 5, 8). The sources are the signed `inputs` already in the spec (§3), frozen
+by sha256 before the run. Pages fetched mid-run are NOT in this build (§5.3).
+
+**Today (verified in `src/primitives/rubric.js`).** `createRubric` refuses a `judged` rule as an
+unknown rule, and `checkStep` throws a `TypeError` when given a `judge` option. The spec keys
+`judge` (identity: `provider`, `model`, `cutoff?`, `band?`) and `reads` (integer >= 1) are already
+validated and already in `rubricSha`. `quoteIn` normalizes both sides with `normalizeForQuote` (strip
+`**` and `__`, collapse whitespace, trim) and tests substring containment; `numbersInQuote` tests a
+claim's number tokens against a quote's. `cited` reads its source from `opts.inputs[name]` and makes
+a missing text or a sha256 mismatch `stopped` (`missing-measurement`). The `Fault.kind` typedef does
+not list `judge-no-answer` yet (the PRD §6 list does). This section changes all of that.
+
+#### The signed check shape
+
+```js
+{ id: "newest-release", rule: "judged", kind: "locate",
+  ask: "Quote the heading line of the newest release in the changelog.",
+  sources: ["changelog"],
+  valueKind: "date", compare: "gte", bound: "2026-10-01" }
+
+{ id: "fare", rule: "judged", kind: "locate", ask: "Quote the line that states the total price.",
+  sources: ["offers"], valueKind: "money", currency: "$", compare: "lt", bound: 400, anchor: "Total:" }
+
+{ id: "departs", rule: "judged", kind: "locate", ask: "Quote the itinerary line.",
+  sources: ["offers"], valueKind: "time", compare: "between", lo: "06:00", hi: "21:00", anchor: "LAX" }
+```
+
+| Field | Type | Required | Rule |
+|---|---|---|---|
+| `kind` | `"locate"` | yes | `"verdict"` is refused at `createRubric` until its build (§5.1) |
+| `ask` | signed string | yes | what the judge is asked; non-blank, max 1000 characters (rides unclipped). Never decides (Law 6) |
+| `sources` | non-empty list of input names | yes | no duplicates; each must be in `spec.inputs` (same `ref: "input"` check as `cited`'s `source`) |
+| `valueKind` | `"number"` \| `"money"` \| `"date"` \| `"time"` | yes | which parser runs (below). A `locate` check with no value decide is NOT built (open question 1) |
+| `compare` | `"lt"` \| `"lte"` \| `"gt"` \| `"gte"` \| `"between"` | yes | `value < bound`, `<=`, `>`, `>=`, or `lo <= value <= hi` (BOTH ends inclusive) |
+| `bound` | number (`number`, `money`) or string (`date`, `time`) | yes unless `between`; refused with `between` | parsed by the SAME parser as the quote's value, at `createRubric`; a bad bound is refused naming the path |
+| `lo`, `hi` | same type as `bound` | both required with `between`, refused otherwise | `lo <= hi` required (a wrap-around window such as 22:00-02:00 is refused, open question 7) |
+| `currency` | `"$"` \| `"€"` \| `"£"` | required with `money`, refused otherwise | the only symbol that counts as a money value |
+| `anchor` | signed non-blank string | no | see "Anchor"; max 1000 characters; never clipped in a gap |
+| `text` | explanation | no | as on every check |
+
+The whole check, including `sources`, `anchor`, `bound`, is in `rubricSha`. A numeric `bound`/`lo`/`hi`
+must have a plain decimal rendering (`String(n)` with no exponent); `1e21` is refused. A rubric that
+holds any `judged` check must carry a non-null `spec.judge` identity (refused otherwise), and a
+GATING checkpoint holding one must be `requiresHuman` (refused otherwise, see "Soft-green"). The
+vocabulary entry for `judged` is generated like every other rule (§9): new descriptor types for the
+name list and the enums, plus a documented conditional (`between` requires `lo`+`hi` and forbids
+`bound`; the other four compares require `bound` and forbid `lo`/`hi`; `money` requires `currency`).
+
+#### The judge call
+
+`opts.judge` is a function (a later build may also accept `{ locate, verdict }`, open question 8),
+`opts.deadlineMs` is required with it (§5 call hygiene). Per judged check, per read:
+
+```
+judge(input, check, { signal, identity }) -> { quotes: [{ source, quote }, ...], facts?, pricing? }
+  input    = { output, sources: { [name]: text } }  // only the check's own `sources`, hash-verified
+  check    = the signed check ({ id, ask, sources, valueKind, compare, ... })
+  identity = the signed spec.judge
+```
+
+- `source` must be one of the check's `sources`, `quote` a string. `facts` is recorded in bounded
+  form and never decides. `pricing` follows `Result.pricing`: absent or `"estimated"` = priced,
+  `"unpriced"` = red.
+- **Malformed** = the reply is not a plain object, `quotes` is not an array, or an element is not an
+  object with string own `source` and `quote`. One retry (an independent call), never repaired; still
+  malformed = red `clean` gap `malformed`. An empty `quotes` array is an ANSWER ("found nothing"),
+  not malformed: no retry, red `clean` gap `no-quotes`.
+- **Unpriced** = red `clean` gap `unpriced`, no retry. **Throw, reject, transport error or timeout past
+  `deadlineMs` = `stopped`** with fault `judge-no-answer`, never retried (RULED #33).
+- `opts.inputs[name]` for every source must be present and hash to the signed `sha256`, or `stopped`
+  `missing-measurement` (as `cited`). Rubric holds a `judged` check but `opts.judge` is absent =
+  `stopped` `missing-measurement` (a harness bug, not a red). A source over the 5 MB cap is red
+  `source-too-large` BEFORE the judge is called (no spend on a call that cannot be checked).
+- A reply with more than 20 quotes is red `too-many` (`measured` = count, `limit` = 20). A normalized
+  quote over 4000 characters is red `quote-too-long` (open question 9).
+- Cost is the caller's to report through the budget path (§7 Interactions); bareguard accrues nothing.
+
+#### Per-quote decide (deterministic, in this order; the first failure for a quote ends that quote)
+
+1. **`quoteIn`** the quote against the named source's text in default (substring) mode. A `source`
+   not in the check's `sources` = red `unknown-source`; an empty normalized quote = `empty-quote`; not
+   found = `quote-not-found`. These reds belong to the foundational `quoteIn` check (`check: "quoteIn"`).
+2. **Extract** exactly one value of `valueKind` from the quote (below). Zero, two or more, or a
+   malformed token = red. Unsure = red (Law 1).
+3. **Compare** with the signed bound, exactly (no floats, below). Fail = red.
+
+The check is green only if the judge returned at least one quote and EVERY returned quote passes all
+three steps. More quotes can only add reds; none are ever dropped to turn a red green.
+`numbersInQuote` is NOT applied to a locate check: it pairs a claim with a quote, and a locate judge
+returns no claims. The exactly-one-value rule does that job here.
+
+**What this proves, and does not.** bareguard proves the value is in a frozen signed source and
+satisfies the bound. It does not prove the judge pointed at the RIGHT line ("newest release" can be
+answered wrongly by a quote of an older heading that also passes). That is why a green locate is a
+soft-green (below) and why `anchor` and `reads` exist.
+
+#### Extraction: shared rules
+
+All parsing is hand-coded, single pass over UTF-16 code units, linear, no regex with backtracking
+and no user regex. It runs on the quote after `normalizeForQuote` (the text `quoteIn` matched), so
+the parsed text is the proven text. Digits are ASCII `0-9` only (non-ASCII digits are never digits).
+Comparison is case-sensitive wherever a letter matters.
+
+**Adjacency, fail-closed.** A value token directly preceded or followed by an ASCII letter is
+MALFORMED (red), never read around it: `1.2k` and `5m` would otherwise read as 1.2 and 5 and be wrong
+by orders of magnitude; `08:10am`, `2026-10-12T08:00`, `v2` are unsure. Not a letter, so allowed
+after a token: a space, `%`, `)`, `,`, `;`, a trailing `.`, an en dash, an arrow, any non-ASCII
+symbol (`50%` is 50, `2 weeks` is 2). A sign: an ASCII `-` directly before a token that sits at the start of the quote or follows
+whitespace or `(` is a sign; any other `-` directly before a token (`2026-10`) is a separator and is
+ignored. A sign makes a `number` negative and is MALFORMED on a `money` or `time` token (`-$5`).
+U+2212 (`−`) directly before any `number`, `money` or `time` token is MALFORMED (it is never read as
+a minus, never dropped). `(` directly before a `money` or `number` token is MALFORMED (accounting
+negatives).
+
+**Anchor.** With a signed `anchor`, the rule changes from "exactly one value in the quote" to "the
+value right after the anchor". The anchor is normalized with `normalizeForQuote` (so `"LAX "` equals
+`"LAX"`) and searched, case-sensitive, in the normalized quote:
+- not in the quote = red `anchor-missing`;
+- in the quote twice or more = red `anchor-ambiguous` (unsure; open question 4);
+- once: the text after it, with at most whitespace skipped, must BEGIN with a token of `valueKind`;
+  otherwise red `value-none` (carries `anchor`). That token alone is the value. A malformed token
+  there is red `value-malformed`. Every other value elsewhere in the quote is ignored: that is what an
+  anchor is for. (Strictly adjacent, not "next value in the text", open question 3.)
+
+**Without an anchor** every token of the kind is counted: zero = red `value-none`, two or more =
+red `value-many` (`measured` = the count, `items` = the values, canonical, clipped, bounded 20), one
+= the value. A malformed token in an unanchored quote is red `value-malformed` (it is not counted
+away: a quote with `0.41.0` in a `number` check is unsure).
+
+#### Extraction: per value kind
+
+**`number`.** A numeric run is a maximal run of `0-9`, `,` and `.` that starts with a digit. Trailing
+`.` and `,` characters are cut off the run first (sentence punctuation). The rest must be exactly
+`D+ ( "," D D D )* ( "." D+ )?` read left to right: if any `,` is present the first group is 1-3
+digits and every later group is exactly 3; at most one `.`, followed by at least one digit. Anything
+else (`12,34`, `0.41.0`, `1.2.3`, `1,2`) is MALFORMED. The value is that decimal with the commas
+removed. A sign is as in the shared rules above (`-5` is negative; `2026-10` has no sign). `+` is ignored. Not interpreted: `%` scaling, `k`/`m`/`b` suffixes (malformed by adjacency), number
+words, exponent forms, a leading `.` (`.5`: the run starts at `5`, preceded by `.`, MALFORMED).
+
+**`money`.** The signed `currency` symbol, then immediately a numeric run with the `number` grammar,
+no sign, no space between (`$318.40`, `$1,234`, `€400`). Only tokens with that symbol count: a bare
+`1234`, or `€400` in a `$` check, is not a money value (`€400` is ignored, not malformed). A symbol
+not followed by a digit is ignored. Currency words and codes (`USD`) and a TRAILING symbol (`400 €`)
+are not read (open question 5). Fractional digits: any count >= 1; compared exactly.
+
+**`date`.** A candidate is a maximal run of `0-9` and `-`. Only a run of exactly the shape
+`dddd-dd-dd` is a date token; any other run is ignored (so `0.41.0`, a lone ` - `, `1234` are
+ignored, and `12026-10-12` yields nothing). A date-shaped run must be a real Gregorian calendar day
+with year 0001-9999, else MALFORMED (`2026-13-45`, `2026-02-30`). One format only: ISO `YYYY-MM-DD`
+(open question 6). Compared as the fixed-width string.
+
+**`time`.** A candidate is a maximal run of `0-9` and `:`. A run containing a `:` must be exactly
+`d:dd` or `dd:dd` with hours 0-23 and minutes 0-59, else MALFORMED (`24:00`, `8:7`, `08:10:30`,
+`123:45`); a run with no `:` is ignored (`1234`). 24-hour clock only. A time token followed by
+optional spaces and `am`/`pm`/`a.m.`/`p.m.` (any case) is MALFORMED, never read as 24-hour: `08:10 PM`
+must not pass as 08:10. Compared as minutes since midnight; no time zone, no date.
+
+**Exact comparison.** `number` and `money` values and bounds are exact decimals (integer part,
+fraction part, sign) compared digit by digit; never IEEE floats. `0` is a value (a zero is not
+"absent"); `-0` equals `0`.
+
+#### How the foundational checks apply
+
+| Check | On a locate-value check |
+|---|---|
+| `clean` | red on `malformed` (after the one retry), `no-quotes`, `unpriced`; `check: "clean"`, `id` = the judged check's id |
+| `quoteIn` | every quote, against its named source; reds `unknown-source`, `empty-quote`, `quote-not-found`, `source-too-large`; `check: "quoteIn"` |
+| `numbersInQuote` | not applied (no claim is paired); see above |
+| `agree` | `reads > 1`; below |
+| `signed` | unchanged; `sources`, `anchor`, bounds are all in the hash |
+
+**`reads: N` and `agree`.** The signed top-level `reads` (absent = 1) applies to every judged locate
+check. Each read is an independent judge call (own deadline, own malformed retry); the per-quote decide
+runs on each read's quotes. A read's decided outcome = `green`, or `red` plus the sorted set of its
+distinct red kinds. Outcomes are compared, never raw quotes or values: two reads that quote different
+lines but both decide green AGREE (open question 10). Any difference = ONE red gap, `check: "agree"`,
+kind `disagree`, `measured` = the number of distinct outcomes, `limit` = `reads`, the same `key`
+(`<checkpoint>:<id>`); it replaces that check's per-read reds in the worker's view, and each read's
+outcome stays in `full`. A read that is `stopped` (no answer) makes the whole check `stopped`. The
+minted record says how many reads and calls ran.
+
+**Soft-green and ACCEPT (RULED #30 builds the locate judge; this mapping is PROPOSED, open question
+11).** A checkpoint whose checks are all green and at least one is a green `judged` check mints
+`soft-green` (the verdict carries `softGreen: true` and the judged check ids; it does not count
+toward `maxReds`; no gap). `soft-green` allows the advance only after an ACCEPT bound to the
+`outputSha`, through the existing `requiresHuman` machinery (§6: `accept: "live"` asks once per
+sha with rule `rubric.needs-accept`; `"later"` uses `gate.recordAccept`). So that "no ACCEPT moment
+configured" is impossible by construction, `createRubric` refuses a GATING checkpoint holding a
+`judged` check unless it is `requiresHuman`. A non-gating checkpoint records the soft-green and never
+denies. `gate.recordAccept` accepts a latest verdict of `green` OR `soft-green` for exactly that
+`outputSha`. A soft-green with no ACCEPT denies `rubric.needs-accept`; no new deny rule name. `stopped > red > soft-green > green` for precedence; the cold-start rebuild reads `soft-green` like `green`.
+
+**Gaps (all rendered by `renderGaps` as the default JSON row; none gets a plain sentence, the two
+that do exist only because fwdloop keys on their text).** One gap per failing check, `key`
+`<checkpoint>:<id>`, `kind` = the kind of the FIRST red quote in the order the judge returned, `items`
+= `["#<i>:<kind>", ...]` for every red quote (bounded 20, `itemsTotal` when cut; the worker needs the
+position, not the quote). Fields are the existing gap fields, plus one new optional `anchor`:
+
+| `kind` | `check` | Fields | Meaning |
+|---|---|---|---|
+| `no-quotes` | `clean` | | the judge returned an empty list |
+| `malformed` | `clean` | | malformed after one retry |
+| `unpriced` | `clean` | | the judge call was unpriced |
+| `unknown-source` | `quoteIn` | `measured` = the named source, clipped | the judge named a source the check does not list |
+| `empty-quote` / `quote-not-found` / `source-too-large` | `quoteIn` | | as `cited` |
+| `too-many` | `judged` | `measured`, `limit` | more than 20 quotes (existing kind) |
+| `quote-too-long` | `judged` | `measured` = length, `limit` = 4000 | |
+| `anchor-missing` / `anchor-ambiguous` | `judged` | `anchor` (signed, unclipped), `measured` = occurrences | |
+| `value-none` | `judged` | `anchor?` | no value of the kind (or none right after the anchor) |
+| `value-many` | `judged` | `measured` = count, `items` = the values | two or more, unanchored |
+| `value-malformed` | `judged` | `measured` = the token, clipped 120 | shaped but invalid, a letter suffix, an am/pm, a unit |
+| `value-over` | `judged` | `measured` = value, `limit` = the bound, `direction` | above `lte` / `lt` / `between` `hi` |
+| `value-under` | `judged` | `measured` = value, `limit` = the bound, `direction` | below `gte` / `gt` / `between` `lo` |
+| `disagree` | `agree` | `measured` = distinct outcomes, `limit` = `reads` | the reads decided differently |
+
+`direction` for the value gaps: `"at-most"` (`lte`, `between` `hi`), `"at-least"` (`gte`, `between`
+`lo`), plus two NEW values `"below"` (`lt`) and `"above"` (`gt`) because the existing two mean
+inclusive (open question 12). A `between` miss reports the end it crossed in `limit`. Signed values
+(`bound`, `lo`, `hi`, `anchor`, `currency`) ride unclipped; the measured value and token are
+output-derived, clipped to 120. The judge's quote itself is never in a gap or on an audit line whole:
+the `full` record and the audit hold, per quote, `source`, the first 120 characters, the original
+length and the sha256 of the full quote (§5), bounded to 20 quotes, plus `reads` and the number of
+calls made.
+
+**Examples (also in the test plan).**
+- E1, REAL (bareloop CHANGELOG.md), `date` `gte` `2026-10-01`, no anchor, quote `## [0.41.0] - 2026-10-12`:
+  one date token (`0.41.0` and the lone `-` are ignored), 2026-10-12 >= 2026-10-01 = GREEN (soft-green
+  at the checkpoint). Mutated to `## [0.41.0] - 2026-09-12`: `value-under`, RED.
+- E2, `money` `$` `lt` 400, quote `Alaska 1234 · LAX 08:10 → SFO 09:35 · Nonstop · Total: $318.40`. With
+  anchor `Total:` = $318.40 = GREEN. WITHOUT an anchor this quote still holds exactly one money value
+  (`1234` has no `$`, the times are not money) = GREEN. With `Total: $409.00` = `value-over`, RED.
+- E3, trap: `From $349 + taxes and fees`, anchor `Total:`: `anchor-missing`, RED (the unanchored read of
+  this quote would be one value, $349, and pass: the anchor is what stops it). `Total: $318.40 (was
+  $420)` with anchor `Total:` = $318.40 = GREEN; without an anchor, two money values = `value-many`, RED.
+- Departure window, `time` `between` `06:00`..`21:00`, quote `LAX 08:10 → SFO 09:35`: no anchor, two
+  times = `value-many`, RED; anchor `LAX ` (= `LAX`) reads 08:10 = GREEN; `LAX 22:45 → SFO 00:10` with
+  anchor `LAX ` = 22:45 = `value-over`, RED. **To confirm with loop:** loop expected "the first time"
+  with no anchor; the ruling (#32) says an anchor instead, so a loop that wants the first time must
+  sign an anchor.
+
+#### Open questions (for hamr; everything the rulings did not decide)
+
+1. Presence-only locate: should a `locate` check with no `valueKind` (only "this quote is in the
+   source", the decide being `quoteIn` alone) be allowed? This spec requires `valueKind` and builds
+   nothing else.
+2. Names. No precedent exists for comparison operators or the field names `sources`, `valueKind`,
+   `compare` (`lt|lte|gt|gte|between`), `bound`, `lo`, `hi`, `currency`, `anchor`. Existing style is
+   `value`/`direction`/`at-most`. Alternatives: reuse `value` for `bound`; `op` for `compare`; a
+   `between` as `{lo,hi}` object (the vocabulary has no nested descriptor today); a separate rule name
+   (e.g. `valueIs`) instead of folding the decide into `judged`.
+3. "Right after the anchor": this spec is STRICTLY adjacent (only whitespace between anchor and
+   value). The ruling's "first value of that kind right after the anchor" could also mean the next
+   value anywhere later in the text. Strict is safer (`Total: see below $400` is red) but may red a real
+   quote such as `Total price: $318`, where the anchor must then be `Total price:`.
+4. Anchor present twice: red `anchor-ambiguous` here (unsure = red) instead of "use the first". Say
+   if you want first-occurrence.
+5. Money: only a leading `$`/`€`/`£` and ASCII digits; no `USD`/`EUR` codes, no trailing `400 €`, no
+   `1.234,56` (European separators), no `US$` prefix handling beyond ignoring the letters before the
+   symbol. Widen?
+6. Dates: ISO `YYYY-MM-DD` only. No `12 Oct 2026`, `10/12/2026`, `Oct 12, 2026`, no year-month (`2026-10`),
+   no datetime. `2026-10-12T08:00` is malformed by the letter-adjacency rule. Which, if any, of these does
+   loop's real data need? (Month-name formats are locale and ambiguity traps; slash formats are
+   day/month ambiguous.)
+7. `between` with `lo > hi` (a window that wraps midnight, `22:00`..`02:00`) is refused at `createRubric`.
+   Both ends are inclusive; an exclusive end is not offered (use `lt`/`gt`). Confirm.
+8. `opts.judge` shape once `verdict` exists: a single function (this build) vs `{ locate, verdict }`.
+   And whether the judge's `input` should include `output` (this spec passes `{ output, sources }`).
+9. Quote bounds: at most 20 quotes per reply and 4000 normalized characters per quote are proposed
+   (not ruled) to bound audit size and work. Confirm or change.
+10. `agree` compares decided outcomes only (ruling in §5): two reads quoting different lines that both
+    decide green agree even if their extracted values differ ($318 vs $390). Should the extracted VALUE
+    (not just green/red) also have to match, as an extra tightening?
+11. Soft-green wiring (PROPOSED here, not ruled): a gating checkpoint with a `judged` check must be
+    `requiresHuman`, so soft-green reuses the existing ACCEPT paths and "no ACCEPT moment" cannot
+    happen. §6 instead says soft-green with no ACCEPT moment "behaves as red at the last gating
+    checkpoint". Also requires `recordAccept` to take `soft-green` and the `Check`/`StepResult` typedefs
+    to add the verdict. Confirm, or choose the §6 behaviour.
+12. `direction` gains `"below"` and `"above"` (strict `lt`/`gt`); the alternative is to give strict
+    compares their own gap kinds. Also: the new optional gap field `anchor` and the `judged`
+    gap kinds are SemVer-surface additions.
+13. A judge handed `deadlineMs` per call means a worst case of `reads x 2 x deadlineMs` per judged
+    check. Is a per-checkpoint total wall (a signed `deadlineMs`?) wanted, or is the caller's `deadlineMs`
+    the only bound?
+14. Loop accepted that a crash/transport error/timeout is `stopped` (ruling #33) and so gives the
+    worker no gap; confirm with loop that its harness retries a `stopped` itself rather than treating
+    it as the worker's failure.
+
+### 5.3 Search inputs registered mid-run (bareloop; Next, NOT built; design pending a real captured page)
+
+Not part of the locate build (RULED #31). bareloop's wish: the sources of a locate check are web
+pages found DURING the run (a search), not files frozen before it. Requirements captured so far, to
+be specified only after a real captured page exists:
+
+- **Only the arbiter registers a page, never the worker.** The worker cannot add a source that
+  checks its own claim.
+- **The signed slot** is a label plus `"search"` plus allowed domains, e.g. `{ name: "offers", kind:
+  "search", allowDomains: ["alaskaair.com"] }`. `allowDomains` maps to the `net.allowDomains` shape (the
+  floor is unchanged; Law 9: a rubric never widens a scope). The slot is in `rubricSha`; its content is
+  not known up front, so it has no sha256 in the spec.
+- **A quote citing the label may match ANY page registered under it** (`sources: ["offers"]` is a
+  set of pages, not one).
+- **A page whose host is outside the allowed domains = red** (not stopped: the content was wrong, not
+  the instrument).
+- **Per-page audit:** label, sha256 of the page bytes, byte count, the URL requested, the final URL
+  after redirects, the tool that fetched it, a timestamp and the run id.
+- Open: the page text the `locate` judge sees and `quoteIn` checks must be the exact registered bytes
+  (hash recorded at registration); how a registered page is cold-start-rebuilt; the 5 MB cap per page;
+  page count per label; what counts as "the same host" (redirects, subdomains); whether the registration
+  call is a new gate method (harness-only, like `recordAccept`). None of this is decided.
+
 ## 6. Verdicts, the advance and the human moments
 
 **Four verdicts:**
@@ -473,7 +789,7 @@ uncalibrated judge's soft-green is acceptable only because the final ACCEPT exis
 | Verdict | Meaning | Gating checkpoint | Gap / fault | Counts toward `maxReds` |
 |---|---|---|---|---|
 | **green** | every check deterministic and green | allow | none | no |
-| **soft-green** | every check green, at least one involved a judge (carries a flag; Next) | allow only after ACCEPT, else deny | none | no |
+| **soft-green** | every check green, at least one involved a judge (carries a flag; built with the `locate` judge, §5.2) | allow only after ACCEPT, else deny | none | no |
 | **red** | any check red | deny | gap to the worker | yes |
 | **stopped** | the instrument failed, not the work | deny | NO gap to the worker; a structured `fault` to the runner | no |
 
@@ -650,7 +966,7 @@ audit write failure still propagates.
 | exports | `createRubric(spec)`, `rubricSha(spec)`, `checkStep(rubric, checkpointId, output, opts)`, `quoteIn(quote, source)`, `numbersInQuote(claim, quote)`, `renderGaps(gaps)`, `rubricVocabulary` |
 | `rubricVocabulary` | frozen, machine-readable; lists every rule with its field names, types, required/optional, bounds (count fields integers >= 1, no max; string lists non-empty arrays of non-empty strings; no whitespace-only strings) and defaults (including `strict`); a drafting LLM reads it; every check description shown to anyone is GENERATED from it, never hand-written |
 | gate methods | `checkStep(checkpoint, output, opts)`, `drainGaps()`, `recordAccept({...})` (harness-only) |
-| config keys | `rubric: { spec, sha256, advanceOn }`; signed spec keys `onExhausted`, `maxReds`, `reads`, `requiresHuman`, per-checkpoint `accept`, per-check `id`, `text`, `strict`, `phrases`, `noneExit`, `expectExit`, `direction`, `baseline`, `patterns`, `allowPrefixes`, `requireNonEmpty`, `size`, `items`, `itemsFrom` |
+| config keys | `rubric: { spec, sha256, advanceOn }`; signed spec keys `onExhausted`, `maxReds`, `reads`, `requiresHuman`, per-checkpoint `accept`, per-check `id`, `text`, `strict`, `phrases`, `noneExit`, `expectExit`, `direction`, `baseline`, `patterns`, `allowPrefixes`, `requireNonEmpty`, `size`, `items`, `itemsFrom`; for `judged` (§5.2) `kind`, `ask`, `sources`, `valueKind`, `compare`, `bound`, `lo`, `hi`, `currency`, `anchor` |
 | rule strings | every rule in §4; deny rules `rubric.invalid`, `rubric.red`, `rubric.stopped`, `rubric.unminted`, `rubric.output-mismatch`, `rubric.exhausted`, `rubric.needs-accept` |
 | audit | phases `rubric` (`rubricSha`, `checkpoint`, `verdict`, `outputSha`, bounded `gaps` / `fault`), `rubric_baseline` (`baselineSource`), `rubric_accept`, `rubric_accept_refused` |
 | event | the `humanChannel` event gains `rubric: { rubricSha, checkpoint, outputSha, verdict, gaps }` on a `rubric.needs-accept` ask |
@@ -737,6 +1053,61 @@ Name: **rubric**.
   sha, a blank `by`; verdicts, red counts, ACCEPTs and seed baselines survive a cold start with the same
   `runId`, and a different `runId` or a re-sign starts fresh; concurrent mint + advance keep audit order
   = decision order.
+- `locate` judge and value decide (RULED 2026-10-12, §5.2). Every case below also runs the
+  falsify-by-revert of the source it exercises.
+  - E1 (REAL bareloop CHANGELOG.md), `date` `gte` `2026-10-01`, no anchor: quote `## [0.41.0] - 2026-10-12`
+    = green (one date; `0.41.0` and the lone `-` ignored); mutated `## [0.41.0] - 2026-09-12` = red
+    `value-under`; the boundary `2026-10-01` itself = green (AT), `2026-09-30` = red.
+  - E2, `money` `$` `lt` 400: `Alaska 1234 · LAX 08:10 → SFO 09:35 · Nonstop · Total: $318.40` with anchor
+    `Total:` = green; the same WITHOUT an anchor = green (exactly one `$` value); `Total: $409.00` = red
+    `value-over`; `Total: $400.00` = red (`lt` is strict, AT is red); `$399.99` = green.
+  - E3 traps: `From $349 + taxes and fees` with anchor `Total:` = red `anchor-missing`; `Total: $318.40 (was
+    $420)` with anchor `Total:` = green; the same without an anchor = red `value-many` with both values listed.
+  - Departure window, `time` `between` `06:00`..`21:00`: `LAX 08:10 → SFO 09:35` no anchor = red
+    `value-many`; anchor `LAX ` = 08:10 green; `LAX 22:45 → SFO 00:10` anchor `LAX ` = red `value-over`;
+    AT `06:00` and `21:00` green (both ends inclusive), `05:59` / `21:01` red; `lo > hi` refused at `createRubric`.
+  - Value edge cases: zero values (`no price listed`) = red `value-none`; `0` / `$0.00` is a value (green
+    against `lt` 400, not "absent"); two values = red `value-many`; one malformed token in an unanchored
+    quote (`0.41.0` in `number`, `12,34`, `1.2k`, `5m`, `$5USD`, `2026-13-45`, `2026-02-30`, `24:00`,
+    `08:10:30`, `08:10 PM`, `08:10am`, `-$5`, `−5`, `($5)`) = red `value-malformed`, never read around;
+    `-5` is -5 and `2026-10` has no sign; `1,234.50` ok, `1,23` malformed; non-ASCII digits are no digits;
+    a value exactly AT / UNDER / OVER the bound for each of `lt`, `lte`, `gt`, `gte`; decimal exactness
+    (`0.1 + 0.2` style bounds, a 30-digit value) never goes through floats.
+  - Anchor: present once and followed by whitespace then the value = that value; anchor present TWICE = red
+    `anchor-ambiguous`; anchor followed by other text before the value (`Total: see $400`) = red
+    `value-none` with `anchor`; the anchor `LAX ` (trailing space) equals `LAX`; the anchor is
+    case-sensitive; an anchor with `**` or runs of whitespace in the quote still matches after normalize.
+  - Judge replies: a quote NOT in the named source = red `quote-not-found`; a source not in the check's
+    `sources` = red `unknown-source`; an empty quote = red `empty-quote`; an empty `quotes` array = red
+    `no-quotes` with NO retry; malformed once then good = pass (second call made); malformed twice = red
+    `malformed`; a score instead of quotes = malformed; unpriced = red, no retry; `pricing: "estimated"` =
+    priced; more than 20 quotes = red `too-many`; a quote over 4000 characters = red `quote-too-long`;
+    several quotes, one failing = red, with every failing position in `items`; the judge's `facts` never
+    change a verdict.
+  - Instrument: the judge throws / rejects = `stopped` `judge-no-answer`, one call, no gap in
+    `drainGaps()`; a timeout past `deadlineMs` = `stopped`, not retried, and the `AbortSignal` is aborted;
+    `opts.judge` absent on a rubric with a judged check = `stopped` `missing-measurement`; `deadlineMs`
+    missing with a judge = throw (gate: deny); `opts.inputs[source]` missing or a sha256 mismatch =
+    `stopped`; a source over 5 MB = red `source-too-large` with ZERO judge calls; stopped beats red.
+  - `reads: 3`: three identical green reads = soft-green; two green and one red = red `agree` (one gap,
+    `measured` 2, `limit` 3, the per-read reds only in `full`); two reads that quote different lines but both
+    decide green agree; one read `stopped` = the whole check `stopped`; the audit record says 3 reads and
+    the number of calls (with a malformed retry, 4); `reads` absent = one call.
+  - Soft-green: all-green with a judged check = `soft-green`, never `green`, no gap, not counted toward
+    `maxReds`; the advance is denied `rubric.needs-accept` until an ACCEPT for the `outputSha`; live ask
+    and `accept: "later"` + `recordAccept` both work on a soft-green; a gating checkpoint with a judged
+    check that is not `requiresHuman` is refused at `createRubric`; a non-gating one records and never
+    denies; a judged check with `spec.judge` null is refused; cold start rebuilds a soft-green.
+  - Spec shape: `kind: "verdict"` refused (names §5.1); `valueKind` / `compare` / `currency` / `bound`
+    combinations (`between` with `bound`, `lt` with `lo`, `money` without `currency`, `currency` on
+    `date`, a non-string date bound, `2026-02-30` as a bound, `1e21`, an unknown `sources` name, a
+    duplicate source, an empty `sources`) each refused at `createRubric`; changing `anchor`, a source, a
+    bound or `reads` changes `rubricSha`; `rubricVocabulary` lists every new field with type, required and
+    conditions, and the generated description matches.
+  - Audit and gaps: per quote only `source`, the first 120 characters, the length and the sha256 (never
+    the whole quote); `renderGaps` of a value gap is byte-identical across two runs and differs between
+    `value-over` and `value-none`; signed `anchor` / `bound` are never clipped in a gap; a hostile judge
+    reply (throwing getter, Proxy, `__proto__` key, 10 MB string) is malformed or bounded, never a throw.
 - Distinct names: every deny rule string is unique.
 - Byte-identical decision path when `rubric` is unset.
 
@@ -745,7 +1116,9 @@ Name: **rubric**.
 | | What |
 |---|---|
 | **Day 1** | `quoteIn`, `numbersInQuote` · `rubricVocabulary` · `createRubric` / `rubricSha` · `checkStep` with all deterministic checks (shape rules incl. `blockLines` and `strict`, value rules, `complete`, `cited`, and the four borrowed shapes `commandExit` / `notWorse` / `patternAbsent` / `filesChanged`) · the four verdicts minus soft-green (green / red / stopped) · liveness proof · gating checkpoint + `outputSha` + `requiresHuman` · `drainGaps` · `renderGaps` · audit-backed state · `onExhausted: "fail"` |
-| Next | `locate` judge in `checkStep` (deadline, one retry on malformed only, clipped quote, foundational judge-quote checks) · `verdict` judge (jev, via a caller-passed adapter; quote optional) · soft-green + ACCEPT fail-closed · `reads` / `agree` |
+| **Next build (RULED 2026-10-12, spec §5.2)** | `locate` judge in `checkStep` (deadline, one retry on malformed only, clipped quote, foundational judge-quote checks) · the deterministic value decide (`number` / `money` / `date` / `time`, anchor, exactly-one) · soft-green + ACCEPT fail-closed · `reads` / `agree`. Sources = the frozen signed `inputs` only |
+| Next, right after | `verdict` judge (jev, via a caller-passed adapter; quote optional, §5.1) |
+| Next, not built | search inputs registered mid-run (bareloop, §5.3); design pending a real captured page |
 | Later | bareguard's own judge calibration (in the hash) · `onExhausted: "ask"` |
 | To try | **Needle** (https://github.com/cactus-compute/needle, `llms.txt`): a 29-121M-parameter on-device tool-calling/extraction model with grammar-constrained JSON (would cure the malformed-reply class) and a 0-1 confidence score (can never decide, Law 8). A candidate CALLER-side cheap `locate` judge; bareguard would verify its quotes. Its own docs say the base model fails 5 of 6 test suites, so it needs calibration first. Not built; try when a rubric job needs a cheap judge. |
 
@@ -831,3 +1204,9 @@ All RULED by hamr. Superseded entries are kept for the record.
 27. RULED (hamr, 2026-10-08): `quoteIn(quote, source, opts?)` gains an opt-in `{ wholeLines: true }`, asked by bareloop (F192). Default unchanged (byte-for-byte); any `opts` other than an object with `wholeLines === true` is the default mode. Whole-line mode: both sides split into lines (CRLF ok), each normalized per line after stripping ONE leading comment decoration (`/**`, `*/`, `//`, `* ` or a lone `*`, and `#` only when a space or tab follows, or alone on its line, so `#include` stays whole); a decoration-only line keys as itself; every non-empty quote line must EQUAL a whole source line (not a substring). Tighten-only; the `cited` rule is not changed.
 28. RULED (hamr, 2026-10-08): `quoteIn` wholeLines: the quote's lines must be a contiguous run of source lines, in order, with empty and decoration-only lines skippable on both sides (bareloop); a decoration-only quote falls back to per-line equality and is documented as proving nothing about location; in a MIXED quote decoration-only lines are skipped too, so a quote's `/**` or `*/` lines are not required to appear (`/**\nfoo\n*/` matches a source `foo`) and only the substantive lines are proven; a lone `#` line is decoration-only like a lone `*`; never-throws on a hostile `opts` (a throwing getter or Proxy means default mode).
 29. RULED (hamr, 2026-10-09): forgiving headings strip ONE leading ordered-list marker (`1. `, `2) `) after the `#` run, asked by fwd from a live run (numbered headings like `## 1. Work History` never matched `Work history`); the strip applies only to `#`-run lines, as a second key beside the plain one (a name matches either); signed names and bare lines are NOT stripped (a first cut that stripped every line and the signed side let a bare `2. Summary` satisfy `Summary` and split `sectionWords` sections), strict is unchanged (its exact-text half still sees the marker).
+
+**2026-10-12** (the `locate` judge; hamr ruled, requirements from bareloop, the only consumer needing judges)
+30. RULED (hamr, 2026-10-12): build now the `locate` judge kind, signed `reads: N` with `agree`, and a NEW deterministic value rule (§5.2). Sources are the existing frozen signed `inputs` (sha256 up front). The judge only points (quote(s) + which source); bareguard's code extracts the value and compares it with a signed bound. Value kinds `number`, `money`, `date`, `time`; comparisons `<`, `<=`, `>`, `>=` and `between`.
+31. RULED (hamr, 2026-10-12): NOT now: sources registered mid-run (bareloop's web pages; recorded as the §5.3 Next section, design pending a real captured page). The `verdict` judge kind and the jev adapter (§5.1) come NEXT, right after this build; the design stays. Calibration stays Later.
+32. RULED (hamr, 2026-10-12): a quote must yield EXACTLY ONE value of the signed kind, otherwise unsure = red. The spec MAY sign an `anchor` label (e.g. `Total:`); the value is then the first value of that kind right after the anchor in the quote, and an anchor missing from the quote is red. (The exact parse rules, "adjacent" and a twice-present anchor are spec'd in §5.2 and listed as open questions.)
+33. RULED (hamr, 2026-10-12): a judge crash, transport error or timeout is `stopped` (unchanged; the loop accepts it). A reply malformed after its one retry is red `clean`. Unpriced is red.
