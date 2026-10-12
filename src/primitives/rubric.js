@@ -96,7 +96,7 @@ function fail(where, msg) {
   return e;
 }
 
-function clip(s, n = CLIP) {
+export function clip(s, n = CLIP) {
   let str = typeof s === "string" ? s : String(s);
   if (str.length <= n) return str;
   let end = n;
@@ -510,7 +510,7 @@ function runAllowedKeys(ctx, c) {
 }
 
 /** Forgiving: case-insensitive substring. Strict: ALSO an exact substring (so never looser). */
-function carries(hay, hayLower, phrase, strict) {
+export function carries(hay, hayLower, phrase, strict) {
   const f = hayLower.includes(phrase.toLowerCase());
   return strict ? f && hay.includes(phrase) : f;
 }
@@ -1177,7 +1177,7 @@ function canonSha(copy) {
 
 // Strip the markers FIRST, then collapse+trim, so a quote that is only markers/whitespace
 // is empty (a vacuous quote must not match) and "a ** b" still equals "a b".
-function normalizeForQuote(s) {
+export function normalizeForQuote(s) {
   return s.split("**").join("").split("__").join("").replace(/\s+/g, " ").trim();
 }
 

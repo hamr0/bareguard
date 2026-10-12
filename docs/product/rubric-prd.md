@@ -629,7 +629,12 @@ green locate is a soft-green (below) and why `anchor`, `reads` and the human ACC
 
 All parsing is hand-coded, single pass over UTF-16 code units, linear, no regex with backtracking
 and no user regex. It runs on the quote after `normalizeForQuote` (the text `quoteIn` matched), so
-the parsed text is the proven text. Digits are ASCII `0-9` only (non-ASCII digits are never digits).
+the parsed text is the proven text. **Every "one space" below means one space AFTER normalization (RULED
+#47):** `normalizeForQuote` collapses every whitespace run (spaces, tabs, newlines) to a single space
+first, so `9:27  AM` and `59  US dollars` read exactly as `9:27 AM` and `59 US dollars`. The decide
+never sees a run of two spaces or a tab. An anchor is normalized the same way. (The scanners themselves
+still refuse a double space or tab if ever handed raw text; that is a unit-test fact, not a signed
+behavior.) Digits are ASCII `0-9` only (non-ASCII digits are never digits).
 Comparison is case-sensitive wherever a letter matters.
 
 **Adjacency, fail-closed.** A value token directly preceded or followed by an ASCII letter is
@@ -658,7 +663,7 @@ value right after the anchor". The anchor is normalized with `normalizeForQuote`
 same quote; one decide's anchor never moves another's.
 
 **Without an anchor** (per decide) every token of the kind is counted: zero = red `value-none`, two or more =
-red `value-many` (`measured` = the count, `items` = the values, canonical, clipped, bounded 20), one
+red `value-many` (`measured` = the count, `values` = the values, canonical, clipped, bounded 20 with `valuesTotal` when cut), one
 = the value. A malformed token in an unanchored quote is red `value-malformed` (it is not counted
 away: a quote with `0.41.0` in a `number` check is unsure).
 
@@ -680,14 +685,14 @@ mixed on one decide, and a check that needs both forms signs two decides.
   malformed). A symbol not followed by a digit is ignored. Currency codes (`USD`) and a TRAILING symbol
   (`400 €`) are not read (RULED #37).
 - **With `unit`** (the unit form, RULED #43): a value is a numeric run (the `number` grammar, no sign)
-  immediately followed by exactly ONE space and then the signed `unit` text, matched exactly as signed
+  immediately followed by exactly ONE space (after normalization, #47) and then the signed `unit` text, matched exactly as signed
   (case-sensitive, no case folding: `59 US dollars` matches `unit: "US dollars"`, `59 us dollars` and
   `59 US Dollars` do not), and the unit text must NOT be followed by an ASCII letter (`59 US dollarsX` is
   not a value). The numeric run is the value; the space and the unit are not part of it. Any other
   character, or the end of the quote, may follow the unit (`From 59 US dollars.` is 59; so are `, `, `)`
   and `;`). Thousands separators work as in the `number` grammar: `From 1,234 US dollars.` with anchor
   `From ` is 1234. A number NOT followed by a single space plus the unit (`59 dollars`, `59US dollars`,
-  `59  US dollars` with two spaces, a bare `59`) is not a value of this decide: it is ignored, not
+  `59US dollars`, a bare `59`) is not a value of this decide: it is ignored, not
   malformed. The shared adjacency rule still applies to the numeric run (`v59 US dollars`, `1.2k US
   dollars` are malformed). Still exactly one value: unanchored, two matches are `value-many`, none are
   `value-none`; still anchorable, with strict adjacency as for every other kind: the anchor, then (at
@@ -707,19 +712,22 @@ with year 0001-9999, else MALFORMED (`2026-13-45`, `2026-02-30`). One format onl
 exactly `d:dd` or `dd:dd`, minutes 0-59, else MALFORMED (`8:7`, `08:10:30`, `123:45`); a run with no `:`
 is ignored (`1234`). Two forms:
 - **24-hour**: no suffix, hours 0-23 (`24:00` is MALFORMED). `9:27` is 09:27.
-- **12-hour**: the token followed by exactly ONE space and then `AM` or `PM` in UPPERCASE, the two letters
+- **12-hour**: the token followed by exactly ONE space (after normalization, #47: a double space or tab collapses to it) and then `AM` or `PM` in UPPERCASE, the two letters
   NOT followed by an ASCII letter (end, space, `.`, `,`, `)` all fine). Hours 1-12 (`h:mm AM` or `hh:mm AM`);
   hour `0` or `13`+ with a suffix is MALFORMED (`00:30 AM`, `13:05 PM`). Meaning: `12:xx AM` = `00:xx`,
   `12:xx PM` = `12:xx`, `h:xx AM` = `h:xx`, `h:xx PM` = `h+12:xx` (`12:05 AM` = 00:05, `12:05 PM` =
   12:05, `9:27 AM` = 09:27, `9:27 PM` = 21:27, `11:07 AM` = 11:07).
 - **Not accepted, and MALFORMED (never read as 24-hour, because `08:10 PM` must not pass as 08:10)**:
   lowercase or mixed case (`9:27 am`, `9:27 Am`), the dotted forms (`9:27 a.m.`, `p.m.`), no space
-  (`9:27AM`, already malformed by letter adjacency), two or more spaces or a tab, and any other word
-  glued to the suffix (`9:27 AMX`). Lowercase and dotted are left out because the real page uses
+  (`9:27AM`, already malformed by letter adjacency), and any other letters glued to an UPPERCASE
+  suffix (`9:27 AMX`, `9:27 AMD`, `9:27 PMS`, `9:27 AMERICAN`: all malformed, fail-closed). A bare `:` with no digit
+  in its run (`Total:`) is not a time and is ignored; a run with a `:` and a digit that is not `d:dd`/`dd:dd`
+  (`9:27:`, `8:7`) is malformed. Lowercase and dotted are left out because the real page uses
   uppercase only and each extra spelling is another way to misread; widening is a later, signed ruling
   (open question 5). A time followed by a space and a word that merely STARTS with those letters
-  (`9:27 American`) is the 24-hour time 09:27 followed by a word: the suffix is exactly the two
-  uppercase letters not followed by a letter.
+  (mixed or lower case beyond two letters, `9:27 American`, `9:27 ampere`) is the 24-hour time 09:27 followed
+  by a word: the suffix is exactly the two uppercase letters not followed by a letter. Exactly two letters
+  `am`/`Am`/`pM` after the space are malformed (never read as a word).
 - Signed bounds (`value`, `lo`, `hi`) go through the same parser, so `"9:00 PM"` is a legal bound; they
   are stored as the canonical minutes.
 Compared as minutes since midnight; no time zone, no date. Linear and hand-coded: the token is read
@@ -773,7 +781,8 @@ that do exist only because fwdloop keys on their text).** One gap per failing ch
 `<checkpoint>:<id>`, `kind` = the kind of the FIRST red decide in signed order (or the read-level kind
 when the read ended before the decides ran), `items` = `["d<i>:<kind>", ...]` for every red decide
 (`i` = 0-based index in `decides`; bounded 20, `itemsTotal` when cut; the worker needs the position,
-not the quote). The kind-specific fields describe that first red decide. Fields are the existing gap
+not the quote). `items` is always this `d<i>` list; a `value-many` decide's own value list therefore rides as
+`values` (RULED #47). The kind-specific fields describe that first red decide. Fields are the existing gap
 fields, plus one new optional `anchor`:
 
 | `kind` | `check` | Fields | Meaning |
@@ -787,7 +796,7 @@ fields, plus one new optional `anchor`:
 | `quote-too-long` | `judged` | `measured` = length, `limit` = 4000 | |
 | `anchor-missing` / `anchor-ambiguous` | `judged` | `anchor` (signed, unclipped), `measured` = occurrences | |
 | `value-none` | `judged` | `anchor?` | no value of the kind (or none right after the anchor) |
-| `value-many` | `judged` | `measured` = count, `items` = the values | two or more, unanchored |
+| `value-many` | `judged` | `measured` = count, `values` = the values (`valuesTotal` when cut) | two or more, unanchored |
 | `value-malformed` | `judged` | `measured` = the token, clipped 120 | shaped but invalid, a letter suffix, a bad am/pm, a unit |
 | `value-over` | `judged` | `measured` = value, `limit` = the bound, `direction` | above `lte` / `lt` / `between` `hi` |
 | `value-under` | `judged` | `measured` = value, `limit` = the bound, `direction` | below `gte` / `gt` / `between` `lo` |
@@ -801,6 +810,18 @@ inclusive (open question 2). A `between` miss reports the end it crossed in `lim
 output-derived, clipped to 120. The judge's quote itself is never in a gap or on an audit line whole:
 the `full` record and the audit hold, for the quote, `source`, the first 120 characters, the original
 length and the sha256 of the full quote (§5), plus `reads` and the number of calls made.
+
+**Canonical forms and the pure core (RULED #47).** `measured` and `limit` in a value gap are STRINGS in canonical
+form: `number`/`money` the exact decimal (`"409"`, `"318.4"`: no trailing zeros, no thousands separator,
+`-0` is `0`), `date` the `YYYY-MM-DD` string, `time` 24-hour `HH:MM` (`"11:07"`). `direction` is `"below"` for
+`lt`, `"at-most"` for `lte` and `between` `hi`, `"above"` for `gt`, `"at-least"` for `gte` and `between` `lo`.
+Anchor occurrences are counted overlapping and the count stops at 1000 (`measured` never exceeds 1000). A
+`between` or comparison whose signed bound does not re-parse is `value-malformed` (`measured` `"bound"`); it
+cannot happen after `createRubric` validated the bound. The per-read comparable outcome (the input to `agree`) is
+`[overall green/red, per decide in signed order: [type, "ok" or the red kind, the extracted canonical value or
+null (`value-many`: its count and values)]]`: the canonical decimal string for `number`/`money`, the
+`YYYY-MM-DD` string for `date`, integer minutes for `time`, never the quote. The pure core lives in
+`src/primitives/rubric-locate.js` and is not exported from `src/index.js`.
 
 **Examples (also in the test plan).**
 - E1, REAL (bareloop CHANGELOG.md), `decides: [{valueKind:"date", op:"gte", value:"2026-10-01"}]`, no
@@ -847,7 +868,7 @@ length and the sha256 of the full quote (§5), plus `reads` and the number of ca
 3. (SETTLED, RULED #43: money may sign `unit` instead of `currency`; see "Extraction: per value kind".)
 4. (SETTLED AT BUILD, RULED #46: the names `decides`, `valueKind`, `value` (the bound), `op`, `lo`/`hi`,
    `anchor`, `phrases`, `unit` are settled in code and the orchestrator reviews them.)
-5. 12-hour times accept uppercase ` AM`/` PM` with exactly one space only (ruling #34). Lowercase
+5. 12-hour times accept uppercase ` AM`/` PM` with exactly one space only after normalization (ruling #34, #47). Lowercase
    (`9:27 am`) and dotted (`9:27 a.m.`) are MALFORMED by this spec. Widen if a real page ever needs
    them (each extra spelling is another way to misread).
 6. (SETTLED AT BUILD, RULED #46: the `rubricVocabulary` list-of-objects descriptor for `decides` is
@@ -1184,8 +1205,9 @@ Name: **rubric**.
       green, `5:59 AM` red; `09:27 AM` (two-digit hour) = 09:27; a 12-hour BOUND `"9:00 PM"` parses to 21:00
       and `rubricSha` is stable under it.
     - Malformed times (never read as 24-hour): `0:30 AM`, `00:30 AM`, `13:05 PM`, `9:27 am`, `9:27 Am`,
-      `9:27AM`, `9:27 a.m.`, `9:27 p.m.`, `9:27  AM` (two spaces), `9:27 AMX`, `24:00`, `8:7`, `08:10:30` =
-      red `value-malformed`. `9:27 American` = the 24-hour 09:27 (the letters are a word, not the suffix).
+      `9:27AM`, `9:27 a.m.`, `9:27 p.m.`, `9:27 AMX`, `9:27 AMD`, `9:27:`, `24:00`, `8:7`, `08:10:30` =
+      red `value-malformed`. `9:27 American` = the 24-hour 09:27 (the letters are a word, not the suffix). `9:27  AM` (two spaces) and `9:27<tab>AM`
+      read `9:27 AM` = 09:27 after normalization (#47); `Total:` is no time (ignored).
       A 24-hour `00:30` and `23:59` are fine.
     - Presence (#35): `phrases ["Nonstop flight"]` on L = green; case-insensitive (`nonstop FLIGHT`)
       green; on a quote `1 stop with Delta` = red `phrase-missing` (`measured` `Nonstop flight`); on
@@ -1208,7 +1230,7 @@ Name: **rubric**.
       anchor `From ` = 1234 (red `value-over` against `lt 400`, green against `gt 1000`); `From 409 US
       dollars.` = red `value-over` (`measured` 409, `limit` 400); AT `From 400 US dollars` against `lt 400` =
       red, `From 399.99 US dollars` = green; trailing punctuation after the unit (`59 US dollars.`, `, `,
-      `)`) fine; unit missing (`From 59 dollars.`, `From 59.`, `From 59US dollars`, two spaces) = red
+      `)`) fine; unit missing (`From 59 dollars.`, `From 59.`, `From 59US dollars`) = red
       `value-none` carrying `anchor`; case is exact (`59 us dollars`, `59 US Dollars` = red `value-none`);
       `59 US dollarsX` = red `value-none`; unanchored `59 US dollars and 61 US dollars` = red `value-many`
       (both listed); unanchored line with `1 hr 40 min` and `0 checked bags` and one `59 US dollars` = 59
@@ -1402,3 +1424,4 @@ All RULED by hamr. Superseded entries are kept for the record.
 44. RULED (hamr, 2026-10-12): JUDGE-INTERNAL RETRY (bareloop 5b). The caller's judge function MAY retry internally (for example once on a transport failure or an HTTP 429) within `deadlineMs`. bareguard sees only the final answer or throw, counts it as one call, and still never retries a throw or a timeout itself (#19, #33 unchanged).
 45. RULED (hamr, 2026-10-12): NON-GATING JUDGED CHECKPOINTS (bareloop 5a; clarifies #39, which already allowed them). A non-gating checkpoint may hold judged checks: it records `soft-green` or `red` and returns the gaps (red gaps drive the worker's fix loop; §6 "Non-gating checkpoints record and return gaps/faults but never deny") but never denies. Only a GATING checkpoint holding a judged check must be `requiresHuman`. A rubric may put its single human ACCEPT at the final gating checkpoint (`accept: "later"` + `gate.recordAccept`).
 46. RULED (hamr, 2026-10-12): NAMES AND VOCABULARY DESCRIPTOR (settles open questions 4 and 6). The build settles the final names (`decides`, `valueKind`, `op`, `value`, `lo`, `hi`, `currency`, `unit`, `anchor`, `phrases`) and the `rubricVocabulary` list-of-objects descriptor for `decides` in code; the orchestrator reviews them. Open questions 1 and 2 stay open.
+47. RULED (hamr, 2026-10-12): WHITESPACE IS COLLAPSED FIRST, and the Module 1 build calls are accepted. `normalizeForQuote` collapses whitespace on the locate decide exactly as everywhere else, so "exactly one space" in the 12-hour and money `unit` grammars means one space AFTER normalization: `9:27  AM` and `59  US dollars` read as `9:27 AM` and `59 US dollars`, not malformed / ignored. Also accepted: a value-many decide's own value list is `values` (`valuesTotal`) because `items` is the `d<i>` list; uppercase `AM`/`PM` with letters glued on (`AMX`, `AMD`, `AMERICAN`) is malformed while a mixed-case word (`American`) is a word and exactly-two-letter `am`/`Am` is malformed; a bare `:` run with no digit (`Total:`) is ignored while `9:27:` / `8:7` are malformed; `measured`/`limit` are canonical strings; `direction` `below`/`above` for `lt`/`gt`; the per-read outcome for `agree` is the overall result plus per-decide kind and canonical extracted value; anchor occurrences are counted overlapping with a 1000 cap.
