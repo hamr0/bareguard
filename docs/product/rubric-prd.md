@@ -438,8 +438,10 @@ not among the quote's `#<i>:numbers:<tokens>`. The first failing reason ends tha
 gap `{kind:"unsupported", measured: <claims failing>, limit: <claims>, items: [...]}`, items clipped and
 bounded to 20 (`itemsTotal` when cut). Zero claims is `no-claims`; the work cap is `too-many`; a missing
 `opts.inputs[source]` or a sha256 mismatch is `stopped` `missing-measurement`. With no `decides` there is no
-claim value and no quote length bound. Everything above is unchanged when a `cited` check signs no
-`decides` (byte-for-byte; RULED #48).
+quote length bound and no claim value to bind. Everything above is unchanged when a `cited` check signs no
+`decides` and its claims carry no `values` (byte-for-byte; RULED #48). A claim that does carry `values` is red
+on such a check: `#<i>:d<j>:claim-value-unknown` for each key, or `#<i>:values:claim-value-malformed` when
+`values` is not a plain object (there is no decide to bind to).
 
 **The signed check and the claim.**
 
