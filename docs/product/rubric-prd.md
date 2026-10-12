@@ -8,7 +8,7 @@ status: draft
 
 Evidence, rationale and history: docs/logs/rubric-learnings.md.
 
-*Specs only. Nothing is built. No versions picked. Last updated 2026-10-12 (the `locate` judge and value decide, §5.2, rulings #30-#46). Every decision is
+*Specs only. Nothing is built wired into `checkStep` (the pure decide core exists in `src/primitives/rubric-locate.js`, not yet used by any rule). No versions picked. Last updated 2026-10-12 (PIVOT: the next build is `cited` + `decides` with a typed claim binding, §4.6, rulings #48-#55; the `locate` judge, §5.2, is PARKED). Every decision is
 RULED by hamr and listed in §12.*
 
 ## 0. In one paragraph
@@ -229,9 +229,9 @@ keys.
 | `in` / `notIn` | `field`, `values:[...]` | value `===` one of / none of |
 | `atMost` | `field`, `value`, `order:[...]` | ordered-enum rank <= value's |
 | `max` / `min` | `field`, `value` | finite number <= / >= |
-| `cited` | `claims` field, `source` input name | every claim's quote passes `quoteIn` against the frozen input AND `numbersInQuote` |
+| `cited` | `claims` field, `source` input name, `decides?:[...]` (the shared decide core, §5.2; RULED #48, not built) | every claim's quote passes `quoteIn` against the frozen input AND `numbersInQuote`; with `decides`, also every decide on that quote AND the claim's typed `values` equal the values extracted from the quote (§4.6) |
 | `complete` | `items:[...]` or `itemsFrom:"caller"`, `claims` field | every item is covered by a claim (§4.4) |
-| `judged` | `kind:"locate"\|"verdict"`, `ask`; for `locate`: `sources`, `decides:[...]` (each decide a value decide `valueKind`, `op`, `value` or `lo`+`hi`, `currency?` or `unit?`, `anchor?`, or a presence decide `phrases`) | see §5 and §5.2 (`locate` is the next build, RULED 2026-10-12; `verdict` follows it, §5.1) |
+| `judged` | `kind:"locate"\|"verdict"`, `ask`; for `locate`: `sources`, `decides:[...]` (each decide a value decide `valueKind`, `op`, `value` or `lo`+`hi`, `currency?` or `unit?`, `anchor?`, or a presence decide `phrases`) | see §5 and §5.2 (PARKED, RULED #50: `locate` is no longer the next build; the decide core it defined is shared with `cited`, §4.6) |
 
 **Forgiving defaults:**
 - **Word**: per line, strip a leading `/^#+\s*/`, split on `/\s+/`, count the non-empty tokens; the
@@ -339,6 +339,16 @@ must appear as a token in the quote (`8` does not match `2018`). `8x` is 8, `1.2
 50, `2 weeks` is 2. Number words are unchecked (documented gap). `1,200` vs `1200` is a false red
 (thousands separators are not stripped).
 
+**Known looseness (bareloop's $0 re-run on its real Google Flights page, 2026-10-12; RULED #52 keeps the
+helper unchanged).** It is a bag-of-tokens test, so it is too loose to be THE binding of a claim to a
+quote: a fake `7:00 AM` passes when the digits `7` and `00` occur anywhere else in the quote (a fake time
+with a true price would be green); `AM` vs `PM` is invisible (`9:27 PM` passes against `9:27 AM`); roles
+are invisible (a price of 40 passes against a duration of 40). It also gives FALSE reds on format
+differences: `09:27` vs `9:27 AM` (token `09` is not `9`), `59.00` vs `59`, `1,200` vs `1200`. Those
+false reds are acceptable (the worker's fix loop rewrites the claim text in the quote's format); the
+looseness is why `cited` with `decides` adds the typed binding of §4.6 and keeps `numbersInQuote` only as
+a second net on the free text.
+
 ### 4.3 Caller-measured rules
 
 bareguard never runs commands, reads git, or evaluates a user regex. The caller measures and
@@ -409,7 +419,134 @@ legitimate output is "nothing found" must still return a declared non-empty shap
 **Unknown rule**: construct-time throw naming the key; a post-construction swap to an invalid shape
 denies at the gate with `rubric.invalid` (the `<key>.invalid` family).
 
+### 4.6 `cited` with `decides` and the typed claim binding (RULED 2026-10-12, #48-#55; spec, not built)
+
+**Why (evidence, §5.2 "POC 2026-10-12").** A judge that points at a quote does not bind the quote to what
+the worker CLAIMS (a worker output naming a flight that is not on the page was green three times, because
+the judge quoted the nearest real line that passed the decides), and `numbersInQuote` alone is too loose to
+bind it (§4.2). So the WORKER grounds its own claims, quote and typed values together, and bareguard
+verifies deterministically. No model, no judge, no reads: the result is a plain `green` (no soft-green, no
+ACCEPT requirement; RULED #48).
+
+**Today (verified in `src/primitives/rubric.js`, `runCited`).** The rule table gives `cited` the fields
+`claims` (a field name), `source` (an input name, `ref: "input"`) and the universal `text`. A claim is an
+object whose OWN string properties `claim` and `quote` are read (anything else on it is ignored; `item`
+is read by `complete`). Per claim, in order: a missing or non-string `claim`/`quote` is item
+`#<i>:malformed`; a source over the 5 MB cap `#<i>:source-too-large`; an empty normalized quote
+`#<i>:empty-quote`; a quote not in the normalized source `#<i>:quote-not-found`; a number token of the claim
+not among the quote's `#<i>:numbers:<tokens>`. The first failing reason ends that claim. The check is one
+gap `{kind:"unsupported", measured: <claims failing>, limit: <claims>, items: [...]}`, items clipped and
+bounded to 20 (`itemsTotal` when cut). Zero claims is `no-claims`; the work cap is `too-many`; a missing
+`opts.inputs[source]` or a sha256 mismatch is `stopped` `missing-measurement`. There is no `decides`, no
+claim value and no quote length bound. Everything above is unchanged when a `cited` check signs no
+`decides` (byte-for-byte; RULED #48).
+
+**The signed check and the claim.**
+
+```js
+// check (signed): `decides` is optional; same decide shapes and limits as §5.2 (value or presence; <= 10)
+{ id: "flight-1", rule: "cited", claims: "claims", source: "offers",
+  decides: [
+    { valueKind: "money", unit: "US dollars", op: "lt", value: 400, anchor: "From " },                       // d0
+    { valueKind: "time", op: "between", lo: "06:00", hi: "21:00", anchor: "Leaves Los Angeles International Airport at " }, // d1
+    { phrases: ["Nonstop flight"] } ] }                                                                       // d2: no claim value
+
+// claim (the worker's output): { claim, quote } as today, plus `values`
+{ claim: "American nonstop, departs 9:27 AM, $59",
+  quote: "From 59 US dollars. Nonstop flight with American. ... Leaves Los Angeles International Airport at 9:27 AM on Thursday, November 12 ...",
+  values: { d0: "59", d1: "9:27 AM" } }
+```
+
+`decides` joins the `cited` descriptor in `rubricVocabulary` (RULED #46's list-of-decides descriptor, shared
+with the parked `judged`), is validated at `createRubric` exactly as §5.2 specifies (value XOR presence,
+`between` needs `lo`+`hi`, `money` signs exactly one of `currency`/`unit`, bounds parsed by the same parser,
+at most 10, the whole list in `rubricSha`). Every claim of the check must satisfy the whole list: a check
+whose claims are of different shapes is split into several `cited` checks over different `claims` fields.
+
+**Per claim, in this order** (a claim stops at its first QUOTE failure; once the quote is proven, every
+later step runs and ALL its reds are reported):
+
+1. **`quoteIn`** the quote against the frozen source (default substring mode), as today. A failure ends the
+   claim: no decide runs on an unproven quote, no binding is checked.
+2. **Quote length.** Only when the check signs `decides`: a normalized quote over 4000 characters is item
+   `#<i>:quote-too-long` (bounds the extraction work; the 4000 is the number §5.2 already carries). Without
+   `decides` there is no such bound, as today.
+3. **`decideQuote(quote, decides)`**: every decide on that ONE quote (co-location, RULED #36). Each red
+   decide is item `#<i>:d<j>:<kind>` (`j` = 0-based index in `decides`, `kind` as in §5.2: `anchor-missing`,
+   `value-none`, `value-many`, `value-over`, `phrase-missing`, ...).
+4. **The typed binding** (below).
+5. **`numbersInQuote(claim text, quote)`**, unchanged semantics, kept on the free text on purpose (RULED
+   #52): it catches a stray number in the text (item `#<i>:numbers:<tokens>`).
+
+**The typed binding (RULED #49).** For EVERY VALUE decide `d<j>` of the check, the claim must carry its own
+value in `claim.values["d<j>"]`, and that value must EQUAL the value the decide extracted from the quote.
+
+- **Key.** `values` is a plain object keyed by `d<j>`, `j` the decimal 0-based index of the decide in the
+  signed `decides` list (`d0`, `d1`, ... `d9`; no leading zeros, case-sensitive). The index form is used in
+  every gap item, so the worker's fix loop already speaks it; it adds no signed field and cannot collide.
+  A position is bound to its role by the signed order, so the worker cannot swap roles (a price into a
+  duration slot): the value in `d1` is compared with the value extracted by decide 1 only. (The alternative
+  of a signed per-decide `id` is open question 1.)
+- **Form of a claim value.** A bare STRING holding exactly one token of the decide's `valueKind` and nothing
+  else (after `normalizeForQuote`, so surrounding whitespace is fine; no sentence, no symbol, no unit):
+  `number` and `money`: the `number` grammar of §5.2 (`59`, `59.00`, `1,200`, `1200`, `0.5`; `number` may
+  carry a leading `-`, `money` may not; NO currency symbol and NO unit text, the decide's signed
+  `currency`/`unit` already defines the role, so `"$59"` and `"59 US dollars"` are malformed); `date`:
+  exactly one ISO `YYYY-MM-DD`; `time`: exactly one time token, 24-hour or `h:mm AM|PM` (`"9:27 AM"`,
+  `"09:27"`, `"21:27"`). It is parsed by the SAME grammar as the quote's value (a new pure function
+  `parseClaimValue(valueKind, raw)` in `rubric-locate.js`, built on the same readers, because
+  `parseBound` takes a JS number for `number`/`money`). A value that is not a string (a JSON number, `null`,
+  an object) is malformed (open question 2).
+- **Equality, exact and canonical.** Both sides are reduced to the canonical form of §5.2 (exact decimal
+  string for `number`/`money`, `YYYY-MM-DD` for `date`, minutes since midnight for `time`) and compared for
+  equality: `09:27` equals `9:27 AM`, `59` equals `59.00`, `1,200` equals `1200`, `-0` equals `0`, `9:27
+  PM` does NOT equal `9:27 AM`. The decide's `op`/bounds are NOT applied to the claim value; the quote's
+  value is what the decide judges, and the equality ties the claim to it.
+- **Reds** (each an item, all reported):
+  - `#<i>:d<j>:claim-value-missing`: a value decide with no `values["d<j>"]` (also when `values` is absent
+    or `{}`).
+  - `#<i>:d<j>:claim-value-malformed`: present but not parseable as that decide's kind (including a
+    non-string). `#<i>:values:claim-value-malformed`: `values` present but not a plain object (an array,
+    `null`, a string).
+  - `#<i>:d<j>:claim-value-mismatch:<claim>!=<quote>`: both canonical (display forms: decimal string,
+    `YYYY-MM-DD`, `HH:MM`; output-derived, each clipped to 120). Evaluated whenever the quote's decide
+    extracted a value (including a decide that is red on its op, e.g. `value-over`); not evaluated when
+    the extraction itself failed (the decide's own red already says so).
+  - `#<i>:<key>:claim-value-unknown`: a key of `values` that is not `d<j>` of a VALUE decide: a presence
+    decide's index, an index past the list, any other string, a duplicate-looking key (`D0`, `d00`).
+    `<key>` is output-derived, clipped to 120. This covers a claim carrying `values` against a check with
+    NO `decides` (every key is unknown; the claim is red, never silently ignored; open question 4).
+- **Presence decides need no claim value.** A check holding only presence decides takes claims without
+  `values`. **"No numbers = red" is NOT ported** (RULED #51): a number-free claim (`nonstop`) is fine; where
+  the fact matters, the spec author signs a presence decide for it.
+
+**Gap.** The kind and fields of the check's gap are unchanged: one gap per failing check,
+`{kind:"unsupported", measured: <claims with at least one red>, limit: <claims>, items}`, `key`
+`<checkpoint>:<id>`. `items` is the flat list of reds over all claims in claim order (within a claim: the
+decide reds in decide order, then the binding reds in decide order then unknown keys in the object's own
+key order, then `numbers`), clipped and bounded to 20 with `itemsTotal` when cut. The new reason words are
+the new "gap kinds": `claim-value-missing`, `claim-value-malformed`, `claim-value-mismatch`,
+`claim-value-unknown`, `quote-too-long`, plus the §5.2 decide kinds under a `d<j>:` prefix. An item is
+assembled from clipped output-derived parts (claim values, keys, quotes: 120) and UNCLIPPED signed parts,
+so a signed phrase in `#<i>:d<j>:phrase-missing:<phrase>` is never cut; anchors, bounds and units are not
+in items (the worker has the spec). `renderGaps` renders it as the default JSON row (no plain sentence).
+`decideQuote` runs once per distinct normalized quote (memoized; the claim values are then compared per
+claim), so the work stays inside the existing cap.
+
+**What this proves, and does not.** It proves that each claim comes with a quote that is verbatim in the
+frozen source, that every signed fact holds on that same quote, and that the values the worker DECLARED are
+the values on that quote, in the roles the spec names. A flight named in the output that is not on the
+page cannot pass: its declared time or price will not equal the nearest real line's. It does NOT prove the
+free text of the claim beyond its numbers (the carrier name, a prose adjective): a fact that matters is a
+presence decide or a typed value. It does NOT prove the worker picked the BEST option ("cheapest",
+"earliest", "N best"): that is the superlative check of §11 build step 3. The claim's source is one signed
+input today; pages registered mid-run (§5.3) are build step 2.
+
+**Not now (RULED #55).** One claim backed by TWO quotes from TWO sources (multi-source claims) is Later.
+
 ## 5. Judges
+
+> **PARKED (RULED 2026-10-12, #50).** The judge kinds below (`locate`, `verdict`), `reads`/`agree`, soft-green via a judge and calibration are not the next build; the design text is kept. The decide core of §5.2 is NOT parked: it ships first inside `cited` (§4.6). Any future `locate` judge REQUIRES an output-binding claim that uses the typed binding of §4.6 (RULED #53); it supersedes the earlier idea of `numbersInQuote` plus "no numbers = red".
 
 bareguard owns no model. The caller passes `judge` per call. Two kinds:
 
@@ -450,7 +587,7 @@ verb, is malformed = red. A quote a verdict judge does return is checked with `q
 forces a re-sign. It should grade each case `reads` times and require all N correct. An
 uncalibrated judge's soft-green is acceptable only because the final ACCEPT exists (§6).
 
-### 5.1 Using bareagent's jev as a verdict judge (Next, right after the `locate` build in §5.2)
+### 5.1 Using bareagent's jev as a verdict judge (PARKED, RULED #50; was Next, after the `locate` build)
 
 - **Structural only.** bareguard never names or calls jev; the caller passes a judge function.
   bareguard does not import bareagent and bareagent does not require bareguard.
@@ -469,7 +606,42 @@ uncalibrated judge's soft-green is acceptable only because the final ACCEPT exis
 - **Cost** flows through bareagent's `onLlmResult` / budget path.
 - **Who builds what:** bareguard = the verdict-judge slot in `checkStep`; bareagent = the adapter.
 
-### 5.2 The `locate` judge and the value decide (RULED 2026-10-12, #30-#33, revised by #34-#46 the same day from bareloop's real page; spec, not built)
+### 5.2 The decide core, shared by `cited` (now, §4.6) and the `locate` judge (PARKED) (RULED 2026-10-12, #30-#47; the core is built pure, nothing wires it yet)
+
+#### POC 2026-10-12 (why the plan changed; RULED #48)
+
+bareloop ran a POC with a real judge (DeepSeek `deepseek-flash`, pinned; 30 calls, about $0.01) on its real
+captured Google Flights page (LAX to SFO, 44 result lines) plus its CHANGELOG, against the pure core at
+commit 4fcca4a. Evidence, in the order it was gathered:
+
+- **$0 step, no model.** `decideQuote` on all 44 real lines with the E4 decides: 39 green, 5 red, and the 5
+  reds are exactly the departures after 21:00. The 12-hour parsing and the anchors are correct on real text.
+- **The judge pointed well.** Exactly one quote 30/30; the right line 24/24 where one exists; 0 malformed
+  replies. Once in 4 runs it quoted a card's child rows instead of the link line (red at `quoteIn`).
+- **But nothing bound the quote to the worker's claim.** A worker output naming a flight that is NOT on the
+  page (`United, departs 7:00 AM, $45`) was GREEN three times: the judge quoted the nearest real United
+  line, which passes the decides. A vague claim produced 3 different outcomes in 3 runs.
+- **`numbersInQuote` is too loose to be the binding.** A $0 re-run of cited-style checks (`quoteIn` +
+  `numbersInQuote` + `decideQuote`, hand-written claims, no model): the fake `7:00 AM` passed because the
+  digits `7` and `00` occur elsewhere in the line (a fake time with a true price would be green); AM/PM is
+  invisible (`9:27 PM` vs `9:27 AM` passes); roles are invisible (price 40 vs duration 40); and it gave
+  false reds on `09:27` vs `9:27 AM`, `59.00` vs `59`, `1,200` vs `1200`.
+
+**What changed.** The next build is `cited` + `decides` with a typed claim binding (§4.6), not the judge:
+the worker grounds its own claims and bareguard verifies deterministically (RULED #48-#52). The judge-call
+parts of this section (the `judged` check shape, "The judge call", "Per-read decide", `reads`/`agree`,
+soft-green, the foundational-check table) are PARKED but kept as written; the decide core below
+(shapes, anchors, extraction, per-kind grammar, exact comparison, canonical forms, decide gap kinds,
+examples E1-E4) is shared and is what `cited` uses first. Any future `locate` judge must also carry an
+output-binding claim built on the typed binding (RULED #53).
+
+**Reading guide.** LIVE and shared: "The signed check shape" (the decide table and the vocabulary
+conditionals only), "Extraction: shared rules", "Anchor", "Extraction: per value kind", "Exact comparison",
+"Canonical forms and the pure core", the decide gap kinds, examples E1-E4. PARKED: the `judged`/`locate` check
+wrapper and its fields, "The judge call", "Per-read decide" step 1, `reads`/`agree`, soft-green and ACCEPT
+wiring, "What this proves" of the judge, the foundational-check table. Where parked text says "the judged
+check", read it as "the check that holds the decides"; for `cited` that is §4.6.
+
 
 The first judge to build, and the only consumer that needs one is bareloop (fwd needs none; its PRD
 says "No LLM judge"). The shape: the judge only POINTS. It returns ONE quote per read and which signed
@@ -487,14 +659,17 @@ could belong to a different result. A check that decides several quotes separate
 are the same flight; a check that decides several facts on ONE quote can. So: one judged check = one
 claim = one quote per read = one list of decides, all of which must pass on that quote.
 
-**Today (verified in `src/primitives/rubric.js`).** `createRubric` refuses a `judged` rule as an
+**Today (verified in `src/primitives/rubric.js` and `src/primitives/rubric-locate.js`).** The pure decide core is BUILT in
+`rubric-locate.js` (`parseBound`, `extractValue`, `evalDecide`, `decideQuote`, `outcomeKey`) and is imported only by
+its own test (`test/rubric-locate-decide.test.js`): `rubric.js` does not use it, it is not exported from
+`src/index.js`, and `cited` has no `decides` yet (§4.6). `createRubric` refuses a `judged` rule as an
 unknown rule, and `checkStep` throws a `TypeError` when given a `judge` option. The spec keys
 `judge` (identity: `provider`, `model`, `cutoff?`, `band?`) and `reads` (integer >= 1) are already
 validated and already in `rubricSha`. `quoteIn` normalizes both sides with `normalizeForQuote` (strip
 `**` and `__`, collapse whitespace, trim) and tests substring containment; `numbersInQuote` tests a
 claim's number tokens against a quote's. `cited` reads its source from `opts.inputs[name]` and makes
 a missing text or a sha256 mismatch `stopped` (`missing-measurement`). The `Fault.kind` typedef does
-not list `judge-no-answer` yet (the PRD §6 list does). This section changes all of that.
+not list `judge-no-answer` yet (the PRD §6 list does). The judge parts of this section would change all of that and are PARKED; §4.6 changes only `cited`.
 
 #### The signed check shape
 
@@ -860,6 +1035,8 @@ null (`value-many`: its count and values)]]`: the canonical decimal string for `
 
 #### Open questions (for hamr; everything the rulings did not decide)
 
+These concern the PARKED judge. The open questions of the `cited` pivot are at the end of §4.6's rulings, §12 "Open questions after #55".
+
 1. `opts.judge` shape once `verdict` exists: a single function (this build) vs `{ locate, verdict }`.
    And whether the judge's `input` should include `output` (this spec passes `{ output, sources }`).
 2. `direction` gains `"below"` and `"above"` (strict `lt`/`gt`); the alternative is to give strict
@@ -874,7 +1051,9 @@ null (`value-many`: its count and values)]]`: the canonical decimal string for `
 6. (SETTLED AT BUILD, RULED #46: the `rubricVocabulary` list-of-objects descriptor for `decides` is
    settled in code and the orchestrator reviews it.)
 
-### 5.3 Search inputs registered mid-run (bareloop; Next, NOT built; first real page captured 2026-10-12, finding F1)
+### 5.3 Search inputs registered mid-run (bareloop; Next, build step 2 after `cited` + `decides`, NOT built, design next; first real page captured 2026-10-12, finding F1)
+
+**Why it is needed by the pivot (RULED #54).** bareloop's flight job must check the worker's quotes against the arbiter's frozen copy of the exact snapshot the worker saw. With `cited` (§4.6) the `source` of a claim names such a registered label instead of a pre-run input; the arbiter, never the worker, registers each snapshot (F1: one url may have several snapshots with different sha256).
 
 Not part of the locate build (RULED #31). bareloop's wish: the sources of a locate check are web
 pages found DURING the run (a search), not files frozen before it. Requirements captured so far, to
@@ -911,8 +1090,8 @@ be specified further as real pages come in (the first, bareloop's Google Flights
 
 | Verdict | Meaning | Gating checkpoint | Gap / fault | Counts toward `maxReds` |
 |---|---|---|---|---|
-| **green** | every check deterministic and green | allow | none | no |
-| **soft-green** | every check green, at least one involved a judge (carries a flag; built with the `locate` judge, §5.2) | allow only after ACCEPT, else deny | none | no |
+| **green** | every check deterministic and green (including `cited` with `decides` and the typed binding, §4.6: plain green, no ACCEPT requirement) | allow | none | no |
+| **soft-green** | every check green, at least one involved a judge (carries a flag; only a judge produces it, so it is PARKED with the `locate` judge, §5.2) | allow only after ACCEPT, else deny | none | no |
 | **red** | any check red | deny | gap to the worker | yes |
 | **stopped** | the instrument failed, not the work | deny | NO gap to the worker; a structured `fault` to the runner | no |
 
@@ -1089,7 +1268,7 @@ audit write failure still propagates.
 | exports | `createRubric(spec)`, `rubricSha(spec)`, `checkStep(rubric, checkpointId, output, opts)`, `quoteIn(quote, source)`, `numbersInQuote(claim, quote)`, `renderGaps(gaps)`, `rubricVocabulary` |
 | `rubricVocabulary` | frozen, machine-readable; lists every rule with its field names, types, required/optional, bounds (count fields integers >= 1, no max; string lists non-empty arrays of non-empty strings; no whitespace-only strings) and defaults (including `strict`); a drafting LLM reads it; every check description shown to anyone is GENERATED from it, never hand-written |
 | gate methods | `checkStep(checkpoint, output, opts)`, `drainGaps()`, `recordAccept({...})` (harness-only) |
-| config keys | `rubric: { spec, sha256, advanceOn }`; signed spec keys `onExhausted`, `maxReds`, `reads`, `requiresHuman`, per-checkpoint `accept`, per-check `id`, `text`, `strict`, `phrases`, `noneExit`, `expectExit`, `direction`, `baseline`, `patterns`, `allowPrefixes`, `requireNonEmpty`, `size`, `items`, `itemsFrom`; for `judged` (§5.2) `kind`, `ask`, `sources`, `decides`, and inside a decide `valueKind`, `op`, `value`, `lo`, `hi`, `currency`, `unit`, `anchor`, `phrases` |
+| config keys | `rubric: { spec, sha256, advanceOn }`; signed spec keys `onExhausted`, `maxReds`, `reads`, `requiresHuman`, per-checkpoint `accept`, per-check `id`, `text`, `strict`, `phrases`, `noneExit`, `expectExit`, `direction`, `baseline`, `patterns`, `allowPrefixes`, `requireNonEmpty`, `size`, `items`, `itemsFrom`; for `cited` (§4.6, RULED #48) `decides` and, inside a decide, the same fields as below; the claim shape `{claim, quote, values?}` with `values` keyed `d<j>` and the `cited` gap item reasons `claim-value-missing`, `claim-value-malformed`, `claim-value-mismatch`, `claim-value-unknown`, `quote-too-long` and `d<j>:<decide kind>`; for `judged` (PARKED, §5.2) `kind`, `ask`, `sources`, `decides`, and inside a decide `valueKind`, `op`, `value`, `lo`, `hi`, `currency`, `unit`, `anchor`, `phrases` |
 | rule strings | every rule in §4; deny rules `rubric.invalid`, `rubric.red`, `rubric.stopped`, `rubric.unminted`, `rubric.output-mismatch`, `rubric.exhausted`, `rubric.needs-accept` |
 | audit | phases `rubric` (`rubricSha`, `checkpoint`, `verdict`, `outputSha`, bounded `gaps` / `fault`), `rubric_baseline` (`baselineSource`), `rubric_accept`, `rubric_accept_refused` |
 | event | the `humanChannel` event gains `rubric: { rubricSha, checkpoint, outputSha, verdict, gaps }` on a `rubric.needs-accept` ask |
@@ -1176,7 +1355,18 @@ Name: **rubric**.
   sha, a blank `by`; verdicts, red counts, ACCEPTs and seed baselines survive a cold start with the same
   `runId`, and a different `runId` or a re-sign starts fresh; concurrent mint + advance keep audit order
   = decision order.
-- `locate` judge and value decide (RULED 2026-10-12, §5.2, revised by #34-#46). Every case below also
+- **`cited` + `decides` + typed claim binding (RULED 2026-10-12, §4.6, #48-#55; the NEXT build).** Every case also runs the falsify-by-revert of the source it exercises (reverting the equality compare must turn the fake-time case green; reverting the unknown-key rule must turn the swapped-key case green). The decide-level cases (extraction, anchors, 12-hour times, money `unit`, exact comparison, canonical forms) are the ones listed under the PARKED `locate` bullet below and in `test/rubric-locate-decide.test.js`; they are not repeated here. Fixture: bareloop's real captured Google Flights page as the `offers` input (44 result lines) and the E4 decides as `d0` money `unit "US dollars"` `lt 400` @`From `, `d1` time `between 06:00..21:00` @`Leaves Los Angeles International Airport at `, `d2` presence `["Nonstop flight"]`.
+  - Honest, whole page: each of the 44 real lines as a quote with true `values` (`d0`, `d1` read off the line) = 39 green, 5 red, the 5 reds exactly the after-21:00 departures (items `#<i>:d1:value-over`); the binding itself is green on all 44 (the claim values equal the extracted ones even where the decide is red).
+  - **Fake time, true price.** Claim `United, 7:00 AM, $59` over the real United line with `values {d0:"59", d1:"7:00 AM"}` = red `#0:d1:claim-value-mismatch:07:00!=<the line's time>`, while `numbersInQuote` ALONE is green on it (assert both, so the case proves the binding is what catches it). A fake price with a true time = red `#0:d0:claim-value-mismatch:45!=59`.
+  - Canonical equality: `values.d1` `"09:27"` over a quote reading `9:27 AM` = green; `"9:27 AM"` = green; `"21:27"` = red mismatch; `"9:27 PM"` = red mismatch (AM vs PM is no longer invisible); `values.d0` `"59.00"`, `"59"`, `"0059"` (malformed? leading zeros are digits of the `number` grammar, so it parses and equals 59; assert whichever the build ratifies, open question 2) over `59 US dollars`; `"1,200"` and `"1200"` over a `1,200 US dollars` quote (use `lt 5000`) = green; `"1,20"` = `claim-value-malformed`.
+  - Role swap is impossible: a check with two time decides (`d1` departure @`Leaves...`, `d2` arrival @`arrives at...`) and `values {d1: <arrival>, d2: <departure>}` = two mismatches; a check with a price decide and a duration decide that both read 40 cannot be confused (values are keyed by decide, not by number).
+  - Missing, malformed, unknown: no `values` on a check with value decides = `claim-value-missing` for each value decide; `values: {}` same; `values` an array / `null` / a string = `#0:values:claim-value-malformed`; `values.d1` = `"$59"`, `"59 US dollars"` (symbol/unit text), `"about 9:27"`, `"9:27 am"`, a JSON number, `null` = `claim-value-malformed`; extra keys `d3` (past the list), `d2` (a presence decide), `price`, `D0`, `d00` = `claim-value-unknown`; `values` on a `cited` check with NO `decides` = red (every key unknown), and the same claim without `values` is green exactly as before.
+  - Presence-only claims: a `cited` check whose decides are only `phrases ["Nonstop flight"]` accepts a claim `nonstop` with no `values` = green; a number-free claim text is never red (no "no numbers = red"); the phrase absent from the quote = red `#0:d0:phrase-missing:Nonstop flight` (phrase unclipped).
+  - Quote first: a paraphrased quote (one word changed) = red `#0:quote-not-found` ONLY: no decide item, no binding item (assert `decideQuote` never ran); an empty quote, a source over 5 MB, a malformed claim object keep today's items; a normalized quote of 4001 characters with `decides` signed = `#0:quote-too-long` (4000 AT = proceeds), and the same quote with NO `decides` is not bounded.
+  - Stray number: claim text `United $45` with `values {d0:"59",...}` over a quote with `59` = red `#0:numbers:45` (the typed value is right; the free text is wrong); claim text `59.00` against quote `59` = `numbers:59.00` false red (documented looseness, §4.2); all reds of one claim are listed together (a mismatch AND a stray number in one claim = two items).
+  - Unchanged behaviour with no `decides`: every existing `cited` test passes byte-for-byte (items, `measured`, `limit`, `no-claims`, `too-many`, `stopped`); `rubricSha` changes when `decides`, a decide field or the decide order changes; `createRubric` refuses `decides` that is empty, over 10, not an array, a decide that is value AND presence or neither, `between` with `value`, `money` with both or neither of `currency`/`unit`, a bad bound, naming the path; `rubricVocabulary` lists `decides` on `cited` with its conditions and the generated description matches.
+  - Verdict: a `cited` check with decides that passes is plain `green` (never `soft-green`), at a gating checkpoint it advances with no `requiresHuman`; reds are `red` with the gap in `drainGaps()`; a source sha mismatch is still `stopped`; the work cap still applies and `decideQuote` runs once per distinct normalized quote (spy).
+- PARKED: `locate` judge and value decide (RULED 2026-10-12, §5.2, revised by #34-#46; the decide-level cases are live, the judge-call cases are not built). Every case below also
   runs the falsify-by-revert of the source it exercises. Notation: `decides` entries are written
   `kind op bound @anchor`.
   - E1 (REAL bareloop CHANGELOG.md), `date gte 2026-10-01`, no anchor: quote `## [0.41.0] - 2026-10-12`
@@ -1317,9 +1507,11 @@ Name: **rubric**.
 | | What |
 |---|---|
 | **Day 1** | `quoteIn`, `numbersInQuote` · `rubricVocabulary` · `createRubric` / `rubricSha` · `checkStep` with all deterministic checks (shape rules incl. `blockLines` and `strict`, value rules, `complete`, `cited`, and the four borrowed shapes `commandExit` / `notWorse` / `patternAbsent` / `filesChanged`) · the four verdicts minus soft-green (green / red / stopped) · liveness proof · gating checkpoint + `outputSha` + `requiresHuman` · `drainGaps` · `renderGaps` · audit-backed state · `onExhausted: "fail"` |
-| **Next build (RULED 2026-10-12, spec §5.2)** | `locate` judge in `checkStep` (deadline, one retry on malformed only, clipped quote, foundational judge-quote checks) · the deterministic decides on ONE quote per read (value: `number` / `money` / `date` / `time` incl. 12-hour AM/PM, anchor, exactly-one; presence: `phrases`) · soft-green + ACCEPT fail-closed · `reads` / `agree`. Sources = the frozen signed `inputs` only |
-| Next, right after | `verdict` judge (jev, via a caller-passed adapter; quote optional, §5.1) |
-| Next, not built | search inputs registered mid-run (bareloop, §5.3); design pending a real captured page |
+| **Build order (RULED 2026-10-12, #48-#55)** | **(1) NEXT BUILD: `cited` + `decides` + typed claim binding (§4.6).** Wires the built pure core (`rubric-locate.js`) into `cited`: decides on the claim's quote, `values` keyed `d<j>` equal to the extracted values, `numbersInQuote` kept on the free text, plain green. Adds `parseClaimValue`, the new gap reasons, the `cited` `decides` descriptor and `rubricVocabulary`/primitives.json entries. Source = a frozen signed `inputs` entry |
+| Next, step 2 | search inputs registered mid-run (bareloop, §5.3): quotes checked against the arbiter's frozen copy of the exact snapshot the worker saw (F1: one url, several snapshots). Design next, NOT built |
+| Next, step 3 | SUPERLATIVES ("cheapest", "earliest", "N best"): a new deterministic aggregate check over the frozen source. For every line matching a signed selector (presence phrases plus anchors), extract the anchored value; the claim's value must be the minimum or maximum. The flight job's real ask is "cheapest nonstop in window". Design after step 2, NOT built |
+| PARKED (design kept, §5.1, §5.2) | the `locate` judge (judge call, `reads`/`agree`, soft-green + ACCEPT wiring), the `verdict` judge (jev), calibration. A future `locate` judge REQUIRES an output-binding claim using the typed binding (RULED #53) |
+| Later (noted) | multi-source claims: one claim backed by two quotes from two sources (RULED #55) |
 | Later | bareguard's own judge calibration (in the hash) · `onExhausted: "ask"` |
 | To try | **Needle** (https://github.com/cactus-compute/needle, `llms.txt`): a 29-121M-parameter on-device tool-calling/extraction model with grammar-constrained JSON (would cure the malformed-reply class) and a 0-1 confidence score (can never decide, Law 8). A candidate CALLER-side cheap `locate` judge; bareguard would verify its quotes. Its own docs say the base model fails 5 of 6 test suites, so it needs calibration first. Not built; try when a rubric job needs a cheap judge. |
 
@@ -1425,3 +1617,26 @@ All RULED by hamr. Superseded entries are kept for the record.
 45. RULED (hamr, 2026-10-12): NON-GATING JUDGED CHECKPOINTS (bareloop 5a; clarifies #39, which already allowed them). A non-gating checkpoint may hold judged checks: it records `soft-green` or `red` and returns the gaps (red gaps drive the worker's fix loop; §6 "Non-gating checkpoints record and return gaps/faults but never deny") but never denies. Only a GATING checkpoint holding a judged check must be `requiresHuman`. A rubric may put its single human ACCEPT at the final gating checkpoint (`accept: "later"` + `gate.recordAccept`).
 46. RULED (hamr, 2026-10-12): NAMES AND VOCABULARY DESCRIPTOR (settles open questions 4 and 6). The build settles the final names (`decides`, `valueKind`, `op`, `value`, `lo`, `hi`, `currency`, `unit`, `anchor`, `phrases`) and the `rubricVocabulary` list-of-objects descriptor for `decides` in code; the orchestrator reviews them. Open questions 1 and 2 stay open.
 47. RULED (hamr, 2026-10-12): WHITESPACE IS COLLAPSED FIRST, and the Module 1 build calls are accepted. `normalizeForQuote` collapses whitespace on the locate decide exactly as everywhere else, so "exactly one space" in the 12-hour and money `unit` grammars means one space AFTER normalization: `9:27  AM` and `59  US dollars` read as `9:27 AM` and `59 US dollars`, not malformed / ignored. Also accepted: a value-many decide's own value list is `values` (`valuesTotal`) because `items` is the `d<i>` list; uppercase `AM`/`PM` with letters glued on (`AMX`, `AMD`, `AMERICAN`) is malformed while a mixed-case word (`American`) is a word and exactly-two-letter `am`/`Am` is malformed; a bare `:` run with no digit (`Total:`) is ignored while `9:27:` / `8:7` are malformed; `measured`/`limit` are canonical strings; `direction` `below`/`above` for `lt`/`gt`; the per-read outcome for `agree` is the overall result plus per-decide kind and canonical extracted value; anchor occurrences are counted overlapping with a 1000 cap.
+
+**2026-10-12 (later; the pivot to `cited` + `decides`, from bareloop's POC, §5.2 "POC 2026-10-12")**
+
+Status of #30-#47: kept as history. Live and shared with `cited`: #32 (exactly one value, anchor), #34 (12-hour time), #35 (presence decide), #36 (co-location: all decides on ONE quote), #37 (confirmed defaults), #43 (money `unit`), #46 (names), #47 (whitespace and canonical forms). PARKED with the `locate` judge (design kept, not the next build): #30 and #31 as to the judge and `reads`, #33 (judge crash is `stopped`), #38 (`agree`), #39 (soft-green wiring), #40 (worst-case time), #44 (judge-internal retry), #45 (non-gating judged checkpoints). #31's "`verdict` judge comes next" is superseded by #50. #30's "build now the `locate` judge" is superseded by #48.
+
+48. RULED (hamr, 2026-10-12): PIVOT. The next build is `cited` + `decides`, NOT the `locate` judge. The WORKER grounds its own claims (quote and values); bareguard verifies them deterministically against the signed frozen source. The result is a plain `green`: no soft-green, no ACCEPT requirement, no reads, because every step is deterministic. Reason: bareloop's POC (30 real calls) showed the judge quotes well but nothing binds its quote to the worker's claim (a flight not on the page was green three times). Supersedes #30's "build now the `locate` judge".
+49. RULED (hamr, 2026-10-12): EXTEND `cited` (§4.6). A claim is `{claim, quote, values?}`; the check may sign `decides` (the same shapes and the same pure core as §5.2). Per claim: `quoteIn` -> `decideQuote` -> the TYPED BINDING -> `numbersInQuote` on the claim text. TYPED BINDING: for every VALUE decide the claim carries its value in `values` keyed to that decide, parsed with the same `valueKind` parser and compared for EXACT canonical equality with the value extracted from the quote (`09:27` = `9:27 AM`, `59` = `59.00`, `1,200` = `1200`, `9:27 PM` != `9:27 AM`). A missing value, an unparseable value or an unknown extra key is red. Presence decides need no claim value. Build choices made in the spec, for review (open questions 1-4): the key is the decide's index `d<j>`; a claim value is a bare string of one token of the kind; new gap reasons `claim-value-missing`, `claim-value-malformed`, `claim-value-mismatch`, `claim-value-unknown` under the unchanged gap kind `unsupported`.
+50. RULED (hamr, 2026-10-12): PARKED, with the design text kept: the `locate` judge (the judge-call parts of §5.2), `reads`/`agree`, calibration and the `verdict` judge (jev, §5.1). Supersedes #31's ordering ("`verdict` judge comes right after").
+51. RULED (hamr, 2026-10-12): "no numbers = red" is NOT ported to `cited`. A number-free claim (`nonstop`) is fine; a spec author adds a presence decide where the fact matters.
+52. RULED (hamr, 2026-10-12): KEEP `numbersInQuote` on the claim's free text as well as the typed binding (keep both). Its semantics are unchanged; its known looseness and false reds (`09:27` vs `9:27 AM`, `59.00` vs `59`, `1,200` vs `1200`) are documented in §4.2, and the worker's fix loop handles format mismatches.
+53. RULED (hamr, 2026-10-12): any future `locate` judge REQUIRES an output-binding claim that uses the typed binding of #49. This supersedes the earlier idea of binding with `numbersInQuote` plus "no numbers = red" (which the $0 re-run showed too loose).
+54. RULED (hamr, 2026-10-12): BUILD ORDER. (1) `cited` + `decides` + typed binding, this build. (2) §5.3 mid-run registered pages: bareloop's flight job needs quotes checked against the arbiter's frozen copy of the exact snapshot the worker saw (F1: one url may have several snapshots with different sha256); design next, NOT built. (3) SUPERLATIVES ("cheapest", "earliest", "N best"): a new deterministic aggregate check over the frozen source: for every line matching a signed selector (for example presence phrases plus anchors) extract the anchored value, and the claim's value must be the minimum or maximum; the flight job's real ask is "cheapest nonstop in window"; design after step 2. (4) PARKED: the judge work of #50.
+55. RULED (hamr, 2026-10-12): multi-source claims (one claim backed by two quotes from two sources) are Later; noted, not designed.
+
+**Open questions after #55** (for hamr; what the rulings did not decide; each has a spec default in §4.6 that the build follows unless changed):
+1. KEY SHAPE for `values`. Spec default: the decide's 0-based index `d<j>` (no new signed field, matches the gap items `d<j>:<kind>`, cannot collide; the cost is that reordering `decides` re-keys the claims, which is a re-sign anyway). Alternative: a signed per-decide `id` (safer against a reader mistaking positions, but adds a signed field, a uniqueness rule and a vocabulary entry to the decide shape shared with `judged`).
+2. CLAIM VALUE FORM. Spec default: a bare STRING holding exactly one token of the kind, no currency symbol or unit text (`"59"`, `"9:27 AM"`, `"2026-10-12"`), parsed by the same grammar, equality on the canonical form. Undecided inside it: whether a JSON NUMBER is accepted for `number`/`money` (spec default: malformed, a worker emitting `59` instead of `"59"` is red and fixes it); whether leading zeros (`"0059"`) are accepted (they are digits of the grammar and equal 59); whether `"$59"` or `"59 US dollars"` should be accepted and stripped of the decide's own symbol/unit (spec default: malformed).
+3. EXACT GAP NAMES. Spec default: the check's gap kind stays `unsupported`, with new item reasons `claim-value-missing`, `claim-value-malformed`, `claim-value-mismatch`, `claim-value-unknown`, `quote-too-long` and decide reds as `d<j>:<kind>`; item form `#<i>:d<j>:<reason>`, mismatch carries `:<claim>!=<quote>` canonical, unknown key is `#<i>:<key>:claim-value-unknown`. Alternative: promote the new reasons to the gap `kind` (first red wins, like a `locate` gap) and carry `measured`/`limit`/`anchor`/`direction` fields so the worker sees bounds without reading the spec.
+4. `values` on a claim of a `cited` check with NO `decides`. Spec default: red, every key is `claim-value-unknown` (never silently ignored). Alternative: ignore it, or refuse at `createRubric` any rubric whose spec cannot know (impossible: claims are output, not spec).
+5. `quote-too-long` (4000 normalized characters) applies to `cited` only when it signs `decides`, to keep today's `cited` byte-for-byte; the alternative is a bound for every `cited` check (tighter, but a behaviour change to a built rule).
+6. Mismatch evaluated when the decide is red on its OP but extracted a value (spec default: yes, so the worker sees both). Alternative: skip binding for a red decide.
+7. Whether a signed opt-out of `numbersInQuote` is wanted later for claim text that is prose; RULED #52 keeps it always on today.
+8. How superlatives (step 3) and mid-run sources (step 2) extend the claim: `source` naming a registered label (step 2), and a claim naming the aggregate it answers (step 3). Not designed.
