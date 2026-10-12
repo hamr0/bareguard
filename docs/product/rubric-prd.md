@@ -673,9 +673,9 @@ are the same flight; a check that decides several facts on ONE quote can. So: on
 claim = one quote per read = one list of decides, all of which must pass on that quote.
 
 **Today (verified in `src/primitives/rubric.js` and `src/primitives/rubric-locate.js`).** The pure decide core is BUILT in
-`rubric-locate.js` (`parseBound`, `extractValue`, `evalDecide`, `decideQuote`, `outcomeKey`) and is imported by `cited`
+`rubric-locate.js` (`parseBound`, `extractValue`, `evalDecide`, `decideQuote`) and is imported by `cited`
 in `rubric.js` (§4.6, built df699b9, unreleased) and by its own test (`test/rubric-locate-decide.test.js`); it is
-not exported from `src/index.js`, and no `judged` rule uses it (PARKED). `createRubric` refuses a `judged` rule as an
+not exported from `src/index.js`, and no `judged` rule uses it (PARKED; the per-read outcome comparator of §5.2 (#38) is not built, it belongs to the parked judge). `createRubric` refuses a `judged` rule as an
 unknown rule, and `checkStep` throws a `TypeError` when given a `judge` option. The spec keys
 `judge` (identity: `provider`, `model`, `cutoff?`, `band?`) and `reads` (integer >= 1) are already
 validated and already in `rubricSha`. `quoteIn` normalizes both sides with `normalizeForQuote` (strip

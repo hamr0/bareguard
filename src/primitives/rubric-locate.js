@@ -533,7 +533,7 @@ const DIRECTION = { lt: "below", lte: "at-most", gt: "above", gte: "at-least" };
  * Evaluate ONE decide on an already-normalized quote. Returns
  * `{ type: "value"|"presence", ok, kind?, ...gapFields, extracted? }`:
  * `extracted` (value decides) is the canonical comparable value when one was extracted (decimal string,
- * YYYY-MM-DD, or integer minutes) and is what `outcomeKey` compares across reads.
+ * YYYY-MM-DD, or integer minutes).
  */
 export function evalDecide(decide, text) {
   if (Array.isArray(decide.phrases)) return evalPresence(decide, text);
@@ -625,18 +625,4 @@ export function decideQuote(quote, decides) {
     ...(reds.length > MAX_ITEMS ? { itemsTotal: reds.length } : {}),
     results,
   };
-}
-
-/**
- * The comparable canonical outcome of ONE read (RULED #38): overall green/red plus, per decide in signed
- * order, its red kind (or "ok") and the extracted value in exact normalized form (null when none could be
- * extracted; value-many carries its count and listed values). Raw quotes are NOT part of it. Two reads agree
- * iff their keys are equal.
- */
-export function outcomeKey(decided) {
-  const per = (decided && Array.isArray(decided.results) ? decided.results : []).map((r) => {
-    const ext = r.extracted !== undefined ? r.extracted : r.kind === "value-many" ? { count: r.measured, items: r.items } : null;
-    return [r.type, r.ok ? "ok" : r.kind, ext];
-  });
-  return JSON.stringify([!!(decided && decided.ok), per]);
 }

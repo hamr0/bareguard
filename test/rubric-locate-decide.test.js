@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { decideQuote, evalDecide, extractValue, parseBound, outcomeKey } from "../src/primitives/rubric-locate.js";
+import { decideQuote, evalDecide, extractValue, parseBound } from "../src/primitives/rubric-locate.js";
 
 // The PURE decide core of the locate judge (docs/product/rubric-prd.md §5.2, §10). No judge, no gate.
 
@@ -324,21 +324,6 @@ test("hostile: pathological inputs, linear on 5 MiB", () => {
   // one huge number is still exact and bounded
   assert.equal(extractValue({ valueKind: "number" }, cases.digits).ok, true);
   assert.equal(one(cases.digits, val("number", "gt", 5)).ok, true);
-});
-
-test("outcomeKey: values and kinds, not quotes (#38)", () => {
-  const ds = [between("time", "06:00", "21:00", { anchor: "T " }), { phrases: ["Nonstop"] }];
-  const a = outcomeKey(decideQuote("Nonstop T 9:27 AM x", ds));
-  const b = outcomeKey(decideQuote("T 09:27 AM Nonstop y", ds));
-  assert.equal(a, b); // different quotes, same extracted values
-  assert.notEqual(a, outcomeKey(decideQuote("T 10:15 AM Nonstop", ds))); // both green, different value
-  assert.notEqual(a, outcomeKey(decideQuote("T 9:27 AM 1 stop", ds))); // presence differs
-  assert.notEqual(a, outcomeKey(decideQuote("T 9:27 PM Nonstop", ds))); // over vs green
-  // two reds with the same kinds and values do not disagree
-  assert.equal(outcomeKey(decideQuote("T 22:00 x", ds)), outcomeKey(decideQuote("y T 22:00", ds)));
-  // value-many carries its values
-  assert.notEqual(outcomeKey(decideQuote("1 2", [val("number", "lt", 5)])), outcomeKey(decideQuote("1 3", [val("number", "lt", 5)])));
-  assert.equal(typeof outcomeKey(null), "string");
 });
 
 test("evalDecide is pure: same input, same output", () => {
