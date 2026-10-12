@@ -393,6 +393,56 @@ export function parseBound(valueKind, raw) {
   return { ok: false };
 }
 
+/**
+ * Compare two already-parsed bounds (the internal `value` of `parseBound`) of one `valueKind`: -1, 0, 1.
+ * Used by `createRubric` to refuse `lo > hi`.
+ */
+export function compareBounds(valueKind, a, b) {
+  return cmpValues(valueKind, a, b);
+}
+
+/** Display form of a canonical comparable value (what `extracted` / `parseClaimValue().canon` hold): decimal, YYYY-MM-DD, HH:MM. */
+export function displayCanon(valueKind, canon) {
+  return valueKind === "time" ? timeToString(canon) : String(canon);
+}
+
+/**
+ * Parse the value a WORKER declared for a claim (docs/product/rubric-prd.md §4.6, RULED #49): a bare STRING
+ * holding exactly one token of the decide's `valueKind` and nothing else (surrounding whitespace is fine,
+ * after `normalizeForQuote`). Same grammar and readers as a value found in a quote:
+ * `number` an exact decimal (a leading `-` is allowed), `money` a non-negative decimal with NO currency
+ * symbol and NO unit text, `date` one ISO `YYYY-MM-DD`, `time` one 24-hour or `h:mm AM|PM` token.
+ * Returns `{ ok: true, canon }` (canon = the comparable form `evalDecide` reports as `extracted`) or
+ * `{ ok: false }`. A non-string (a JSON number, null, an object) is `{ ok: false }`. Never throws.
+ */
+export function parseClaimValue(valueKind, raw) {
+  try {
+    if (typeof raw !== "string") return { ok: false };
+    const text = normalizeForQuote(raw);
+    if (text === "") return { ok: false };
+    let r;
+    if (valueKind === "number") {
+      const s = text.charCodeAt(0) === 45 ? 1 : 0; // a sign is judged by the token reader
+      r = readNumber(text, s);
+      if (r.tok && !r.tok.mal && s + r.tok.raw.length !== text.length) return { ok: false }; // trailing "." / "," or more text
+    } else if (valueKind === "money") {
+      if (!isDigit(text.charCodeAt(0))) return { ok: false }; // "-5", "$59", " 59" are not a money value here
+      r = readNumber(text, 0);
+      if (r.tok && !r.tok.mal && r.tok.raw.length !== text.length) return { ok: false };
+    } else if (valueKind === "date") {
+      r = readDate(text, 0);
+    } else if (valueKind === "time") {
+      r = readTime(text, 0);
+    } else {
+      return { ok: false };
+    }
+    if (!r.tok || r.tok.mal || r.end !== text.length) return { ok: false };
+    return { ok: true, canon: canonOf(valueKind, r.tok.value) };
+  } catch {
+    return { ok: false };
+  }
+}
+
 // --- extraction -----------------------------------------------------------------
 
 /**

@@ -18,6 +18,7 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { resolveWithSymlinks, findSymlinkComponent, within, norm } from "./fs.js";
+import { parseBound, compareBounds, decideQuote, parseClaimValue, displayCanon } from "./rubric-locate.js";
 
 /**
  * @typedef {Object} Gap
@@ -28,7 +29,7 @@ import { resolveWithSymlinks, findSymlinkComponent, within, norm } from "./fs.js
  * @property {string} check the rule name
  * @property {string} id the check id
  * @property {string} [field]
- * @property {string} [kind]
+ * @property {string} [kind] for a `cited` check this stays "unsupported"; the reasons ride in `items` (`#<claim>:d<j>:<reason>`, §4.6)
  * @property {string|number} [measured]
  * @property {string|number} [limit]
  * @property {string} [direction]
@@ -42,6 +43,26 @@ import { resolveWithSymlinks, findSymlinkComponent, within, norm } from "./fs.js
  * @property {string[]} [keys] `allowedKeys` only: the output's own keys that are not allowed (insertion order, clipped, bounded)
  * @property {string[]} [allowed] `allowedKeys` only: the signed allowed keys (never clipped)
  *
+ * @typedef {Object} Decide
+ * One signed decide of a `cited` check (§4.6): a VALUE decide `{ valueKind, op, value | lo+hi, currency | unit (money), anchor? }`
+ * or a PRESENCE decide `{ phrases }`.
+ * @property {"number"|"money"|"date"|"time"} [valueKind]
+ * @property {"lt"|"lte"|"gt"|"gte"|"between"} [op]
+ * @property {number|string} [value] the bound: a number for `number`/`money`, a string for `date`/`time`
+ * @property {number|string} [lo]
+ * @property {number|string} [hi]
+ * @property {"$"|"€"|"£"} [currency]
+ * @property {string} [unit]
+ * @property {string} [anchor]
+ * @property {string[]} [phrases]
+ *
+ * @typedef {Object} Claim
+ * One claim of a `cited` check's output field: `{ claim, quote, values? }`. `values` (read only when the check signs
+ * `decides`; red otherwise) maps `"d<j>"` (j = the decide's 0-based index) to the claim's own bare-string value.
+ * @property {string} claim
+ * @property {string} quote
+ * @property {Object<string, string>} [values]
+ *
  * @typedef {Object} Fault
  * An instrument failure (`stopped`): for the runner, never the worker.
  * @property {string} key
@@ -54,6 +75,7 @@ import { resolveWithSymlinks, findSymlinkComponent, within, norm } from "./fs.js
  * One signed check: `{ id, rule, ...fields }` — the fields are listed per rule in `rubricVocabulary`.
  * @property {string} id
  * @property {string} rule
+ * @property {Decide[]} [decides] `cited` only: the signed decides every claim's quote must satisfy (§4.6)
  *
  * @typedef {Object} Rubric
  * A frozen, validated spec (the `createRubric` return value). Same shape as the spec.
@@ -79,6 +101,7 @@ const MAX_NAME_LEN = 128; // ids, checkpoint ids, field names (they land in keys
 const SOURCE_CAP_BYTES = 5 * 1024 * 1024; // PRD §4.2 / ruling 2026-10-06 #7
 const QUOTE_WORK_CAP = 128 * 1024 * 1024; // `cited`: distinct quotes x normalized source length (UTF-16 units) searched per check; over it = red too-many. Deterministic, never a clock (Law 8)
 const MAX_ITEMS = 20; // offender-list bound in a gap
+const QUOTE_MAX_CHARS = 4000; // `cited` with `decides`: a normalized quote over this is `quote-too-long` (bounds the extraction work; §4.6)
 const CLIP = 120; // a caller-MEASURED / output-derived string inside a gap (never a signed one)
 const MAX_SIGNED_LEN = 1000; // a signed name/phrase/value is refused past this at createRubric, so it rides a gap UNCLIPPED
 const FAULT_DETAIL_CLIP = 200;
@@ -209,6 +232,42 @@ const NONE_EXIT = { type: "integer", required: false };
 // `text` on EVERY check is the signer's explanation only (Law 6): optional, a string, never decides.
 const EXPLAIN = { type: "explanation", required: false };
 const DIRECTION = { type: "enum", required: true, enum: ["lower-is-better", "higher-is-better"] };
+
+// `decides` on `cited` (§4.6, RULED #46): a list of objects, each ONE of two shapes. The descriptor lists both shapes'
+// fields (same field descriptors as everywhere) plus the conditions between them; `describeRule` and the validator
+// are both driven by it, so neither can drift from the other.
+const MAX_DECIDES = 10;
+const DECIDE_BOUND = { type: "bound", required: false };
+const DECIDES = {
+  type: "decide-list",
+  required: false,
+  minItems: 1,
+  maxItems: MAX_DECIDES,
+  shapes: {
+    value: {
+      fields: {
+        valueKind: { type: "enum", required: true, enum: ["number", "money", "date", "time"] },
+        op: { type: "enum", required: true, enum: ["lt", "lte", "gt", "gte", "between"] },
+        value: DECIDE_BOUND,
+        lo: DECIDE_BOUND,
+        hi: DECIDE_BOUND,
+        currency: { type: "enum", required: false, enum: ["$", "€", "£"] },
+        unit: { type: "string", required: false, maxLength: 100 },
+        anchor: { type: "string", required: false, maxLength: MAX_SIGNED_LEN },
+      },
+      conditions: [
+        "between needs lo and hi (lo <= hi) and forbids value; the other ops need value and forbid lo and hi",
+        "a bound is a finite number for number/money, an ISO date string for date, a time string for time",
+        "money needs exactly one of currency or unit; currency and unit are refused on any other valueKind",
+      ],
+    },
+    presence: {
+      fields: { phrases: LIST },
+      conditions: ["a presence decide holds only phrases"],
+    },
+  },
+  conditions: ["each decide is exactly one shape (value or presence); a claim must carry a string in values.d<j> for every value decide j"],
+};
 
 const OK = Object.freeze({});
 
@@ -667,24 +726,100 @@ function runCited(ctx, c) {
     const limit = Math.floor(QUOTE_WORK_CAP / Math.max(src.length, 1));
     if (distinct.size > limit) return { gap: { kind: "too-many", measured: distinct.size, limit } };
   }
+  const decides = c.decides;
+  const hasDecides = Array.isArray(decides);
   const found = new Map(); // normalized quote -> found in src (identical quotes searched once; same verdict)
   const numSets = new Map(); // RAW quote -> its number-token Set (scanned once per distinct raw quote, not per claim)
-  const bad = [];
+  const decided = new Map(); // normalized quote -> decideQuote result (the decides run once per distinct quote; claim values are compared per claim)
+  const valueIdx = hasDecides ? decides.map((d, j) => (Array.isArray(d.phrases) ? -1 : j)).filter((j) => j >= 0) : [];
+  const valueKeys = new Set(valueIdx.map((j) => `d${j}`));
+  // Only the first MAX_ITEMS items are kept (the gap is bounded); `total` counts them all.
+  const items = [];
+  let total = 0;
+  let failed = 0;
+  const note = (it) => {
+    total++;
+    if (items.length < MAX_ITEMS) items.push(it);
+  };
   cl.claims.forEach((cc, i) => {
+    const before = total;
     const q = normQuotes[i];
-    if (q === undefined) return bad.push(`#${i}:malformed`);
-    if (tooBig) return bad.push(`#${i}:source-too-large`);
-    if (q === "") return bad.push(`#${i}:empty-quote`);
-    let hit = found.get(q);
-    if (hit === undefined) found.set(q, (hit = src.includes(q)));
-    if (!hit) return bad.push(`#${i}:quote-not-found`);
+    if (q === undefined) note(`#${i}:malformed`);
+    else if (tooBig) note(`#${i}:source-too-large`);
+    else if (q === "") note(`#${i}:empty-quote`);
+    else {
+      let hit = found.get(q);
+      if (hit === undefined) found.set(q, (hit = src.includes(q)));
+      if (!hit) note(`#${i}:quote-not-found`);
+      else if (hasDecides && q.length > QUOTE_MAX_CHARS) note(`#${i}:quote-too-long`);
+      else citedProven(cc, i, q);
+    }
+    if (total > before) failed++;
+  });
+
+  /** A claim whose quote is proven verbatim: the decides, the typed binding, then the claim text's numbers (all reported). */
+  function citedProven(cc, i, q) {
     const rawQuote = /** @type {string} */ (ownString(cc, "quote"));
+    if (hasDecides) {
+      let dq = decided.get(q);
+      if (dq === undefined) decided.set(q, (dq = decideQuote(rawQuote, decides)));
+      for (const r of dq.results) {
+        if (r.ok) continue;
+        note(`#${i}:d${r.index}:${r.kind}${r.kind === "phrase-missing" ? `:${r.measured}` : ""}`); // a signed phrase is never clipped
+      }
+      binding(cc, i, dq);
+    } else {
+      binding(cc, i, null);
+    }
     let have = numSets.get(rawQuote);
     if (have === undefined) numSets.set(rawQuote, (have = new Set(numberTokens(rawQuote))));
     const missing = missingNumbers(/** @type {string} */ (ownString(cc, "claim")), have);
-    if (missing.length > 0) return bad.push(`#${i}:numbers:${missing.join(",")}`);
-  });
-  return bad.length === 0 ? OK : red("unsupported", { measured: bad.length, limit: cl.claims.length, ...boundItems(bad) });
+    if (missing.length > 0) note(hasDecides ? `#${i}:numbers:${clip(missing.join(","))}` : clip(`#${i}:numbers:${missing.join(",")}`));
+  }
+
+  /** The typed claim binding (§4.6, RULED #49). `dq` is null when the check signs no decides (any `values` is then unknown). */
+  function binding(cc, i, dq) {
+    let values;
+    try {
+      values = Object.hasOwn(cc, "values") ? cc.values : undefined;
+    } catch {
+      return note(`#${i}:values:claim-value-malformed`);
+    }
+    if (values === undefined && valueIdx.length === 0) return;
+    if (values !== undefined && !isPlainObject(values)) return note(`#${i}:values:claim-value-malformed`);
+    for (const j of valueIdx) {
+      const key = `d${j}`;
+      let raw;
+      try {
+        if (values === undefined || !Object.hasOwn(values, key)) {
+          note(`#${i}:${key}:claim-value-missing`);
+          continue;
+        }
+        raw = values[key];
+      } catch {
+        note(`#${i}:${key}:claim-value-malformed`);
+        continue;
+      }
+      const kind = decides[j].valueKind;
+      const parsed = parseClaimValue(kind, raw);
+      if (!parsed.ok) {
+        note(`#${i}:${key}:claim-value-malformed`);
+        continue;
+      }
+      const ext = dq.results[j].extracted; // present whenever the quote yielded a value, even if the decide is red on its op (Q6)
+      if (ext !== undefined && String(ext) !== String(parsed.canon)) {
+        note(`#${i}:${key}:claim-value-mismatch:${clip(displayCanon(kind, parsed.canon))}!=${clip(displayCanon(kind, ext))}`);
+      }
+    }
+    if (values === undefined) return;
+    try {
+      for (const k of Object.keys(values)) if (!valueKeys.has(k)) note(`#${i}:${clip(k)}:claim-value-unknown`);
+    } catch {
+      note(`#${i}:values:claim-value-malformed`);
+    }
+  }
+
+  return total === 0 ? OK : red("unsupported", { measured: failed, limit: cl.claims.length, items, ...(total > MAX_ITEMS ? { itemsTotal: total } : {}) });
 }
 
 function runComplete(ctx, c) {
@@ -884,7 +1019,7 @@ const RULES = {
   max: { fields: { field: FIELD, value: { type: "number", required: true } }, run: runMaxMin("at-most") },
   min: { fields: { field: FIELD, value: { type: "number", required: true } }, run: runMaxMin("at-least") },
   cited: {
-    fields: { claims: FIELD, source: { type: "name", required: true, nonBlank: true, maxLength: MAX_NAME_LEN, ref: "input" } },
+    fields: { claims: FIELD, source: { type: "name", required: true, nonBlank: true, maxLength: MAX_NAME_LEN, ref: "input" }, decides: DECIDES },
     run: runCited,
   },
   complete: {
@@ -914,7 +1049,17 @@ for (const r of Object.values(RULES)) r.fields.text = EXPLAIN;
 
 // --- rubricVocabulary --------------------------------------------------------
 
+function describeShape(shape) {
+  return `{ ${Object.keys(shape.fields).map((n) => describeField(n, shape.fields[n])).join(", ")} }`;
+}
+
 function describeField(name, d) {
+  if (d.type === "decide-list") {
+    const shapes = Object.values(d.shapes).map(describeShape).join(" or ");
+    const conds = [...Object.values(d.shapes).flatMap((sh) => sh.conditions), ...d.conditions].join("; ");
+    return `${name}${d.required ? "" : "?"}: non-empty list (max ${d.maxItems}) of ${shapes} [${conds}]`;
+  }
+  if (d.type === "bound") return `${name}${d.required ? "" : "?"}: bound (number for number/money, string for date/time)`;
   if (d.type === "explanation") return `${name}?: string (the signer's explanation; never decides)`;
   let t = d.type === "string-list" ? `non-empty list of non-blank strings, each max ${d.itemMaxLength} chars` : d.type === "name" ? `non-blank string, max ${d.maxLength} chars` : d.type === "string" ? `non-blank string, max ${d.maxLength} chars` : d.type;
   if (d.type === "integer" && d.min !== undefined) t = `integer >= ${d.min}`;
@@ -997,13 +1142,60 @@ function checkKeys(o, allowed, where) {
   for (const k of Object.keys(o)) if (!allowed.includes(k)) throw fail(`${where}.${k}`, "is not a recognised field");
 }
 
+function isPlainObject(v) {
+  return v !== null && typeof v === "object" && !Array.isArray(v);
+}
+
+/** The `decides` list of a `cited` check (§4.6, §5.2). Every refusal names its path. Driven by the DECIDES descriptor. */
+function checkDecides(d, v, where) {
+  if (!Array.isArray(v) || v.length < d.minItems) throw fail(where, "must be a non-empty array of decide objects");
+  if (v.length > d.maxItems) throw fail(where, `must hold at most ${d.maxItems} decides`);
+  v.forEach((x, j) => {
+    const w = `${where}[${j}]`;
+    if (!isPlainObject(x)) throw fail(w, "must be an object");
+    const isPresence = Object.hasOwn(x, "phrases");
+    const shape = isPresence ? d.shapes.presence : d.shapes.value;
+    for (const k of Object.keys(x)) {
+      if (!Object.hasOwn(shape.fields, k)) {
+        throw fail(`${w}.${k}`, isPresence ? "is not allowed on a presence decide (it holds only phrases)" : "is not a recognised decide field");
+      }
+    }
+    if (isPresence) return checkValue(shape.fields.phrases, x.phrases, `${w}.phrases`);
+    const f = shape.fields;
+    for (const k of ["valueKind", "op"]) {
+      if (x[k] === undefined) throw fail(`${w}.${k}`, "is required (a decide is a value decide with valueKind and op, or a presence decide with phrases)");
+      checkValue(f[k], x[k], `${w}.${k}`);
+    }
+    const kind = x.valueKind;
+    const between = x.op === "between";
+    for (const k of ["value", "lo", "hi"]) {
+      const needed = k === "value" ? !between : between;
+      if (x[k] === undefined) {
+        if (needed) throw fail(`${w}.${k}`, between ? "is required with op between" : `is required with op ${x.op}`);
+        continue;
+      }
+      if (!needed) throw fail(`${w}.${k}`, between ? "is refused with op between (use lo and hi)" : `is refused with op ${x.op} (use value)`);
+      if (!parseBound(kind, x[k]).ok) throw fail(`${w}.${k}`, `is not a valid ${kind} bound (${kind === "number" || kind === "money" ? "a finite number with a plain decimal rendering" : kind === "date" ? "one real ISO date string YYYY-MM-DD" : 'one time string, 24-hour or "h:mm AM|PM"'})`);
+    }
+    if (between && compareBounds(kind, parseBound(kind, x.lo).value, parseBound(kind, x.hi).value) > 0) throw fail(`${w}.lo`, "must be <= hi (a wrap-around window is refused)");
+    if (kind === "money") {
+      if ((x.currency === undefined) === (x.unit === undefined)) throw fail(`${w}.currency`, "money needs exactly one of currency or unit");
+    } else {
+      for (const k of ["currency", "unit"]) if (x[k] !== undefined) throw fail(`${w}.${k}`, "is refused unless valueKind is money");
+    }
+    for (const k of ["currency", "unit", "anchor"]) if (x[k] !== undefined) checkValue(f[k], x[k], `${w}.${k}`);
+  });
+}
+
 function checkValue(d, v, where) {
   switch (d.type) {
+    case "decide-list":
+      return checkDecides(d, v, where);
     case "name":
       return checkName(v, where);
     case "string":
       if (blank(v)) throw fail(where, "must be a non-blank string");
-      if (v.length > MAX_SIGNED_LEN) throw fail(where, `must be at most ${MAX_SIGNED_LEN} characters`);
+      if (v.length > (d.maxLength ?? MAX_SIGNED_LEN)) throw fail(where, `must be at most ${d.maxLength ?? MAX_SIGNED_LEN} characters`);
       return;
     case "integer":
       if (!Number.isInteger(v) || (d.min !== undefined && v < d.min)) {
