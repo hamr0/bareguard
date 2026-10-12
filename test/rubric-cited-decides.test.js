@@ -179,6 +179,14 @@ test("stray number in the claim text is red via numbersInQuote, alongside the bi
   assert.deepEqual(items(dot), ["#0:numbers:59.00"]);
 });
 
+test("ruling #52: claim TEXT must spell numbers as the quote does; only values are canonicalized", async () => {
+  const ok = await runWith(REAL, E4, [claimOf(REAL, { d0: "59", d1: "09:27" }, "American nonstop, departs 9:27 AM, $59")]);
+  assert.equal(ok.verdict, "green", "text spelled like the quote, value spelled differently: green");
+  const bad = await runWith(REAL, E4, [claimOf(REAL, { d0: "59", d1: "9:27 AM" }, "American nonstop, departs 09:27, $59")]);
+  assert.equal(bad.verdict, "red");
+  assert.deepEqual(items(bad), ["#0:numbers:09"], "values canonicalize, the claim text does not: 09 is not in the quote");
+});
+
 test("mismatch is evaluated when the decide is red on its op but extracted a value (the worker sees both)", async () => {
   const fixed = [{ ...D0, value: 50 }, D1, D2]; // 59 is not < 50: value-over
   const r = await runWith(REAL, fixed, [claimOf(REAL, { d0: "58", d1: "9:27 AM" }, "x")]);
