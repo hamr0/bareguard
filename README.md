@@ -43,7 +43,7 @@ Both share one audit log of everything the agent tried, and the same hard caps (
 npm install bareguard
 ```
 
-Requires Node.js >= 20. One production dep: `proper-lockfile`. Ships with TypeScript types (generated from JSDoc) — `import { Gate, type GateConfig } from "bareguard"` works out of the box, no `@types` package needed.
+Requires Node.js >= 22. One production dep: `proper-lockfile`. Ships with TypeScript types (generated from JSDoc) — `import { Gate, type GateConfig } from "bareguard"` works out of the box, no `@types` package needed.
 
 ## Quick start
 
@@ -84,7 +84,7 @@ Small files, each readable in a sitting. The gate runs them in a fixed order (**
 - **Grade the work** — `rubric` checks word counts, headings, required phrases, quotes found in a frozen source (optionally with the price, time or date in each quote decided and bound to the claim), and caller-measured numbers, then gates the next step on green.
 - **Prove what happened** — `secrets` auto-redacts every audit line **by default**; one `audit` JSONL joins each request to its outcome and its approval.
 
-Full per-primitive reference lives in the **[Usage Guide](docs/product/usage-guide.md)** and **[Integration Guide](bareguard.context.md)**. Tested across Linux + macOS + Windows × Node 20 + 22.
+Full per-primitive reference lives in the **[Usage Guide](docs/product/usage-guide.md)** and **[Integration Guide](bareguard.context.md)**. Tested across Linux + macOS + Windows × Node 22 + 24.
 
 ## rwx and rwxmap
 

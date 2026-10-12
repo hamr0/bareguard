@@ -22,7 +22,7 @@ sources: [docs/archive/bareguard-prd.md]
 >   floor-vs-harness authorship split, the POC graduation gates (E1–E6), and the
 >   litectx integration bench. More conceptual and faster-moving than Part 1.
 >
-> **Owner:** hamr0 · **Language:** Node.js (ESM, Node 20 LTS+); ships `.d.ts`
+> **Owner:** hamr0 · **Language:** Node.js (ESM, Node 22 LTS+); ships `.d.ts`
 > generated from JSDoc. **One production dep:** `proper-lockfile`.
 > **Implementation status:** released on npm through 0.16.0; pre-1.0 on a deliberate
 > HOLD (Part 1 §19). **Supersedes** the separate `harness-prd.md` (folded in as
@@ -966,7 +966,7 @@ v0.1. (bareguard-prd.md:877-887)
 
 ## 18. Language & runtime
 
-**Node.js 20 LTS+, ESM only.**
+**Node.js 22 LTS+, ESM only.**
 
 - **Stdlib:** `fs/promises`, `path`, `crypto`, `process`, `events`, `os`.
 - **One allowed production dep: `proper-lockfile`** for the shared budget
