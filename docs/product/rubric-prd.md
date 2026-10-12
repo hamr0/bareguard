@@ -8,7 +8,7 @@ status: draft
 
 Evidence, rationale and history: docs/logs/rubric-learnings.md.
 
-*Specs only. Nothing is built. No versions picked. Last updated 2026-10-12 (the `locate` judge and value decide, §5.2, rulings #30-#41). Every decision is
+*Specs only. Nothing is built. No versions picked. Last updated 2026-10-12 (the `locate` judge and value decide, §5.2, rulings #30-#46). Every decision is
 RULED by hamr and listed in §12.*
 
 ## 0. In one paragraph
@@ -231,7 +231,7 @@ keys.
 | `max` / `min` | `field`, `value` | finite number <= / >= |
 | `cited` | `claims` field, `source` input name | every claim's quote passes `quoteIn` against the frozen input AND `numbersInQuote` |
 | `complete` | `items:[...]` or `itemsFrom:"caller"`, `claims` field | every item is covered by a claim (§4.4) |
-| `judged` | `kind:"locate"\|"verdict"`, `ask`; for `locate`: `sources`, `decides:[...]` (each decide a value decide `valueKind`, `op`, `value` or `lo`+`hi`, `currency?`, `anchor?`, or a presence decide `phrases`) | see §5 and §5.2 (`locate` is the next build, RULED 2026-10-12; `verdict` follows it, §5.1) |
+| `judged` | `kind:"locate"\|"verdict"`, `ask`; for `locate`: `sources`, `decides:[...]` (each decide a value decide `valueKind`, `op`, `value` or `lo`+`hi`, `currency?` or `unit?`, `anchor?`, or a presence decide `phrases`) | see §5 and §5.2 (`locate` is the next build, RULED 2026-10-12; `verdict` follows it, §5.1) |
 
 **Forgiving defaults:**
 - **Word**: per line, strip a leading `/^#+\s*/`, split on `/\s+/`, count the non-empty tokens; the
@@ -425,7 +425,9 @@ verb, is malformed = red. A quote a verdict judge does return is checked with `q
 **Call hygiene:**
 - `deadlineMs` is **required** whenever a judge is passed; missing = `checkStep` throws; at the gate,
   unset = deny. bareguard passes an `AbortSignal`.
-- A **timeout** (or transport error) is never retried: it is `stopped`.
+- A **timeout** (or transport error) is never retried by bareguard: it is `stopped`. The caller's judge
+  function MAY retry internally within `deadlineMs` (RULED 2026-10-12 #44); bareguard sees only the final
+  answer or throw.
 - A **malformed reply** gets exactly **one retry**, then red (`clean`). Never repair a reply.
 - Unpriced = red, never retried. "estimated" pricing counts as priced; only unpriced is red.
 - What the judge said is recorded in bounded form: the quote's start (clipped), its original length
@@ -467,7 +469,7 @@ uncalibrated judge's soft-green is acceptable only because the final ACCEPT exis
 - **Cost** flows through bareagent's `onLlmResult` / budget path.
 - **Who builds what:** bareguard = the verdict-judge slot in `checkStep`; bareagent = the adapter.
 
-### 5.2 The `locate` judge and the value decide (RULED 2026-10-12, #30-#33, revised by #34-#41 the same day from bareloop's real page; spec, not built)
+### 5.2 The `locate` judge and the value decide (RULED 2026-10-12, #30-#33, revised by #34-#46 the same day from bareloop's real page; spec, not built)
 
 The first judge to build, and the only consumer that needs one is bareloop (fwd needs none; its PRD
 says "No LLM judge"). The shape: the judge only POINTS. It returns ONE quote per read and which signed
@@ -506,10 +508,15 @@ not list `judge-no-answer` yet (the PRD §6 list does). This section changes all
     { valueKind: "time", op: "lte", value: "12:00", anchor: "arrives at San Francisco International Airport at " },
     { phrases: ["Nonstop flight"] } ] }
 
-// a money decide (symbol-only today, see ruling #37 and open question 3)
+// a money decide with a symbol (ruling #37)
 { id: "fare", rule: "judged", kind: "locate", ask: "Quote the line that states the total price.",
   sources: ["offers"],
   decides: [ { valueKind: "money", currency: "$", op: "lt", value: 400, anchor: "Total:" } ] }
+
+// a money decide with a unit instead of a symbol (ruling #43): matches `From 59 US dollars.`
+{ id: "price", rule: "judged", kind: "locate", ask: "Quote the result line (the link) for the cheapest nonstop flight.",
+  sources: ["offers"],
+  decides: [ { valueKind: "money", unit: "US dollars", op: "lt", value: 400, anchor: "From " } ] }
 
 // a single date decide on a file
 { id: "newest-release", rule: "judged", kind: "locate",
@@ -536,7 +543,8 @@ A decide is EXACTLY one of two shapes (a mix, or neither, is refused at `createR
 | `op` | `"lt"` \| `"lte"` \| `"gt"` \| `"gte"` \| `"between"` | refused | `value < bound`, `<=`, `>`, `>=`, or `lo <= value <= hi` (BOTH ends inclusive) |
 | `value` | number (`number`, `money`) or string (`date`, `time`) | refused | the bound; required unless `between`, refused with `between`. Parsed by the SAME parser as the quote's value, at `createRubric`; a bad bound is refused naming the path |
 | `lo`, `hi` | same type as `value` | refused | both required with `between`, refused otherwise; `lo <= hi` required (a wrap-around window such as 22:00-02:00 is refused) |
-| `currency` | `"$"` \| `"€"` \| `"£"` | refused | required with `money`, refused otherwise; the only symbol that counts as a money value |
+| `currency` | `"$"` \| `"€"` \| `"£"` | refused | with `money`: exactly one of `currency` or `unit` is required (XOR, RULED #43); refused otherwise. The only symbol that counts as a money value |
+| `unit` | non-blank string, max 100 characters | refused | with `money`: the signed unit text that follows the number (`"US dollars"`); XOR with `currency`; refused on any other `valueKind`; case-sensitive, exact as signed; never clipped in a gap |
 | `anchor` | signed non-blank string | refused | optional; see "Anchor"; max 1000 characters; never clipped in a gap |
 | `phrases` | refused | non-empty list of non-blank strings | the PRESENCE decide: every phrase must be a case-insensitive substring of the quote (the `mustCarry` rule, on the normalized quote) |
 
@@ -547,9 +555,9 @@ must have a plain decimal rendering (`String(n)` with no exponent); `1e21` is re
 holds any `judged` check must carry a non-null `spec.judge` identity (refused otherwise), and a
 GATING checkpoint holding one must be `requiresHuman` (refused otherwise, RULED #39, see "Soft-green").
 The vocabulary entry for `judged` is generated like every other rule (§9): it needs a new descriptor
-type for a list of nested decide objects (open question 6), the name list and enums, and documented
+type for a list of nested decide objects (the exact descriptor is settled at build, RULED #46), the name list and enums, and documented
 conditionals (a decide is value XOR presence; `between` requires `lo`+`hi` and forbids `value`; the
-other four ops require `value` and forbid `lo`/`hi`; `money` requires `currency`).
+other four ops require `value` and forbid `lo`/`hi`; `money` requires exactly one of `currency` or `unit`).
 
 #### The judge call
 
@@ -583,6 +591,10 @@ judge(input, check, { signal, identity }) -> { quotes: [{ source, quote }], fact
 - A normalized quote over 4000 characters is red `quote-too-long` (`measured` = length, `limit` =
   4000). The 20-quote cap of the first draft is gone: there is one quote. The 4000 stays because it
   still bounds the audit record and the extraction work (RULED #37).
+- **Judge-internal retry (RULED #44).** The caller's judge function MAY retry internally (for example
+  once on a transport failure or an HTTP 429) as long as it finishes within `deadlineMs`. bareguard sees
+  only the final answer or the final throw, counts it as one call, and still never retries a throw or a
+  timeout itself.
 - Cost is the caller's to report through the budget path (§7 Interactions); bareguard accrues nothing.
 - **Worst-case time (RULED #40).** The only time limit is the caller's per-call `deadlineMs`; there is
   no signed total wall. A judged check can therefore take up to `reads x 2 x deadlineMs` (each of the
@@ -660,11 +672,30 @@ else (`12,34`, `0.41.0`, `1.2.3`, `1,2`) is MALFORMED. The value is that decimal
 removed. A sign is as in the shared rules above (`-5` is negative; `2026-10` has no sign). `+` is ignored. Not interpreted: `%` scaling, `k`/`m`/`b` suffixes (malformed by adjacency), number
 words, exponent forms, a leading `.` (`.5`: the run starts at `5`, preceded by `.`, MALFORMED).
 
-**`money`.** The signed `currency` symbol, then immediately a numeric run with the `number` grammar,
-no sign, no space between (`$318.40`, `$1,234`, `€400`). Only tokens with that symbol count: a bare
-`1234`, or `€400` in a `$` check, is not a money value (`€400` is ignored, not malformed). A symbol
-not followed by a digit is ignored. Currency words and codes (`USD`) and a TRAILING symbol (`400 €`)
-are not read (RULED #37: symbol-only for now; open question 3). Fractional digits: any count >= 1; compared exactly.
+**`money`.** A money decide signs exactly ONE of `currency` or `unit` (RULED #43); the two are never
+mixed on one decide, and a check that needs both forms signs two decides.
+- **With `currency`** (the symbol form): the signed symbol, then immediately a numeric run with the
+  `number` grammar, no sign, no space between (`$318.40`, `$1,234`, `€400`). Only tokens with that symbol
+  count: a bare `1234`, or `€400` in a `$` check, is not a money value (`€400` is ignored, not
+  malformed). A symbol not followed by a digit is ignored. Currency codes (`USD`) and a TRAILING symbol
+  (`400 €`) are not read (RULED #37).
+- **With `unit`** (the unit form, RULED #43): a value is a numeric run (the `number` grammar, no sign)
+  immediately followed by exactly ONE space and then the signed `unit` text, matched exactly as signed
+  (case-sensitive, no case folding: `59 US dollars` matches `unit: "US dollars"`, `59 us dollars` and
+  `59 US Dollars` do not), and the unit text must NOT be followed by an ASCII letter (`59 US dollarsX` is
+  not a value). The numeric run is the value; the space and the unit are not part of it. Any other
+  character, or the end of the quote, may follow the unit (`From 59 US dollars.` is 59; so are `, `, `)`
+  and `;`). Thousands separators work as in the `number` grammar: `From 1,234 US dollars.` with anchor
+  `From ` is 1234. A number NOT followed by a single space plus the unit (`59 dollars`, `59US dollars`,
+  `59  US dollars` with two spaces, a bare `59`) is not a value of this decide: it is ignored, not
+  malformed. The shared adjacency rule still applies to the numeric run (`v59 US dollars`, `1.2k US
+  dollars` are malformed). Still exactly one value: unanchored, two matches are `value-many`, none are
+  `value-none`; still anchorable, with strict adjacency as for every other kind: the anchor, then (at
+  most whitespace skipped) the number, then one space and the unit (`From 59 US dollars` with anchor
+  `From ` reads 59; an anchor followed by a number that is not followed by the unit is `value-none`).
+  Only the matching token of the signed unit counts, so other numbers on the line (`1 hr 40 min`,
+  `0 checked bags included`) are never money values and never malformed.
+- Fractional digits: any count >= 1; compared exactly (as every `number` and `money` value).
 
 **`date`.** A candidate is a maximal run of `0-9` and `-`. Only a run of exactly the shape
 `dddd-dd-dd` is a date token; any other run is ignored (so `0.41.0`, a lone ` - `, `1234` are
@@ -766,7 +797,7 @@ fields, plus one new optional `anchor`:
 `direction` for the value gaps: `"at-most"` (`lte`, `between` `hi`), `"at-least"` (`gte`, `between`
 `lo`), plus two NEW values `"below"` (`lt`) and `"above"` (`gt`) because the existing two mean
 inclusive (open question 2). A `between` miss reports the end it crossed in `limit`. Signed values
-(`value`, `lo`, `hi`, `anchor`, `currency`, `phrases`) ride unclipped; the measured value and token are
+(`value`, `lo`, `hi`, `anchor`, `currency`, `unit`, `phrases`) ride unclipped; the measured value and token are
 output-derived, clipped to 120. The judge's quote itself is never in a gap or on an audit line whole:
 the `full` record and the audit hold, for the quote, `source`, the first 120 characters, the original
 length and the sha256 of the full quote (§5), plus `reads` and the number of calls made.
@@ -786,22 +817,25 @@ length and the sha256 of the full quote (§5), plus `reads` and the number of ca
   verbatim:
   `link "From 59 US dollars. Nonstop flight with American. Operated by SkyWest Airlines as American Eagle. Leaves Los Angeles International Airport at 9:27 AM on Thursday, November 12 and arrives at San Francisco International Airport at 11:07 AM on Thursday, November 12. Total duration 1 hr 40 min. 1 carry-on bag included. 0 checked bags included. Select flight"`
   Other real lines of the same page: `generic "Departure time: 9:27 AM."`, `StaticText "$59"`,
-  `generic "59 US dollars"`, `StaticText "Nonstop"`. With ONE quote (the link line) and `decides`:
-  1. `time` `between` `06:00`..`21:00`, anchor `Leaves Los Angeles International Airport at ` (= `...Airport at`):
+  `generic "59 US dollars"`, `StaticText "Nonstop"`. With ONE quote (the link line) the real all-pass
+  check is these `decides` (RULED #43):
+  1. money, `unit: "US dollars"`, `lt` 400, anchor `From `: after `From ` comes `59 US dollars`, the unit
+     follows the number after one space, value 59 < 400 = GREEN (`lt` 59 would be `value-over`; `From 409
+     US dollars.` is `value-over`).
+  2. `time` `between` `06:00`..`21:00`, anchor `Leaves Los Angeles International Airport at ` (= `...Airport at`):
      reads `9:27 AM` = 09:27 = GREEN. (The `11:07 AM` later in the line is not read: that is what the
      anchor is for. Unanchored, the line holds two times = `value-many`.)
-  2. `time` `lte` `12:00`, anchor `arrives at San Francisco International Airport at `: `11:07 AM` = 11:07
-     = GREEN (`lte` `11:00` would be `value-over`).
   3. presence `["Nonstop flight"]`: the phrase is in the quote = GREEN.
   All three pass on the same quote = a green `judged` check = soft-green at a `requiresHuman` checkpoint.
-  4. **Money on this line is RED, honestly.** `money` `$` `lt` `400`, anchor `From `: after `From` comes
-     `59 US dollars`, which is not a `$`/`€`/`£` money token, so `value-none` (carrying `anchor`); with no
-     anchor the line holds no money token either (`value-none`). The `$59` the page also shows is in
-     `StaticText "$59"`, a different line, so it is not on the quote. A check that signs this price
-     decide next to the three above is RED (`items` = `["d3:value-none"]`) until the money grammar is
-     widened (open question 3). Nothing is silently widened.
+  As an extra illustration only, a fourth decide `time` `lte` `12:00`, anchor `arrives at San Francisco
+  International Airport at `, reads `11:07 AM` = 11:07 = GREEN (`lte` `11:00` would be `value-over`).
+  **A SYMBOL-currency money decide on this line is still RED.** `money` `currency: "$"` `lt` `400`, anchor
+  `From `: after `From` comes `59 US dollars`, which is not a `$` money token, so `value-none` (carrying
+  `anchor`); with no anchor the line holds no `$` token either (`value-none`). The `$59` the page also
+  shows is in `StaticText "$59"`, a different line, so it is not on the quote. That is why a page that
+  states its price in words signs `unit`, not `currency`.
   The ruling that decides each of these: #34 (12-hour), #35 (presence), #36 (one quote, co-location),
-  #37 (money stays symbol-only).
+  #37 (symbol money), #43 (money `unit`).
 
 #### Open questions (for hamr; everything the rulings did not decide)
 
@@ -809,26 +843,15 @@ length and the sha256 of the full quote (§5), plus `reads` and the number of ca
    And whether the judge's `input` should include `output` (this spec passes `{ output, sources }`).
 2. `direction` gains `"below"` and `"above"` (strict `lt`/`gt`); the alternative is to give strict
    compares their own gap kinds. Also: the new optional gap field `anchor`, the new `judged` gap kinds
-   (including `phrase-missing`) and the `d<i>:<kind>` item form are SemVer-surface additions.
-3. Money without a symbol (for hamr and loop). Evidence, bareloop's real link line: `From 59 US
-   dollars.` has no `$`, so a money decide on it is red (E4 above); the page's `$59` is on a different
-   line. Option: allow a signed, opt-in `unit` on a money decide (for example `unit: "US dollars"`):
-   the value is the numeric run immediately BEFORE a single space and the signed unit text
-   (`59 US dollars`), still exact, still one value, still anchored; `currency` and `unit` would be
-   mutually exclusive. Loop's earlier answer was "`$59` is enough; codes NONE until a real page needs
-   it", and this page is the first that does. Not built; the grammar stays symbol-only until ruled.
-4. Names to confirm: `decides` (the list), `valueKind` (the extraction kind; `kind` is taken by
-   `locate`/`verdict`), `value` as the BOUND (it reuses the word `maxWords`/`max`/`min` already use, but
-   in a decide "the value" could be read as the extracted value), `op`, `lo`/`hi`, `anchor`. `phrases`
-   on a presence decide is case-insensitive like `mustCarry`; say if a presence decide should be
-   case-sensitive instead.
+   (including `phrase-missing`), the money `unit` field (#43) and the `d<i>:<kind>` item form are SemVer-surface additions.
+3. (SETTLED, RULED #43: money may sign `unit` instead of `currency`; see "Extraction: per value kind".)
+4. (SETTLED AT BUILD, RULED #46: the names `decides`, `valueKind`, `value` (the bound), `op`, `lo`/`hi`,
+   `anchor`, `phrases`, `unit` are settled in code and the orchestrator reviews them.)
 5. 12-hour times accept uppercase ` AM`/` PM` with exactly one space only (ruling #34). Lowercase
    (`9:27 am`) and dotted (`9:27 a.m.`) are MALFORMED by this spec. Widen if a real page ever needs
    them (each extra spelling is another way to misread).
-6. The `rubricVocabulary` descriptor language has no list-of-objects type today, and `decides` needs
-   one (with the value-XOR-presence and `between` conditionals inside it). Is a new nested descriptor
-   the way, or should a decide be flattened into parallel top-level lists (worse: the decides must stay
-   together)? This is a generator/vocabulary change, not a primitives-generator change.
+6. (SETTLED AT BUILD, RULED #46: the `rubricVocabulary` list-of-objects descriptor for `decides` is
+   settled in code and the orchestrator reviews it.)
 
 ### 5.3 Search inputs registered mid-run (bareloop; Next, NOT built; first real page captured 2026-10-12, finding F1)
 
@@ -1045,7 +1068,7 @@ audit write failure still propagates.
 | exports | `createRubric(spec)`, `rubricSha(spec)`, `checkStep(rubric, checkpointId, output, opts)`, `quoteIn(quote, source)`, `numbersInQuote(claim, quote)`, `renderGaps(gaps)`, `rubricVocabulary` |
 | `rubricVocabulary` | frozen, machine-readable; lists every rule with its field names, types, required/optional, bounds (count fields integers >= 1, no max; string lists non-empty arrays of non-empty strings; no whitespace-only strings) and defaults (including `strict`); a drafting LLM reads it; every check description shown to anyone is GENERATED from it, never hand-written |
 | gate methods | `checkStep(checkpoint, output, opts)`, `drainGaps()`, `recordAccept({...})` (harness-only) |
-| config keys | `rubric: { spec, sha256, advanceOn }`; signed spec keys `onExhausted`, `maxReds`, `reads`, `requiresHuman`, per-checkpoint `accept`, per-check `id`, `text`, `strict`, `phrases`, `noneExit`, `expectExit`, `direction`, `baseline`, `patterns`, `allowPrefixes`, `requireNonEmpty`, `size`, `items`, `itemsFrom`; for `judged` (§5.2) `kind`, `ask`, `sources`, `decides`, and inside a decide `valueKind`, `op`, `value`, `lo`, `hi`, `currency`, `anchor`, `phrases` |
+| config keys | `rubric: { spec, sha256, advanceOn }`; signed spec keys `onExhausted`, `maxReds`, `reads`, `requiresHuman`, per-checkpoint `accept`, per-check `id`, `text`, `strict`, `phrases`, `noneExit`, `expectExit`, `direction`, `baseline`, `patterns`, `allowPrefixes`, `requireNonEmpty`, `size`, `items`, `itemsFrom`; for `judged` (§5.2) `kind`, `ask`, `sources`, `decides`, and inside a decide `valueKind`, `op`, `value`, `lo`, `hi`, `currency`, `unit`, `anchor`, `phrases` |
 | rule strings | every rule in §4; deny rules `rubric.invalid`, `rubric.red`, `rubric.stopped`, `rubric.unminted`, `rubric.output-mismatch`, `rubric.exhausted`, `rubric.needs-accept` |
 | audit | phases `rubric` (`rubricSha`, `checkpoint`, `verdict`, `outputSha`, bounded `gaps` / `fault`), `rubric_baseline` (`baselineSource`), `rubric_accept`, `rubric_accept_refused` |
 | event | the `humanChannel` event gains `rubric: { rubricSha, checkpoint, outputSha, verdict, gaps }` on a `rubric.needs-accept` ask |
@@ -1132,7 +1155,7 @@ Name: **rubric**.
   sha, a blank `by`; verdicts, red counts, ACCEPTs and seed baselines survive a cold start with the same
   `runId`, and a different `runId` or a re-sign starts fresh; concurrent mint + advance keep audit order
   = decision order.
-- `locate` judge and value decide (RULED 2026-10-12, §5.2, revised by #34-#41). Every case below also
+- `locate` judge and value decide (RULED 2026-10-12, §5.2, revised by #34-#46). Every case below also
   runs the falsify-by-revert of the source it exercises. Notation: `decides` entries are written
   `kind op bound @anchor`.
   - E1 (REAL bareloop CHANGELOG.md), `date gte 2026-10-01`, no anchor: quote `## [0.41.0] - 2026-10-12`
@@ -1174,12 +1197,25 @@ Name: **rubric**.
       11:00` on the arrival = red `value-over` (`items` `["d1:value-over"]`, `measured` 11:07, `limit`
       11:00), the other two decides still evaluated. Same check with a flight whose presence fails and
       whose time fails = both in `items`, `kind` of the FIRST (`d0`), in signed order.
-    - **Money is symbol-only (#37).** Adding `money $ lt 400 @"From "` to the check on L = red `value-none`
-      carrying `anchor` `From ` (`59 US dollars` is not a money token), so the whole check is red
-      (`items` `["d3:value-none"]`) even though the other decides pass. The same money decide with no anchor
-      on L = red `value-none`. On `StaticText "$59"` it would be 59, but that line is not the quote.
-      `generic "59 US dollars"` = red `value-none`. The pre-widening behaviour is locked here so a later
-      `unit` ruling shows up as a deliberate test change.
+    - **Symbol money does not read words (#37).** Adding `money currency $ lt 400 @"From "` to the check
+      on L = red `value-none` carrying `anchor` `From ` (`59 US dollars` is not a `$` token), so the whole
+      check is red (`items` `["d3:value-none"]`) even though the other decides pass. The same symbol decide
+      with no anchor on L = red `value-none`. On `StaticText "$59"` it would be 59, but that line is not the
+      quote. `generic "59 US dollars"` with a symbol decide = red `value-none`.
+    - **Money `unit` (#43).** The real all-pass check on L: `money unit "US dollars" lt 400 @"From "`,
+      `time between 06:00..21:00 @"Leaves Los Angeles International Airport at "`, `phrases ["Nonstop flight"]`
+      = green judged check = `soft-green`. Plus: `From 59 US dollars.` = 59 green; `From 1,234 US dollars.`
+      anchor `From ` = 1234 (red `value-over` against `lt 400`, green against `gt 1000`); `From 409 US
+      dollars.` = red `value-over` (`measured` 409, `limit` 400); AT `From 400 US dollars` against `lt 400` =
+      red, `From 399.99 US dollars` = green; trailing punctuation after the unit (`59 US dollars.`, `, `,
+      `)`) fine; unit missing (`From 59 dollars.`, `From 59.`, `From 59US dollars`, two spaces) = red
+      `value-none` carrying `anchor`; case is exact (`59 us dollars`, `59 US Dollars` = red `value-none`);
+      `59 US dollarsX` = red `value-none`; unanchored `59 US dollars and 61 US dollars` = red `value-many`
+      (both listed); unanchored line with `1 hr 40 min` and `0 checked bags` and one `59 US dollars` = 59
+      (the other numbers are not money values); `v59 US dollars` = red `value-malformed`; `-59 US dollars` =
+      red `value-malformed`. `currency` and `unit` both signed on one decide, neither signed on `money`, and
+      `unit` on a `number` / `date` / `time` decide, a blank `unit`, a non-string `unit`, a `unit` over 100
+      characters are each refused at `createRubric` naming the path. Changing the `unit` changes `rubricSha`.
     - **One quote per read (#36).** The judge returns two quotes (L and `StaticText "$59"`) = red
       `too-many` (`measured` 2, `limit` 1), NO retry, nothing decided on either (assert the decides never
       ran); zero quotes = red `no-quotes`; one quote with the right `source` = proceeds. A judge that
@@ -1219,6 +1255,18 @@ Name: **rubric**.
     `measured` 2, `limit` 3, the per-read reds only in `full`); one read `stopped` = the whole check
     `stopped`; the audit record says 3 reads and the number of calls (with a malformed retry, 4); `reads`
     absent = one call.
+  - Judge-internal retry (#44): a judge function that fails once internally and answers on its own second
+    attempt within `deadlineMs` = bareguard sees one call and one answer (assert call count 1 on bareguard's
+    side); a judge that throws after its own retries = `stopped` `judge-no-answer`, bareguard makes no
+    second call; a judge still working past `deadlineMs` is aborted and is `stopped`.
+  - Non-gating judged checkpoints (#45): a non-gating checkpoint holding a judged check that passes records
+    `soft-green` and never denies; one whose judged check is red records `red`, RETURNS the gap(s)
+    (`drainGaps()` carries them, so the worker's fix loop runs) and never denies; a judged check `stopped`
+    at a non-gating checkpoint is recorded and never denies; a non-gating judged checkpoint is NOT
+    required to be `requiresHuman` (createRubric accepts it); a GATING one that is not `requiresHuman` is
+    still refused; a rubric with the single `requiresHuman` accept at the FINAL gating checkpoint
+    (`accept: "later"` + `gate.recordAccept`) accepts that gate's `outputSha` and the earlier non-gating
+    soft-greens need no ACCEPT.
   - Soft-green (#39): all-green with a judged check = `soft-green`, never `green`, no gap, not counted
     toward `maxReds`; the advance is denied `rubric.needs-accept` until an ACCEPT for the `outputSha`; live
     ask and `accept: "later"` + `recordAccept` both work on a soft-green; a gating checkpoint with a
@@ -1350,3 +1398,7 @@ All RULED by hamr. Superseded entries are kept for the record.
 40. RULED (hamr, 2026-10-12): the only time limit is the caller's per-call `deadlineMs`; no signed total wall. The documented worst case is `reads x 2 x deadlineMs` per judged check (§5.2).
 41. RULED (hamr, 2026-10-12): names. Plain names consistent with the existing vocabulary. Check: `kind`, `ask`, `sources`, `decides`, `text`. Value decide: `valueKind`, `op` (`lt|lte|gt|gte|between`), `value` (the bound; the word `maxWords`/`max`/`min` use), `lo`, `hi`, `currency`, `anchor`. Presence decide: `phrases`. Gap `direction` is unchanged (open question 2 on `below`/`above`). Unsure names are in the open list (question 4).
 42. RULED (hamr, 2026-10-12): §5.3 finding F1 from bareloop's real page: the first snapshot after `goto` can be empty (results load later), so one URL may be registered several times with different sha256; the mid-run design must expect that. Still NOT built.
+43. RULED (hamr, 2026-10-12): MONEY `unit` (resolves open question 3). A `money` decide signs exactly one of `currency` or `unit` (XOR; both or neither is refused at `createRubric`). `unit` is a non-empty string (for example `"US dollars"`), matched exactly as signed (case-sensitive, no folding). With `unit`, a value is the `number` grammar run immediately before exactly one space plus the unit text (the unit not followed by an ASCII letter); still exactly one value, still anchorable with strict adjacency (anchor, then the number, then one space and the unit). Thousands separators work (`From 1,234 US dollars.` with anchor `From ` is 1234); trailing punctuation after the unit is fine; a number not followed by one space plus the unit is not a value of this decide (ignored, so `value-none` when no other match). Real example, bareloop's captured Google Flights link line: `From 59 US dollars. Nonstop flight with American. ...` with anchor `From `, `unit: "US dollars"`, `lt` 400 is 59 = green. E4 is rewritten around it; the symbol-currency decide on that line stays red `value-none`. `unit` joins the SemVer-surface additions (open question 2).
+44. RULED (hamr, 2026-10-12): JUDGE-INTERNAL RETRY (bareloop 5b). The caller's judge function MAY retry internally (for example once on a transport failure or an HTTP 429) within `deadlineMs`. bareguard sees only the final answer or throw, counts it as one call, and still never retries a throw or a timeout itself (#19, #33 unchanged).
+45. RULED (hamr, 2026-10-12): NON-GATING JUDGED CHECKPOINTS (bareloop 5a; clarifies #39, which already allowed them). A non-gating checkpoint may hold judged checks: it records `soft-green` or `red` and returns the gaps (red gaps drive the worker's fix loop; §6 "Non-gating checkpoints record and return gaps/faults but never deny") but never denies. Only a GATING checkpoint holding a judged check must be `requiresHuman`. A rubric may put its single human ACCEPT at the final gating checkpoint (`accept: "later"` + `gate.recordAccept`).
+46. RULED (hamr, 2026-10-12): NAMES AND VOCABULARY DESCRIPTOR (settles open questions 4 and 6). The build settles the final names (`decides`, `valueKind`, `op`, `value`, `lo`, `hi`, `currency`, `unit`, `anchor`, `phrases`) and the `rubricVocabulary` list-of-objects descriptor for `decides` in code; the orchestrator reviews them. Open questions 1 and 2 stay open.
