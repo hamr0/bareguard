@@ -280,50 +280,38 @@ test("hostile: non-string quote, never throws", () => {
   assert.equal(extractValue({ valueKind: "number" }, undefined).ok, false);
 });
 
-test("hostile: pathological inputs, linear on 5 MiB", () => {
-  const MiB5 = 5 * 1024 * 1024;
-  const cases = {
-    digits: "7".repeat(MiB5),
-    commas: "1,".repeat(MiB5 / 2),
-    dotsdigits: "1.".repeat(MiB5 / 2),
-    anchors: "Total: ".repeat(MiB5 / 7),
-    numbers: "1 ".repeat(MiB5 / 2),
-    times: "12:05 AM ".repeat(Math.floor(MiB5 / 9)),
-    dates: "2026-10-12 ".repeat(Math.floor(MiB5 / 11)),
-    money: "$1,234.50 ".repeat(Math.floor(MiB5 / 10)),
-    units: "5 US dollars ".repeat(Math.floor(MiB5 / 13)),
-    dashes: "-".repeat(MiB5),
-    colons: ":".repeat(MiB5),
-    mixed: "09:27 AM 1.2k $5USD (5) -5 −5 a.m. ".repeat(Math.floor(MiB5 / 36)),
-  };
+// The 5 MiB timing version of this lives in bench/rubric-locate.bench.mjs (`npm run bench:rubric`); the default
+// suite keeps a small one that still guards linearity (16 KiB -> 64 KiB must not blow up).
+test("hostile: pathological inputs, never throw, linear 16 KiB -> 64 KiB", () => {
+  const cases = (n) => ({
+    digits: "7".repeat(n),
+    commas: "1,".repeat(n / 2),
+    dotsdigits: "1.".repeat(n / 2),
+    anchors: "Total: ".repeat(Math.floor(n / 7)),
+    numbers: "1 ".repeat(n / 2),
+    times: "12:05 AM ".repeat(Math.floor(n / 9)),
+    dates: "2026-10-12 ".repeat(Math.floor(n / 11)),
+    money: "$1,234.50 ".repeat(Math.floor(n / 10)),
+    units: "5 US dollars ".repeat(Math.floor(n / 13)),
+    dashes: "-".repeat(n),
+    colons: ":".repeat(n),
+    mixed: "09:27 AM 1.2k $5USD (5) -5 \u22125 a.m. ".repeat(Math.floor(n / 36)),
+  });
   const decs = [
     val("number", "lt", 5), money("lt", 5), val("money", "lt", 5, { unit: "US dollars" }), val("date", "gte", "2026-01-01"), val("time", "lt", "12:00"),
     val("number", "lt", 5, { anchor: "Total:" }), val("time", "lt", "12:00", { anchor: "Total: " }), { phrases: ["zzz"] },
   ];
-  let worst = 0;
-  const t0 = process.hrtime.bigint();
-  for (const [name, q] of Object.entries(cases)) {
-    for (const d of decs) {
-      const t1 = process.hrtime.bigint();
-      const r = decideQuote(q, [d]);
-      const ms = Number(process.hrtime.bigint() - t1) / 1e6;
-      worst = Math.max(worst, ms);
-      assert.equal(typeof r.ok, "boolean", `${name}`);
-      assert.ok(ms < 30000, `${name} ${JSON.stringify(d)} took ${ms}ms`); // includes the existing normalizeForQuote
-    }
-  }
-  console.log(`# 5 MiB decide: worst single decide ${worst.toFixed(0)} ms, total ${(Number(process.hrtime.bigint() - t0) / 1e6).toFixed(0)} ms`);
-  // extraction alone (no normalize) is linear: 5x the input costs well under 15x the time
-  const tm = (q) => { const t1 = process.hrtime.bigint(); extractValue({ valueKind: "time" }, q); extractValue({ valueKind: "number" }, q); extractValue(money("lt", 1), q); return Number(process.hrtime.bigint() - t1) / 1e6; };
-  const unit = "09:27 AM $5 12 2026-10-12 ";
-  tm(unit.repeat(1000)); // warm up
-  const small = tm(unit.repeat(MiB5 / 5 / unit.length | 0));
-  const large = tm(unit.repeat(MiB5 / unit.length | 0));
-  console.log(`# extraction only: 1 MiB ${small.toFixed(0)} ms, 5 MiB ${large.toFixed(0)} ms`);
-  assert.ok(large < 10000 && large < small * 15 + 50, `not linear: ${small} -> ${large}`);
-  // one huge number is still exact and bounded
-  assert.equal(extractValue({ valueKind: "number" }, cases.digits).ok, true);
-  assert.equal(one(cases.digits, val("number", "gt", 5)).ok, true);
+  const run = (n) => {
+    const t = process.hrtime.bigint();
+    for (const [name, q] of Object.entries(cases(n))) for (const d of decs) assert.equal(typeof decideQuote(q, [d]).ok, "boolean", name);
+    return Number(process.hrtime.bigint() - t) / 1e6;
+  };
+  run(4096); // warm up
+  const small = run(16 * 1024);
+  const large = run(64 * 1024);
+  // 4x the input; linear = ~4x. A generous 40x + 100 ms floor still fails a quadratic (16x per 4x, plus its constant) blow-up on the heavy cases.
+  assert.ok(large < small * 40 + 100, `not linear: ${small} ms -> ${large} ms`);
+  assert.equal(one("7".repeat(64 * 1024), val("number", "gt", 5)).ok, true);
 });
 
 test("evalDecide is pure: same input, same output", () => {

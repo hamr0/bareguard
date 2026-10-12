@@ -38,6 +38,7 @@
     "prepublishOnly": "npm run build:primitives && npm run build:types",
     "build:primitives": "node scripts/gen-primitives.mjs",
     "check:primitives": "node scripts/gen-primitives.mjs --check",
+    "bench:rubric": "node bench/rubric-locate.bench.mjs",
     "check:lockfile": "node scripts/check-lockfile.mjs"
   },
   "dependencies": {
