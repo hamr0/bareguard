@@ -309,7 +309,8 @@ test("hostile: pathological inputs, never throw, linear 16 KiB -> 64 KiB", () =>
   run(4096); // warm up
   const small = run(16 * 1024);
   const large = run(64 * 1024);
-  // 4x the input; linear = ~4x. A generous 40x + 100 ms floor still fails a quadratic (16x per 4x, plus its constant) blow-up on the heavy cases.
+  // Loose catastrophic-blow-up guard (ReDoS class), kept loose on purpose to avoid wall-time flakiness on slow CI; it does NOT catch plain
+  // quadratic growth (fixed overhead dominates at 16/64 KiB). The real scaling check is the opt-in 5 MiB bench: `npm run bench:rubric`.
   assert.ok(large < small * 40 + 100, `not linear: ${small} ms -> ${large} ms`);
   assert.equal(one("7".repeat(64 * 1024), val("number", "gt", 5)).ok, true);
 });
