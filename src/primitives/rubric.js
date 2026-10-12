@@ -18,7 +18,7 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { resolveWithSymlinks, findSymlinkComponent, within, norm } from "./fs.js";
-import { parseBound, compareBounds, decideQuote, parseClaimValue, displayCanon } from "./rubric-locate.js";
+import { parseBound, compareBounds, decideQuote, parseClaimValue, displayCanon, parseClaimText, textPresent, textAfter } from "./rubric-locate.js";
 
 /**
  * @typedef {Object} Gap
@@ -44,10 +44,11 @@ import { parseBound, compareBounds, decideQuote, parseClaimValue, displayCanon }
  * @property {string[]} [allowed] `allowedKeys` only: the signed allowed keys (never clipped)
  *
  * @typedef {Object} Decide
- * One signed decide of a `cited` check (§4.6): a VALUE decide `{ valueKind, op, value | lo+hi, currency | unit (money), anchor? }`
- * or a PRESENCE decide `{ phrases }`.
- * @property {"number"|"money"|"date"|"time"} [valueKind]
- * @property {"lt"|"lte"|"gt"|"gte"|"between"} [op]
+ * One signed decide of a `cited` check (§4.6): a VALUE decide `{ valueKind, op?, value | lo+hi, currency | unit (money), anchor? }`
+ * (without `op` it is bind-only: no `value`/`lo`/`hi`, and without an `anchor` the claim value must equal one of the
+ * quote's values), a TEXT decide `{ valueKind: "text", anchor? }` (bind-only), or a PRESENCE decide `{ phrases }`.
+ * @property {"number"|"money"|"date"|"time"|"text"} [valueKind]
+ * @property {"lt"|"lte"|"gt"|"gte"|"between"} [op] optional on a `cited` value decide (omit it for a bind-only decide)
  * @property {number|string} [value] the bound: a number for `number`/`money`, a string for `date`/`time`
  * @property {number|string} [lo]
  * @property {number|string} [hi]
@@ -246,8 +247,8 @@ const DECIDES = {
   shapes: {
     value: {
       fields: {
-        valueKind: { type: "enum", required: true, enum: ["number", "money", "date", "time"] },
-        op: { type: "enum", required: true, enum: ["lt", "lte", "gt", "gte", "between"] },
+        valueKind: { type: "enum", required: true, enum: ["number", "money", "date", "time", "text"] },
+        op: { type: "enum", required: false, enum: ["lt", "lte", "gt", "gte", "between"] },
         value: DECIDE_BOUND,
         lo: DECIDE_BOUND,
         hi: DECIDE_BOUND,
@@ -255,9 +256,12 @@ const DECIDES = {
         unit: { type: "string", required: false, maxLength: 100 },
         anchor: { type: "string", required: false, maxLength: MAX_SIGNED_LEN },
       },
+      // valueKind "text" holds only these fields (bind only); the validator refuses every other field of this shape on it
+      textFields: ["valueKind", "anchor"],
       conditions: [
-        "between needs lo and hi (lo <= hi) and forbids value; the other ops need value and forbid lo and hi",
-        "a bound is a finite number for number/money, an ISO date string for date, a time string for time",
+        "op may be omitted (a bind-only decide: then value, lo and hi are refused, and without an anchor the claim value must equal one of the quote's values)",
+        "an op decide: between needs lo and hi (lo <= hi) and forbids value; the other ops need value and forbid lo and hi",
+        "valueKind text is bind-only: it refuses op, value, lo, hi, currency and unit, and the claim value is a non-empty string of at most 200 characters",
         "money needs exactly one of currency or unit; currency and unit are refused on any other valueKind",
       ],
     },
@@ -266,7 +270,7 @@ const DECIDES = {
       conditions: ["a presence decide holds only phrases"],
     },
   },
-  conditions: ["each decide is exactly one shape (value or presence); a claim must carry a string in values.d<j> for every value decide j"],
+  conditions: ["each decide is exactly one shape (value or presence); a claim must carry a string in values.d<j> for every value decide, any valueKind, with or without op, text included; j indexes the whole decides list"],
 };
 
 const OK = Object.freeze({});
@@ -767,9 +771,9 @@ function runCited(ctx, c) {
         if (r.ok) continue;
         note(`#${i}:d${r.index}:${r.kind}${r.kind === "phrase-missing" ? `:${r.measured}` : ""}`); // a signed phrase is never clipped
       }
-      binding(cc, i, dq);
+      binding(cc, i, dq, q);
     } else {
-      binding(cc, i, null);
+      binding(cc, i, null, q);
     }
     let have = numSets.get(rawQuote);
     if (have === undefined) numSets.set(rawQuote, (have = new Set(numberTokens(rawQuote))));
@@ -777,8 +781,8 @@ function runCited(ctx, c) {
     if (missing.length > 0) note(hasDecides ? `#${i}:numbers:${clip(missing.join(","))}` : clip(`#${i}:numbers:${missing.join(",")}`));
   }
 
-  /** The typed claim binding (§4.6, RULED #49). `dq` is null when the check signs no decides (any `values` is then unknown). */
-  function binding(cc, i, dq) {
+  /** The typed claim binding (§4.6, RULED #49, #56, #58). `dq` is null when the check signs no decides (any `values` is then unknown); `q` is the normalized quote. */
+  function binding(cc, i, dq, q) {
     let values;
     try {
       values = Object.hasOwn(cc, "values") ? cc.values : undefined;
@@ -801,12 +805,40 @@ function runCited(ctx, c) {
         continue;
       }
       const kind = decides[j].valueKind;
+      const res = dq.results[j];
+      if (kind === "text") {
+        const t = parseClaimText(raw);
+        if (!t.ok) {
+          note(`#${i}:${key}:claim-value-malformed`);
+          continue;
+        }
+        if (!res.ok) continue; // the decide's own red (anchor-missing / anchor-ambiguous) already says so
+        const folded = t.text.toLowerCase();
+        let found;
+        if (decides[j].anchor === undefined) {
+          dq.folded ??= q.toLowerCase(); // folded once per distinct quote
+          found = textPresent(dq.folded, folded);
+        } else {
+          found = textAfter(q, res.textFrom, folded);
+        }
+        if (!found) note(`#${i}:${key}:claim-value-absent:${clip(t.text)}`);
+        continue;
+      }
       const parsed = parseClaimValue(kind, raw);
       if (!parsed.ok) {
         note(`#${i}:${key}:claim-value-malformed`);
         continue;
       }
-      const ext = dq.results[j].extracted; // present whenever the quote yielded a value, even if the decide is red on its op (Q6)
+      if (res.members !== undefined) {
+        // bind-only without an anchor: membership. The claim must equal ONE of the quote's values (all of them are checked;
+        // only the displayed list is bounded to MAX_ITEMS).
+        if (!res.members.has(String(parsed.canon))) {
+          const more = res.total > res.shown.length ? `,...(${res.total} in all)` : "";
+          note(`#${i}:${key}:claim-value-mismatch:${clip(displayCanon(kind, parsed.canon))}!=${res.shown.join(",")}${more}`);
+        }
+        continue;
+      }
+      const ext = res.extracted; // present whenever the quote yielded a value, even if the decide is red on its op (Q6)
       if (ext !== undefined && String(ext) !== String(parsed.canon)) {
         note(`#${i}:${key}:claim-value-mismatch:${clip(displayCanon(kind, parsed.canon))}!=${clip(displayCanon(kind, ext))}`);
       }
@@ -1164,12 +1196,26 @@ function checkDecides(d, v, where) {
     if (isPresence) return checkValue(shape.fields.phrases, x.phrases, `${w}.phrases`);
     const f = shape.fields;
     for (const k of ["valueKind", "op"]) {
-      if (x[k] === undefined) throw fail(`${w}.${k}`, "is required (a decide is a value decide with valueKind and op, or a presence decide with phrases)");
+      if (x[k] === undefined) {
+        if (!f[k].required) continue;
+        throw fail(`${w}.${k}`, "is required (a decide is a value decide with valueKind, or a presence decide with phrases)");
+      }
       checkValue(f[k], x[k], `${w}.${k}`);
     }
     const kind = x.valueKind;
+    if (kind === "text") {
+      for (const k of Object.keys(f)) {
+        if (!shape.textFields.includes(k) && x[k] !== undefined) throw fail(`${w}.${k}`, "is refused on a text decide (text is bind-only: only valueKind and anchor)");
+      }
+      if (x.anchor !== undefined) checkValue(f.anchor, x.anchor, `${w}.anchor`);
+      return;
+    }
     const between = x.op === "between";
     for (const k of ["value", "lo", "hi"]) {
+      if (x.op === undefined) {
+        if (x[k] !== undefined) throw fail(`${w}.${k}`, "is refused on a bind-only decide (sign an op, or drop the bound)");
+        continue;
+      }
       const needed = k === "value" ? !between : between;
       if (x[k] === undefined) {
         if (needed) throw fail(`${w}.${k}`, between ? "is required with op between" : `is required with op ${x.op}`);

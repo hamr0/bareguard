@@ -443,6 +443,70 @@ export function parseClaimValue(valueKind, raw) {
   }
 }
 
+// --- text (RULED #58) -----------------------------------------------------------
+
+/** Longest `text` claim value, in UTF-16 code units, counted after normalization. */
+export const TEXT_MAX = 200;
+
+const WORD_CP = /^[\p{L}\p{M}\p{Nd}]$/u; // ONE code point is tested at a time: a fixed class, linear, never built from input
+const isWordCp = (cp) => WORD_CP.test(String.fromCodePoint(cp));
+const isHigh = (c) => c >= 0xd800 && c <= 0xdbff;
+const isLow = (c) => c >= 0xdc00 && c <= 0xdfff;
+
+/** True when a match starting at `i` in `t` has a whole-token boundary before it (start, or not a letter / mark / digit). */
+function boundaryBefore(t, i) {
+  if (i === 0) return true;
+  const u = t.charCodeAt(i - 1);
+  if (isHigh(u) && isLow(t.charCodeAt(i))) return false; // the match would start inside a surrogate pair
+  const cp = isLow(u) && i >= 2 && isHigh(t.charCodeAt(i - 2)) ? t.codePointAt(i - 2) : u;
+  return !isWordCp(cp);
+}
+
+/** True when a match ending at `e` (exclusive) in `t` has a whole-token boundary after it (end, or not a letter / mark / digit). */
+function boundaryAfter(t, e) {
+  if (e >= t.length) return true;
+  if (isHigh(t.charCodeAt(e - 1)) && isLow(t.charCodeAt(e))) return false; // the match would end inside a surrogate pair
+  return !isWordCp(t.codePointAt(e));
+}
+
+/**
+ * Normalize a worker's `text` value: trim, collapse every whitespace run to one space. Returns
+ * `{ ok: true, text }` (case kept, for the gap item) or `{ ok: false, text: "" }` for a non-string, an empty or
+ * whitespace-only string, or one longer than TEXT_MAX after normalization (`text` is "" then). Never throws.
+ * @returns {{ ok: boolean, text: string }}
+ */
+export function parseClaimText(raw) {
+  try {
+    if (typeof raw !== "string") return { ok: false, text: "" };
+    const text = raw.replace(/\s+/g, " ").trim();
+    if (text === "" || text.length > TEXT_MAX) return { ok: false, text: "" };
+    return { ok: true, text };
+  } catch {
+    return { ok: false, text: "" };
+  }
+}
+
+/**
+ * Unanchored `text` presence: is the folded value in the folded quote as a whole-token sequence? One qualifying
+ * occurrence is enough. Both arguments are already `toLowerCase()`d. Linear in the quote (the value is at most
+ * TEXT_MAX long): native `indexOf`, then an O(1) boundary test per occurrence.
+ */
+export function textPresent(foldedQuote, foldedValue) {
+  for (let at = foldedQuote.indexOf(foldedValue); at !== -1; at = foldedQuote.indexOf(foldedValue, at + 1)) {
+    if (boundaryBefore(foldedQuote, at) && boundaryAfter(foldedQuote, at + foldedValue.length)) return true;
+  }
+  return false;
+}
+
+/**
+ * Anchored `text`: the folded value must START at `from` (right after the anchor and its whitespace) and END on a
+ * whole-token boundary. The segment is folded after the cut, so offsets never cross a length-changing lower-casing.
+ */
+export function textAfter(quote, from, foldedValue) {
+  const seg = quote.slice(from).toLowerCase();
+  return seg.startsWith(foldedValue) && boundaryAfter(seg, foldedValue.length);
+}
+
 // --- extraction -----------------------------------------------------------------
 
 /**
@@ -459,18 +523,9 @@ export function extractValue(decide, text) {
   const kind = decide.valueKind;
 
   if (decide.anchor !== undefined) {
-    const a = typeof decide.anchor === "string" ? normalizeForQuote(decide.anchor) : "";
-    if (a === "") return { ok: false, kind: "anchor-missing", anchor: decide.anchor, measured: 0 };
-    let count = 0;
-    let first = -1;
-    for (let at = text.indexOf(a); at !== -1 && count < 1000; at = text.indexOf(a, at + 1)) {
-      if (count === 0) first = at;
-      count++;
-    }
-    if (count === 0) return { ok: false, kind: "anchor-missing", anchor: decide.anchor, measured: 0 };
-    if (count > 1) return { ok: false, kind: "anchor-ambiguous", anchor: decide.anchor, measured: count };
-    let p = first + a.length;
-    while (p < text.length && isWs(text.charCodeAt(p))) p++;
+    const at = locateAnchor(decide, text);
+    if (at.gap) return { ok: false, ...at.gap };
+    const p = at.p;
     let q = p;
     if (rd.prefixes) {
       const c = text.charCodeAt(p);
@@ -482,6 +537,42 @@ export function extractValue(decide, text) {
     return { ok: true, value: r.tok.value, canon: canonOf(kind, r.tok.value) };
   }
 
+  const s = scanValues(rd, kind, text, null);
+  if (s.mal) return { ok: false, kind: "value-malformed", measured: clip(s.mal.raw) };
+  if (s.count === 0) return { ok: false, kind: "value-none" };
+  if (s.count > 1) {
+    return { ok: false, kind: "value-many", measured: s.count, items: s.items, ...(s.count > MAX_ITEMS ? { itemsTotal: s.count } : {}) };
+  }
+  return { ok: true, value: s.firstVal, canon: canonOf(kind, s.firstVal) };
+}
+
+/**
+ * The signed anchor (normalized, case-sensitive) must occur exactly once in `text`. Returns `{ p }` (the index of
+ * the first non-whitespace character after it) or `{ gap }` (`anchor-missing` / `anchor-ambiguous` with the
+ * gap fields). Shared by value decides and `text` decides.
+ */
+function locateAnchor(decide, text) {
+  const a = typeof decide.anchor === "string" ? normalizeForQuote(decide.anchor) : "";
+  if (a === "") return { gap: { kind: "anchor-missing", anchor: decide.anchor, measured: 0 } };
+  let count = 0;
+  let first = -1;
+  for (let at = text.indexOf(a); at !== -1 && count < 1000; at = text.indexOf(a, at + 1)) {
+    if (count === 0) first = at;
+    count++;
+  }
+  if (count === 0) return { gap: { kind: "anchor-missing", anchor: decide.anchor, measured: 0 } };
+  if (count > 1) return { gap: { kind: "anchor-ambiguous", anchor: decide.anchor, measured: count } };
+  let p = first + a.length;
+  while (p < text.length && isWs(text.charCodeAt(p))) p++;
+  return { p };
+}
+
+/**
+ * One left-to-right pass over `text` reading every token of the decide's kind. Stops at the first malformed
+ * token (`mal`: unsure = red, never counted away). `count` counts every value; `items` keeps the first
+ * MAX_ITEMS as clipped display strings; with `canons` (a Set) every value's comparable form is added (membership).
+ */
+function scanValues(rd, kind, text, canons) {
   const n = text.length;
   let count = 0;
   const items = [];
@@ -505,20 +596,16 @@ export function extractValue(decide, text) {
     if (r.tok !== undefined) {
       if (r.tok.mal) {
         mal = r.tok;
-        break; // a malformed token is never counted away: unsure = red
+        break;
       }
       if (count === 0) firstVal = r.tok.value;
       count++;
+      if (canons !== null) canons.add(String(canonOf(kind, r.tok.value)));
       if (items.length < MAX_ITEMS) items.push(clip(String(displayOf(kind, r.tok.value))));
     }
     i = r.end > i ? r.end : i + 1;
   }
-  if (mal) return { ok: false, kind: "value-malformed", measured: clip(mal.raw) };
-  if (count === 0) return { ok: false, kind: "value-none" };
-  if (count > 1) {
-    return { ok: false, kind: "value-many", measured: count, items, ...(count > MAX_ITEMS ? { itemsTotal: count } : {}) };
-  }
-  return { ok: true, value: firstVal, canon: canonOf(kind, firstVal) };
+  return { count, items, firstVal, mal };
 }
 
 function anchorField(d) {
@@ -537,11 +624,14 @@ const DIRECTION = { lt: "below", lte: "at-most", gt: "above", gte: "at-least" };
  */
 export function evalDecide(decide, text) {
   if (Array.isArray(decide.phrases)) return evalPresence(decide, text);
+  if (decide.valueKind === "text") return evalText(decide, text);
+  if (decide.op === undefined && decide.anchor === undefined) return evalMembership(decide, text); // bind-only, no anchor (RULED #56)
   const ex = extractValue(decide, text);
   if (!ex.ok) {
     const { kind, ok: _ok, ...fields } = ex;
     return { type: "value", ok: false, kind, ...fields };
   }
+  if (decide.op === undefined) return { type: "value", ok: true, extracted: ex.canon }; // bind-only anchored: extraction only, the binding compares it
   const k = decide.valueKind;
   const op = decide.op;
   const v = ex.value;
@@ -571,6 +661,33 @@ export function evalDecide(decide, text) {
   if (op === "gt" && !(c > 0)) return bad("value-under", b.value, "above");
   if (op === "gte" && !(c >= 0)) return bad("value-under", b.value, "at-least");
   return { type: "value", ok: true, extracted: ex.canon };
+}
+
+/**
+ * A bind-only decide WITHOUT an anchor (RULED #56): every value of the kind in the quote, for the binding's
+ * membership test. Zero = `value-none`, any malformed token = `value-malformed`; `value-many` never fires. An ok
+ * result carries `members` (the Set of comparable forms of ALL values), `shown` (the first 20 display strings,
+ * quote order) and `total`.
+ */
+function evalMembership(decide, text) {
+  const rd = readerFor(decide);
+  if (typeof text !== "string" || rd === null) return { type: "value", ok: false, kind: "value-none" };
+  const members = new Set();
+  const s = scanValues(rd, decide.valueKind, text, members);
+  if (s.mal) return { type: "value", ok: false, kind: "value-malformed", measured: clip(s.mal.raw) };
+  if (s.count === 0) return { type: "value", ok: false, kind: "value-none" };
+  return { type: "value", ok: true, members, shown: s.items, total: s.count };
+}
+
+/**
+ * A `text` decide (RULED #58): nothing is extracted, so the only red of its own is its anchor's
+ * (`anchor-missing` / `anchor-ambiguous`). Ok carries `textFrom`, where the claim value must start (anchored) or 0.
+ */
+function evalText(decide, text) {
+  if (decide.anchor === undefined) return { type: "value", ok: true, textFrom: 0 };
+  const at = locateAnchor(decide, text);
+  if (at.gap) return { type: "value", ok: false, ...at.gap };
+  return { type: "value", ok: true, textFrom: at.p };
 }
 
 function evalPresence(decide, text) {

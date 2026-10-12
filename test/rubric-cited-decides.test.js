@@ -397,7 +397,8 @@ test("rubricVocabulary lists decides on cited with its shapes and conditions; th
   assert.equal(f.decides.type, "decide-list");
   assert.equal(f.decides.required, false);
   assert.equal(f.decides.maxItems, 10);
-  assert.deepEqual(f.decides.shapes.value.fields.valueKind.enum, ["number", "money", "date", "time"]);
+  assert.deepEqual(f.decides.shapes.value.fields.valueKind.enum, ["number", "money", "date", "time", "text"]);
+  assert.equal(f.decides.shapes.value.fields.op.required, false, "op is optional (a bind-only decide)");
   assert.deepEqual(f.decides.shapes.value.fields.op.enum, ["lt", "lte", "gt", "gte", "between"]);
   assert.deepEqual(f.decides.shapes.value.fields.currency.enum, ["$", "€", "£"]);
   assert.equal(f.decides.shapes.value.fields.unit.maxLength, 100);
@@ -405,7 +406,7 @@ test("rubricVocabulary lists decides on cited with its shapes and conditions; th
   assert.ok(f.decides.shapes.value.conditions.some((c) => c.includes("exactly one of currency or unit")));
   const d = rubricVocabulary.rules.cited.description;
   assert.equal(d, describeRule("cited"));
-  for (const w of ["decides?", "valueKind", "op:", "lo?", "hi?", "currency?", "unit?", "anchor?", "phrases", "between needs lo and hi", "exactly one of currency or unit"]) assert.ok(d.includes(w), w);
+  for (const w of ["decides?", "valueKind", "op?:", "lo?", "hi?", "currency?", "unit?", "anchor?", "phrases", "between needs lo and hi", "exactly one of currency or unit"]) assert.ok(d.includes(w), w);
   // the vocabulary is the validator's: every enum value it lists is accepted, nothing else is
   assert.ok(Object.isFrozen(f.decides) && Object.isFrozen(f.decides.shapes.value.fields.op));
 });
