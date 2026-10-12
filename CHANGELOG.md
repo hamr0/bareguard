@@ -3,6 +3,27 @@
 All notable changes to bareguard are documented here. Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [SemVer](https://semver.org/).
 
 
+## [0.22.0] - 2026-10-12
+
+### Added
+
+- **`cited` can sign an optional `decides` list, and each claim binds to its quote with typed values.** `decides` is at most 10 deterministic decides run on each claim's ONE quote, in two shapes. A value decide is `{ valueKind: "number" | "money" | "date" | "time", op: "lt" | "lte" | "gt" | "gte" | "between", value | lo + hi, currency | unit?, anchor? }` (money needs exactly one of `currency` `$`/`€`/`£` or `unit`; comparison is exact decimal). A presence decide is `{ phrases }`. A failing decide is an item `#<i>:d<j>:<kind>` (a missing signed phrase is `#<i>:d<j>:phrase-missing:<phrase>`, never clipped). A claim is now `{ claim, quote, values? }`; `values` is a plain object keyed `d<j>` (`j` = the 0-based index of a VALUE decide) holding one bare string of that decide's kind (`"59"`, `"2026-11-12"`, `"9:27 AM"`, `"09:27"`). Per claim, in order: `quoteIn`, then the quote-length bound, then every decide, then the binding, then `numbersInQuote`. The binding reds are `claim-value-missing`, `claim-value-malformed`, `claim-value-mismatch` and `claim-value-unknown`. Equality is canonical and exact (`09:27` equals `9:27 AM`, `59` equals `59.00`, `9:27 PM` does not equal `9:27 AM`); mismatch items show the canonical forms of both sides, for example `#0:d1:claim-value-mismatch:21:27!=09:27`. A pass is plain `green`, never `soft-green`.
+- **`rubricVocabulary.bounds.quoteMaxChars`** (4000). It applies only when the `cited` check signs `decides`: a claim whose normalized quote is longer is red `#<i>:quote-too-long`. A `cited` check without `decides` has no quote length bound, as before.
+- **New `decide-list` descriptor type in `rubricVocabulary`.** The `cited` rule's descriptor lists the `decides` field (shapes, enums, limits, conditions), and a bad `decides` is refused at signing with an error naming the path. The descriptor and the validator are driven by the same table. The new descriptor type and the `decides` / `values` / `claim-value-*` / `quote-too-long` names are part of the SemVer surface from here on.
+- **`npm run bench:rubric` (dev only, opt-in).** Runs the 5 MiB pathological `decide` cases and the extraction timings. It is not published (`bench/` is outside the `files` whitelist).
+
+### Changed
+
+- **A `cited` check without `decides` is red when a claim carries `values` (behavior change).** Previously `values` was ignored. Now such a claim is red `#<i>:d<j>:claim-value-unknown` for each key, or `#<i>:values:claim-value-malformed` when `values` is not a plain object, because there is no decide to bind to. Claims without `values` behave exactly as before.
+- **The claim TEXT must spell numbers as the quote does.** Only `values` are canonicalized; `numbersInQuote` still runs on the claim text. With a quote reading `9:27 AM`, claim text `9:27 AM` is green and claim text `09:27` is red `#0:numbers:09`.
+
+### Notes
+
+- Judges (the locate judge and the verdict judge) are NOT built. Everything above is deterministic; bareguard still never runs an LLM.
+- The default test suite keeps a 16 KiB to 64 KiB linearity guard for `decide`; the 5 MiB cases moved to `bench:rubric`. This guard only catches catastrophic blow-up.
+- devDependency `litectx` `^0.13.0` to `^0.36.0`: it drops the transformers subtree and clears 8 dev-only `npm audit` vulnerabilities. Runtime dependencies are unchanged.
+- The locate decide core (`src/primitives/rubric-locate.js`) is internal and not exported from the package.
+
 ## [0.21.2] - 2026-10-09
 
 ### Changed
