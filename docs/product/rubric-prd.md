@@ -471,7 +471,7 @@ later step runs and ALL its reds are reported):
 1. **`quoteIn`** the quote against the frozen source (default substring mode), as today. A failure ends the
    claim: no decide runs on an unproven quote, no binding is checked.
 2. **Quote length.** Only when the check signs `decides`: a normalized quote over 4000 characters is item
-   `#<i>:quote-too-long` (bounds the extraction work; the 4000 is the number §5.2 already carries). Without
+   `#<i>:quote-too-long` (bounds the extraction work; the 4000 is the number §5.2 already carries; exposed as `rubricVocabulary.bounds.quoteMaxChars`, and it applies only when the check signs `decides`). Without
    `decides` there is no such bound, as today.
 3. **`decideQuote(quote, decides)`**: every decide on that ONE quote (co-location, RULED #36). Each red
    decide is item `#<i>:d<j>:<kind>` (`j` = 0-based index in `decides`, `kind` as in §5.2: `anchor-missing`,
@@ -1281,7 +1281,7 @@ audit write failure still propagates.
 | Kind | Added |
 |---|---|
 | exports | `createRubric(spec)`, `rubricSha(spec)`, `checkStep(rubric, checkpointId, output, opts)`, `quoteIn(quote, source)`, `numbersInQuote(claim, quote)`, `renderGaps(gaps)`, `rubricVocabulary` |
-| `rubricVocabulary` | frozen, machine-readable; lists every rule with its field names, types, required/optional, bounds (count fields integers >= 1, no max; string lists non-empty arrays of non-empty strings; no whitespace-only strings) and defaults (including `strict`); a drafting LLM reads it; every check description shown to anyone is GENERATED from it, never hand-written |
+| `rubricVocabulary` | frozen, machine-readable; lists every rule with its field names, types, required/optional, bounds (count fields integers >= 1, no max; string lists non-empty arrays of non-empty strings; no whitespace-only strings; the `cited` caps `quoteSourceMaxBytes`, `quoteWorkMax` and `quoteMaxChars`) and defaults (including `strict`); a drafting LLM reads it; every check description shown to anyone is GENERATED from it, never hand-written |
 | gate methods | `checkStep(checkpoint, output, opts)`, `drainGaps()`, `recordAccept({...})` (harness-only) |
 | config keys | `rubric: { spec, sha256, advanceOn }`; signed spec keys `onExhausted`, `maxReds`, `reads`, `requiresHuman`, per-checkpoint `accept`, per-check `id`, `text`, `strict`, `phrases`, `noneExit`, `expectExit`, `direction`, `baseline`, `patterns`, `allowPrefixes`, `requireNonEmpty`, `size`, `items`, `itemsFrom`; for `cited` (§4.6, RULED #48) `decides` and, inside a decide, the same fields as below; the claim shape `{claim, quote, values?}` with `values` keyed `d<j>` and the `cited` gap item reasons `claim-value-missing`, `claim-value-malformed`, `claim-value-mismatch`, `claim-value-unknown`, `quote-too-long` and `d<j>:<decide kind>`; for `judged` (PARKED, §5.2) `kind`, `ask`, `sources`, `decides`, and inside a decide `valueKind`, `op`, `value`, `lo`, `hi`, `currency`, `unit`, `anchor`, `phrases` |
 | rule strings | every rule in §4; deny rules `rubric.invalid`, `rubric.red`, `rubric.stopped`, `rubric.unminted`, `rubric.output-mismatch`, `rubric.exhausted`, `rubric.needs-accept` |

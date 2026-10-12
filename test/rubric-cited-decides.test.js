@@ -421,7 +421,10 @@ test("rubricVocabulary: every EXISTING rule, the common/bounds/checkpoint blocks
     source: { type: "name", required: true, nonBlank: true, maxLength: 128, ref: "input" },
     text: { type: "explanation", required: false },
   });
-  const { schema, common, bounds, checkpoint, foundational } = rubricVocabulary;
+  const { schema, common, bounds: allBounds, checkpoint, foundational } = rubricVocabulary;
+  // quoteMaxChars is the one additive bounds entry (hamr-approved); every earlier bound stays byte-identical
+  const { quoteMaxChars, ...bounds } = allBounds;
+  assert.equal(quoteMaxChars, 4000, "bounds.quoteMaxChars is the 4000-char quote cap (red quote-too-long with decides: see the quote-too-long test)");
   assert.equal(h({ schema, common, bounds, checkpoint, foundational }), "cd655eb327c6180d593843ca2f309cf950243e66ad0b62c66b2fbd0466576fca");
   assert.ok(cited.description.startsWith("cited({ id, claims: non-blank string, max 128 chars, source: non-blank string, max 128 chars, decides?: "));
   assert.ok(cited.description.endsWith(", text?: string (the signer's explanation; never decides) })"));

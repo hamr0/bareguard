@@ -1110,6 +1110,7 @@ export const rubricVocabulary = deepFreeze({
     name: { maxLength: MAX_NAME_LEN },
     quoteSourceMaxBytes: SOURCE_CAP_BYTES,
     quoteWorkMax: QUOTE_WORK_CAP,
+    quoteMaxChars: QUOTE_MAX_CHARS, // applies to a `cited` claim's normalized quote only when the check signs `decides`; over it = red `quote-too-long`
   },
   checkpoint: {
     gating: { type: "boolean", required: true },
