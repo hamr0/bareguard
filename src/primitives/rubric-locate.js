@@ -453,20 +453,39 @@ const isWordCp = (cp) => WORD_CP.test(String.fromCodePoint(cp));
 const isHigh = (c) => c >= 0xd800 && c <= 0xdbff;
 const isLow = (c) => c >= 0xdc00 && c <= 0xdfff;
 
-/** True when a match starting at `i` in `t` has a whole-token boundary before it (start, or not a letter / mark / digit). */
+const DIGIT_CP = /^\p{Nd}$/u;
+const isDigitCp = (cp) => DIGIT_CP.test(String.fromCodePoint(cp));
+/** The code point ENDING at `e` (exclusive) in `t`; `e` must be >= 1. */
+function cpEndingAt(t, e) {
+  const u = t.charCodeAt(e - 1);
+  return isLow(u) && e >= 2 && isHigh(t.charCodeAt(e - 2)) ? t.codePointAt(e - 2) : u;
+}
+const isGlueChar = (c) => c === 0x2e || c === 0x2c; // "." or ","
+
+/**
+ * True when a match starting at `i` in `t` has a whole-token boundary before it (start, or not a letter / mark /
+ * digit). DIGIT GLUE (RULED #60): a `.` or `,` with a digit on both sides (the match's first char and the char before
+ * the mark) holds a number together and is NOT a boundary.
+ */
 function boundaryBefore(t, i) {
   if (i === 0) return true;
   const u = t.charCodeAt(i - 1);
   if (isHigh(u) && isLow(t.charCodeAt(i))) return false; // the match would start inside a surrogate pair
   const cp = isLow(u) && i >= 2 && isHigh(t.charCodeAt(i - 2)) ? t.codePointAt(i - 2) : u;
+  if (isGlueChar(cp) && i >= 2 && isDigitCp(t.codePointAt(i)) && isDigitCp(cpEndingAt(t, i - 1))) return false;
   return !isWordCp(cp);
 }
 
-/** True when a match ending at `e` (exclusive) in `t` has a whole-token boundary after it (end, or not a letter / mark / digit). */
+/**
+ * True when a match ending at `e` (exclusive) in `t` has a whole-token boundary after it (end, or not a letter /
+ * mark / digit). DIGIT GLUE (RULED #60): a `.` or `,` after a digit and before a digit is NOT a boundary.
+ */
 function boundaryAfter(t, e) {
   if (e >= t.length) return true;
   if (isHigh(t.charCodeAt(e - 1)) && isLow(t.charCodeAt(e))) return false; // the match would end inside a surrogate pair
-  return !isWordCp(t.codePointAt(e));
+  const cp = t.codePointAt(e);
+  if (isGlueChar(cp) && e >= 1 && e + 1 < t.length && isDigitCp(cpEndingAt(t, e)) && isDigitCp(t.codePointAt(e + 1))) return false;
+  return !isWordCp(cp);
 }
 
 /**

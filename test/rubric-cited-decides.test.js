@@ -788,3 +788,26 @@ test("hostile text and membership input: never throws and stays linear 16 KiB ->
   // loose catastrophic-blow-up guard only (see the decide-core guard); the 5 MiB scaling check is `npm run bench:rubric`
   assert.ok(large < small * 40 + 100, `not linear: ${small} ms -> ${large} ms`);
 });
+
+test("text digit glue (#60): . or , between digits is not a boundary; elsewhere punctuation still is", async () => {
+  const CL = "## [0.41.0] - 2026-10-12";
+  await red(CL, TXT, { d0: "0.41" }, "#0:d0:claim-value-absent:0.41");
+  await red(CL, TXT, { d0: "41.0" }, "#0:d0:claim-value-absent:41.0");
+  await green(CL, TXT, { d0: "0.41.0" });
+  await green(CL, TXT, { d0: "2026-10-12" });
+  await red("Price 3.5 now", TXT, { d0: "3" }, "#0:d0:claim-value-absent:3");
+  await green("Price 3.5 now", TXT, { d0: "3.5" });
+  await red("1,234 seats", TXT, { d0: "1" }, "#0:d0:claim-value-absent:1");
+  await green("1,234 seats", TXT, { d0: "1,234" });
+  await green("costs 5.", TXT, { d0: "5" });
+  await green("costs 5, then", TXT, { d0: "5" });
+  await green("MS791.", TXT, { d0: "MS791" });
+  await red("v1.2", TXT, { d0: "v1" }, "#0:d0:claim-value-absent:v1");
+  // the start side: "234" inside "1,234" and "5" inside "3.5"
+  await red("1,234 seats", TXT, { d0: "234" }, "#0:d0:claim-value-absent:234");
+  await red("Price 3.5 now", TXT, { d0: "5" }, "#0:d0:claim-value-absent:5");
+  // anchored (end boundary)
+  const A = { valueKind: "text", anchor: "Version:" };
+  await red("Version: 0.41.0", A, { d0: "0.41" }, "#0:d0:claim-value-absent:0.41");
+  await green("Version: 0.41.0", A, { d0: "0.41.0" });
+});
