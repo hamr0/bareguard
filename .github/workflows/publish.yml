@@ -35,13 +35,13 @@ jobs:
         with:
           # Native-addon repos (e.g. better-sqlite3) may need `20` instead if the
           # pinned addon ships no prebuilt for the Node 22 ABI. npm@11 (below)
-          # supports both 20 and 22, so only this line changes.
+          # supports the Node versions CI tests (22 and 24), so only this line changes.
           node-version: 22
           registry-url: 'https://registry.npmjs.org'
       - name: Upgrade npm (trusted publishing needs >= 11.5.1)
         # Pinned to a major, NOT @latest: a floating npm eventually raises its Node
         # floor above the runner's version and fails with EBADENGINE (npm@12 dropped
-        # Node 20). npm@11 is >= 11.5.1 for OIDC and runs on both Node 20 and 22.
+        # Node 20). npm@11 is >= 11.5.1 for OIDC and runs on both Node 22 and 24.
         #
         # Native-addon repos on npm@12+ (Node 22+ only): npm@12 ALSO blocks
         # dependency install-scripts by default, so `npm ci` silently skips native
