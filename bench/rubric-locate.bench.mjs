@@ -79,4 +79,27 @@ for (const [name, q] of Object.entries(textCases)) {
   }
 }
 console.log(`5 MiB text matchers (${Object.keys(textCases).length * textVals.length} cases): worst ${worstText.toFixed(0)} ms`);
+// text `until` (RULED #61): the anchor is found once, then ONE indexOf for the until; hostile = an until that never
+// matches / matches only far away, an anchor-heavy quote (ambiguous), a huge field, a hyphen-digit-glue grid (RULED #62)
+const untilCases = {
+  nomatch: "Leaves " + "a".repeat(MiB5),
+  far: "Leaves " + "a".repeat(MiB5) + " at 9",
+  nearmiss: "Leaves " + "a ".repeat(MiB5 / 2),
+  ambiguous: "Leaves ".repeat(Math.floor(MiB5 / 7)),
+  hyphens: "Leaves " + "1-a".repeat(MiB5 / 3),
+};
+let worstUntil = 0;
+for (const [name, q] of Object.entries(untilCases)) {
+  for (const until of [" at", " b", "a".repeat(200)]) {
+    const d = { valueKind: "text", anchor: "Leaves", until };
+    const t1 = process.hrtime.bigint();
+    assert.equal(typeof evalDecide(d, q).ok, "boolean", name);
+    assert.equal(typeof decideQuote(q, [d]).ok, "boolean", name);
+    const ms = Number(process.hrtime.bigint() - t1) / 1e6;
+    worstUntil = Math.max(worstUntil, ms);
+    assert.ok(ms < 30000, `until ${name} took ${ms}ms`);
+  }
+  assert.equal(typeof textPresent(q.toLowerCase(), "1-a"), "boolean", name);
+}
+console.log(`5 MiB text until (${Object.keys(untilCases).length * 3} cases): worst ${worstUntil.toFixed(0)} ms`);
 console.log("bench:rubric ok");

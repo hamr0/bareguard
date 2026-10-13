@@ -46,7 +46,7 @@ import { parseBound, compareBounds, decideQuote, parseClaimValue, displayCanon, 
  * @typedef {Object} Decide
  * One signed decide of a `cited` check (§4.6): a VALUE decide `{ valueKind, op?, value | lo+hi, currency | unit (money), anchor? }`
  * (without `op` it is bind-only: no `value`/`lo`/`hi`, and without an `anchor` the claim value must equal one of the
- * quote's values), a TEXT decide `{ valueKind: "text", anchor? }` (bind-only), or a PRESENCE decide `{ phrases }`.
+ * quote's values), a TEXT decide `{ valueKind: "text", anchor?, until? }` (bind-only; `until` only with an `anchor`), or a PRESENCE decide `{ phrases }`.
  * @property {"number"|"money"|"date"|"time"|"text"} [valueKind]
  * @property {"lt"|"lte"|"gt"|"gte"|"between"} [op] optional on a `cited` value decide (omit it for a bind-only decide)
  * @property {number|string} [value] the bound: a number for `number`/`money`, a string for `date`/`time`
@@ -55,6 +55,7 @@ import { parseBound, compareBounds, decideQuote, parseClaimValue, displayCanon, 
  * @property {"$"|"€"|"£"} [currency]
  * @property {string} [unit]
  * @property {string} [anchor]
+ * @property {string} [until] text decide only, needs an anchor: the claim value must equal the quote text between the anchor and the first `until` after it
  * @property {string[]} [phrases]
  *
  * @typedef {Object} Claim
@@ -255,13 +256,15 @@ const DECIDES = {
         currency: { type: "enum", required: false, enum: ["$", "€", "£"] },
         unit: { type: "string", required: false, maxLength: 100 },
         anchor: { type: "string", required: false, maxLength: MAX_SIGNED_LEN },
+        until: { type: "string", required: false, maxLength: MAX_SIGNED_LEN },
       },
       // valueKind "text" holds only these fields (bind only); the validator refuses every other field of this shape on it
-      textFields: ["valueKind", "anchor"],
+      textFields: ["valueKind", "anchor", "until"],
       conditions: [
         "op may be omitted (a bind-only decide: then value, lo and hi are refused, and without an anchor the claim value must equal one of the quote's values)",
         "an op decide: between needs lo and hi (lo <= hi) and forbids value; the other ops need value and forbid lo and hi",
         "valueKind text is bind-only: it refuses op, value, lo, hi, currency and unit, and the claim value is a non-empty string of at most 200 characters",
+        "until is allowed only on a text decide that also signs an anchor: the claim value must then equal, case-insensitively, the quote text between the anchor and the first until after it",
         "money needs exactly one of currency or unit; currency and unit are refused on any other valueKind",
       ],
     },
@@ -812,8 +815,13 @@ function runCited(ctx, c) {
           note(`#${i}:${key}:claim-value-malformed`);
           continue;
         }
-        if (!res.ok) continue; // the decide's own red (anchor-missing / anchor-ambiguous) already says so
+        if (!res.ok) continue; // the decide's own red (anchor-missing / anchor-ambiguous / until-missing / value-none) already says so
         const folded = t.text.toLowerCase();
+        if (res.textField !== undefined) {
+          // RULED #61: with `until` the claim value must EQUAL the field (case-insensitive), no prefix, no overlong
+          if (folded !== res.textField.toLowerCase()) note(`#${i}:${key}:claim-value-mismatch:${clip(t.text)}!=${clip(res.textField)}`);
+          continue;
+        }
         let found;
         if (decides[j].anchor === undefined) {
           dq.folded ??= q.toLowerCase(); // folded once per distinct quote
@@ -1205,11 +1213,16 @@ function checkDecides(d, v, where) {
     const kind = x.valueKind;
     if (kind === "text") {
       for (const k of Object.keys(f)) {
-        if (!shape.textFields.includes(k) && x[k] !== undefined) throw fail(`${w}.${k}`, "is refused on a text decide (text is bind-only: only valueKind and anchor)");
+        if (!shape.textFields.includes(k) && x[k] !== undefined) throw fail(`${w}.${k}`, "is refused on a text decide (text is bind-only: only valueKind, anchor and until)");
       }
       if (x.anchor !== undefined) checkValue(f.anchor, x.anchor, `${w}.anchor`);
+      if (x.until !== undefined) {
+        if (x.anchor === undefined) throw fail(`${w}.until`, "is refused without an anchor (until closes an anchored text decide)");
+        checkValue(f.until, x.until, `${w}.until`);
+      }
       return;
     }
+    if (x.until !== undefined) throw fail(`${w}.until`, "is refused on a non-text decide (until closes an anchored text decide)");
     const between = x.op === "between";
     for (const k of ["value", "lo", "hi"]) {
       if (x.op === undefined) {

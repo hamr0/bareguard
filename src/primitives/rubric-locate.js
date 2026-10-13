@@ -461,6 +461,8 @@ function cpEndingAt(t, e) {
   return isLow(u) && e >= 2 && isHigh(t.charCodeAt(e - 2)) ? t.codePointAt(e - 2) : u;
 }
 const isGlueChar = (c) => c === 0x2e || c === 0x2c; // "." or ","
+const WORD_START = /^[\p{L}\p{Nd}]$/u;
+const isLetterOrDigitCp = (cp) => WORD_START.test(String.fromCodePoint(cp));
 
 /**
  * True when a match starting at `i` in `t` has a whole-token boundary before it (start, or not a letter / mark /
@@ -473,18 +475,22 @@ function boundaryBefore(t, i) {
   if (isHigh(u) && isLow(t.charCodeAt(i))) return false; // the match would start inside a surrogate pair
   const cp = isLow(u) && i >= 2 && isHigh(t.charCodeAt(i - 2)) ? t.codePointAt(i - 2) : u;
   if (isGlueChar(cp) && i >= 2 && isDigitCp(t.codePointAt(i)) && isDigitCp(cpEndingAt(t, i - 1))) return false;
+  // HYPHEN DIGIT GLUE (RULED #62): "-" after a digit and before a letter/digit joins "0.41.0-rc1", "2026-10-12"
+  if (u === 0x2d && i >= 2 && isLetterOrDigitCp(t.codePointAt(i)) && isDigitCp(cpEndingAt(t, i - 1))) return false;
   return !isWordCp(cp);
 }
 
 /**
  * True when a match ending at `e` (exclusive) in `t` has a whole-token boundary after it (end, or not a letter /
  * mark / digit). DIGIT GLUE (RULED #60): a `.` or `,` after a digit and before a digit is NOT a boundary.
+ * HYPHEN DIGIT GLUE (RULED #62): a `-` after a digit and before a letter or digit is NOT a boundary.
  */
 function boundaryAfter(t, e) {
   if (e >= t.length) return true;
   if (isHigh(t.charCodeAt(e - 1)) && isLow(t.charCodeAt(e))) return false; // the match would end inside a surrogate pair
   const cp = t.codePointAt(e);
   if (isGlueChar(cp) && e >= 1 && e + 1 < t.length && isDigitCp(cpEndingAt(t, e)) && isDigitCp(t.codePointAt(e + 1))) return false;
+  if (cp === 0x2d && e >= 1 && e + 1 < t.length && isDigitCp(cpEndingAt(t, e)) && isLetterOrDigitCp(t.codePointAt(e + 1))) return false;
   return !isWordCp(cp);
 }
 
@@ -566,8 +572,7 @@ export function extractValue(decide, text) {
 }
 
 /**
- * The signed anchor (normalized, case-sensitive) must occur exactly once in `text`. Returns `{ p }` (the index of
- * the first non-whitespace character after it) or `{ gap }` (`anchor-missing` / `anchor-ambiguous` with the
+ * The signed anchor (normalized, case-sensitive) must occur exactly once in `text`. Returns `{ p, end }` (`end`: the index just past the anchor; `p`: the first non-whitespace character after it) or `{ gap }` (`anchor-missing` / `anchor-ambiguous` with the
  * gap fields). Shared by value decides and `text` decides.
  */
 function locateAnchor(decide, text) {
@@ -581,9 +586,10 @@ function locateAnchor(decide, text) {
   }
   if (count === 0) return { gap: { kind: "anchor-missing", anchor: decide.anchor, measured: 0 } };
   if (count > 1) return { gap: { kind: "anchor-ambiguous", anchor: decide.anchor, measured: count } };
-  let p = first + a.length;
+  const end = first + a.length;
+  let p = end;
   while (p < text.length && isWs(text.charCodeAt(p))) p++;
-  return { p };
+  return { p, end };
 }
 
 /**
@@ -619,8 +625,13 @@ function scanValues(rd, kind, text, canons) {
       }
       if (count === 0) firstVal = r.tok.value;
       count++;
-      if (canons !== null) canons.add(String(canonOf(kind, r.tok.value)));
-      if (items.length < MAX_ITEMS) items.push(clip(String(displayOf(kind, r.tok.value))));
+      let fresh = true; // membership lists DISTINCT values (RULED #63)
+      if (canons !== null) {
+        const cs = String(canonOf(kind, r.tok.value));
+        fresh = !canons.has(cs);
+        canons.add(cs);
+      }
+      if (fresh && items.length < MAX_ITEMS) items.push(clip(String(displayOf(kind, r.tok.value))));
     }
     i = r.end > i ? r.end : i + 1;
   }
@@ -685,8 +696,8 @@ export function evalDecide(decide, text) {
 /**
  * A bind-only decide WITHOUT an anchor (RULED #56): every value of the kind in the quote, for the binding's
  * membership test. Zero = `value-none`, any malformed token = `value-malformed`; `value-many` never fires. An ok
- * result carries `members` (the Set of comparable forms of ALL values), `shown` (the first 20 display strings,
- * quote order) and `total`.
+ * result carries `members` (the Set of comparable forms of ALL values), `shown` (the first 20 DISTINCT display strings,
+ * first-occurrence order) and `total` (the count of distinct values).
  */
 function evalMembership(decide, text) {
   const rd = readerFor(decide);
@@ -695,18 +706,33 @@ function evalMembership(decide, text) {
   const s = scanValues(rd, decide.valueKind, text, members);
   if (s.mal) return { type: "value", ok: false, kind: "value-malformed", measured: clip(s.mal.raw) };
   if (s.count === 0) return { type: "value", ok: false, kind: "value-none" };
-  return { type: "value", ok: true, members, shown: s.items, total: s.count };
+  return { type: "value", ok: true, members, shown: s.items, total: members.size }; // DISTINCT values (RULED #63)
 }
 
 /**
- * A `text` decide (RULED #58): nothing is extracted, so the only red of its own is its anchor's
- * (`anchor-missing` / `anchor-ambiguous`). Ok carries `textFrom`, where the claim value must start (anchored) or 0.
+ * A `text` decide (RULED #58): nothing is extracted, so the only reds of its own are its anchor's
+ * (`anchor-missing` / `anchor-ambiguous`) and, with `until` (RULED #61), `until-missing` / `value-none`. Ok carries `textFrom`
+ * (where the claim value must start, anchored, or 0) or, with `until`, `textField` (the whole field the claim must equal).
  */
 function evalText(decide, text) {
   if (decide.anchor === undefined) return { type: "value", ok: true, textFrom: 0 };
   const at = locateAnchor(decide, text);
   if (at.gap) return { type: "value", ok: false, ...at.gap };
-  return { type: "value", ok: true, textFrom: at.p };
+  if (decide.until === undefined) return { type: "value", ok: true, textFrom: at.p };
+  // RULED #61: the field is the quote strictly between the anchor's end and the FIRST `until` after it. `until` is matched
+  // on the normalized quote, case-sensitive, with whitespace runs collapsed but NOT trimmed (a signed " at" keeps its
+  // leading space, so it cannot match inside a word); the anchor's own trim is untouched.
+  const u = normalizeUntil(decide.until);
+  const ue = u === "" ? -1 : text.indexOf(u, at.end);
+  if (ue === -1) return { type: "value", ok: false, kind: "until-missing", until: decide.until, measured: 0 };
+  const field = text.slice(at.end, ue).trim();
+  if (field === "") return { type: "value", ok: false, kind: "value-none", anchor: decide.anchor };
+  return { type: "value", ok: true, textField: field };
+}
+
+/** A signed `until`, normalized like the quote (markers stripped, whitespace collapsed) but NOT trimmed. */
+function normalizeUntil(s) {
+  return s.split("**").join("").split("__").join("").replace(/\s+/g, " ");
 }
 
 function evalPresence(decide, text) {
