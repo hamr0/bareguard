@@ -3,6 +3,28 @@
 All notable changes to bareguard are documented here. Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [SemVer](https://semver.org/).
 
 
+## [0.23.0] - 2026-10-13
+
+### Added
+
+- **A `cited` value decide can omit `op` (bind-only).** `{ valueKind: "number" | "money" | "date" | "time", anchor?, currency | unit? }` with no `op` has no condition, and `value` / `lo` / `hi` are refused at signing. Unanchored, it is a membership test: the claim's `values.d<j>` must equal one of the values of that kind found in the quote (a mismatch item lists the quote's DISTINCT values, first-occurrence order, 20 shown then `,...(N in all)`, for example `#0:d0:claim-value-mismatch:12:34!=09:27,11:07`). Anchored, it binds to the one value after the anchor. Money still needs exactly one of `currency` or `unit`.
+- **`text` valueKind (bind only, `cited` only).** `{ valueKind: "text", anchor?, until? }`; `op`, `value`, `lo`, `hi`, `currency` and `unit` are refused. The claim value is a non-empty string of at most 200 characters (longer, empty or non-string is `claim-value-malformed`). Both sides are trimmed, whitespace-collapsed and compared case-insensitively. Unanchored, it is presence: the value appears in the quote as a whole-token sequence, otherwise red `#<i>:d<j>:claim-value-absent:<value>`. With `anchor`, the value must sit right after the anchor and end on a token boundary. With `anchor` and `until` (an optional non-empty end label, case-sensitive), the field is exactly the text between the anchor and the first qualifying `until`, and the claim must equal it (`claim-value-mismatch:<claim>!=<field>`); no `until` after the anchor is `#<i>:d<j>:until-missing`. Without `until`, anchored `text` is a prefix read (`San Francisco` passes for `San Francisco International Airport`); sign `until` to close it.
+- **Digit glue for text boundaries.** A `.` or `,` with a digit on both sides, and a `-` with a digit before it and a letter or digit after it, are not token boundaries. `0.41` does not match inside `0.41.0` or `0.41.0-rc1`, `3` does not match inside `3.5`, `1` not inside `1,234`, `2026` not inside `2026-10-12`. `LAX-SFO` and `costs 5-` are unaffected.
+- **New SemVer-surface names.** `valueKind: "text"`, the optional `op`, `until`, the `textFields` key in the `rubricVocabulary` decide shape, and the item reasons `claim-value-absent` and `until-missing`. The `rubricVocabulary` descriptor and the validator stay driven by the one table.
+
+### Changed
+
+- **BREAKING: Node >= 22 is required** (`engines.node` is now `>=22`; Node 20 is EOL). CI tests Node 22 and 24.
+- **Behavior change (tightening): `anchor` and `until` labels match only on word edges.** On ANY decide that takes an `anchor`, including the value decides released in 0.22.0, and on `until`: if the label's first character is a word character, the quote character before the match must be a token boundary (or the quote start); if its last character is a word character, the character after must be a boundary (or the quote end). A non-qualifying occurrence is skipped (it does not count toward `anchor-ambiguous`, and `until` continues to the next occurrence). Anchor `Leaves` no longer matches inside `Leavesley`, and `until: " at"` no longer cuts at `" attendant"`. Digit glue applies here too, so anchor `v1` does not match in `v1.2`. Kept strict on purpose: a signed anchor `From ` (trimmed to `From`) glued to a digit (`From59`, `Price12`, `Qty3`) is now `anchor-missing` where 0.22.0 read the number; `From 59` still works. Labels whose edge is punctuation or a space (`Total:`) are unaffected at that edge. Sign the anchor against a page that puts a space or punctuation after the label.
+- **Docs correction (no code change): the `d<j>` key indexes the WHOLE `decides` list.** The 0.22.0 entry said `j` is the index of a VALUE decide. In fact `j` counts every decide, presence decides included: with `decides = [money, time, presence, time]` the claim keys are `d0`, `d1`, `d3`, and `values.d2` is `claim-value-unknown`.
+
+### Notes
+
+- Condition decides (with `op`) are unchanged: exactly one value in the quote, or an anchored one; a claim value that is among several quote values does not rescue `value-many`.
+- Documented limits. Without an anchor, `text` and membership cannot tell which field a value is in (an unanchored "from SFO" passes on a page where SFO is the arrival). Time spelling stays per ruling #34: lowercase `am` / `pm` and `9:27AM` are malformed. `v0.41.0` in a quote is one token, so the claim `0.41.0` does not match it. A membership or bind-only decide is red `value-malformed` if ANY token of its kind in the quote is malformed; sign an `anchor` to scope past noisy text. `W-2` and `BA-4` are not glued (the hyphen glue applies only after a digit).
+- Validated against a consumer's real captured pages (bareloop: Google Flights result blocks and a CHANGELOG's headings) during the build; this is a parity check on those pages, not a guarantee for other layouts.
+- Judges (the locate judge and the verdict judge) are still NOT built. Everything above is deterministic; bareguard never runs an LLM.
+
 ## [0.22.0] - 2026-10-12
 
 ### Added
