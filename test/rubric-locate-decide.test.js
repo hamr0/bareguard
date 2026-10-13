@@ -319,3 +319,14 @@ test("evalDecide is pure: same input, same output", () => {
   const d = money("lt", 400, { anchor: "Total:" });
   assert.deepEqual(evalDecide(d, "Total: $5"), evalDecide(d, "Total: $5"));
 });
+
+test("label word edges (#64): a value-decide anchor skips occurrences glued to a word", () => {
+  const t = between("time", "06:00", "21:00", { anchor: "Leaves" });
+  red("Leavesley Park 9:27 AM", t, "anchor-missing");
+  green("Leavesley Leaves 9:27 AM", t); // one qualifying occurrence: not ambiguous
+  const m = money("lt", 10, { anchor: "Total" });
+  green("Totals: $50 Total $7", m); // Totals skipped, reads $7
+  red("Totals: $50 Total $70", m, "value-over");
+  green("Total: $5 Totals: $50", money("lt", 10, { anchor: "Total:" })); // punctuation edge unchanged
+  green("xTotal $50 Total $7", m); // start edge: "xTotal" skipped
+});

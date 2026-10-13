@@ -572,6 +572,21 @@ export function extractValue(decide, text) {
 }
 
 /**
+ * RULED #64 LABEL WORD EDGES: an occurrence of a signed label (`anchor`, `until`) at `at` qualifies only when a word-character
+ * edge of the label sits on a token boundary (same helpers as the text boundaries, digit glue included). An edge that is
+ * punctuation or a space is unaffected.
+ */
+function edgesOk(t, label, at) {
+  if (label === "") return false;
+  const first = label.codePointAt(0);
+  if (isWordCp(first) && !boundaryBefore(t, at)) return false;
+  const end = at + label.length;
+  const last = cpEndingAt(label, label.length);
+  if (isWordCp(last) && !boundaryAfter(t, end)) return false;
+  return true;
+}
+
+/**
  * The signed anchor (normalized, case-sensitive) must occur exactly once in `text`. Returns `{ p, end }` (`end`: the index just past the anchor; `p`: the first non-whitespace character after it) or `{ gap }` (`anchor-missing` / `anchor-ambiguous` with the
  * gap fields). Shared by value decides and `text` decides.
  */
@@ -581,6 +596,7 @@ function locateAnchor(decide, text) {
   let count = 0;
   let first = -1;
   for (let at = text.indexOf(a); at !== -1 && count < 1000; at = text.indexOf(a, at + 1)) {
+    if (!edgesOk(text, a, at)) continue; // RULED #64: a non-qualifying occurrence is skipped, not counted
     if (count === 0) first = at;
     count++;
   }
@@ -721,9 +737,10 @@ function evalText(decide, text) {
   if (decide.until === undefined) return { type: "value", ok: true, textFrom: at.p };
   // RULED #61: the field is the quote strictly between the anchor's end and the FIRST `until` after it. `until` is matched
   // on the normalized quote, case-sensitive, with whitespace runs collapsed but NOT trimmed (a signed " at" keeps its
-  // leading space, so it cannot match inside a word); the anchor's own trim is untouched.
+  // leading space; RULED #64 then requires its word-character edges on a token boundary); the anchor's own trim is untouched.
   const u = normalizeUntil(decide.until);
-  const ue = u === "" ? -1 : text.indexOf(u, at.end);
+  let ue = u === "" ? -1 : text.indexOf(u, at.end);
+  while (ue !== -1 && !edgesOk(text, u, ue)) ue = text.indexOf(u, ue + 1); // RULED #64: skip non-qualifying, keep searching
   if (ue === -1) return { type: "value", ok: false, kind: "until-missing", until: decide.until, measured: 0 };
   const field = text.slice(at.end, ue).trim();
   if (field === "") return { type: "value", ok: false, kind: "value-none", anchor: decide.anchor };

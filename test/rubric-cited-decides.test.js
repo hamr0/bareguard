@@ -881,3 +881,33 @@ test("membership mismatch lists DISTINCT values, and counts them (#63)", async (
   const want = `#0:d0:claim-value-mismatch:99!=${[...Array(20).keys()].map((n) => n + 1).join(",")},...(25 in all)`;
   await red(`${many} ${many}`, { valueKind: "number" }, { d0: "99" }, want);
 });
+
+test("label word edges (#64): anchor and until match only on a token boundary at their word-character edges", async () => {
+  // until " at" no longer matches the start of " attendant" / " atlas"
+  const C = { valueKind: "text", anchor: "City:", until: " at" };
+  const Q = "City: Boston atlas Hotel at X";
+  await green(Q, C, { d0: "Boston atlas Hotel" });
+  const r = await bind(Q, C, { d0: "Boston" });
+  assert.equal(r.verdict, "red");
+  assert.deepEqual(items(r), ["#0:d0:claim-value-mismatch:Boston!=Boston atlas Hotel"]);
+  await green("From: Joe attendant at Avon", { valueKind: "text", anchor: "From:", until: " at" }, { d0: "Joe attendant" });
+  // a field containing the until string is cut at the first QUALIFYING match
+  await green("From: Stratford at Avon Airport", { valueKind: "text", anchor: "From:", until: " at" }, { d0: "Stratford" });
+  // anchor "Leaves" does not match inside "Leavesley"
+  await red("Leavesley Park X", { valueKind: "text", anchor: "Leaves" }, { d0: "ley Park" }, "#0:d0:anchor-missing");
+  await red("Leavesley Park X", { valueKind: "time", anchor: "Leaves" }, { d0: "9:27 AM" }, "#0:d0:anchor-missing");
+  // the skipped occurrence does not count toward anchor-ambiguous
+  await green("Leavesley Leaves 9:27 AM", { valueKind: "time", anchor: "Leaves" }, { d0: "9:27 AM" });
+  // value decide anchor "Total" skips "Totals"; an edge-punctuation anchor is unchanged
+  const M = { valueKind: "money", currency: "$", anchor: "Total" };
+  await green("Totals: $5 Total $7", M, { d0: "7" });
+  await red("Totals: $5 Total $7", M, { d0: "5" }, "#0:d0:claim-value-mismatch:5!=7");
+  await green("Total: $5 Totals: $7", { ...M, anchor: "Total:" }, { d0: "5" });
+  // digit edge (the #60 digit glue is reused): "v1" followed by ".2" is glued, so that occurrence is skipped; only the second counts
+  await green("v1.2 v1 x", { valueKind: "text", anchor: "v1" }, { d0: "x" });
+  await red("v1.2 x", { valueKind: "text", anchor: "v1" }, { d0: "x" }, "#0:d0:anchor-missing");
+  await green("v1 v1.2 x", { valueKind: "text", anchor: "v1" }, { d0: "v1.2 x" }); // first occurrence qualifies, glued second skipped
+  // the START edge: an anchor / until beginning with a word character must not start inside a word
+  await green("xTotal $5 Total $7", M, { d0: "7" });
+  await green("From: Joe flat at X", { valueKind: "text", anchor: "From:", until: "at" }, { d0: "Joe flat" });
+});
