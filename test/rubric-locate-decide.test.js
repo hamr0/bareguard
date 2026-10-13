@@ -330,3 +330,23 @@ test("label word edges (#64): a value-decide anchor skips occurrences glued to a
   green("Total: $5 Totals: $50", money("lt", 10, { anchor: "Total:" })); // punctuation edge unchanged
   green("xTotal $50 Total $7", m); // start edge: "xTotal" skipped
 });
+
+test("label word edges (#64): skipped occurrences do not burn the 1000-hit cap; qualifying ones still do", () => {
+  const t = between("time", "06:00", "21:00", { anchor: "Leaves" });
+  const r = one("Leavesley ".repeat(1000) + "Leaves 9:27 AM", t);
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.equal(r.results[0].extracted, 9 * 60 + 27); // 09:27, in minutes
+  red("Leaves 9:27 AM ".repeat(1001), t, "anchor-ambiguous");
+});
+
+test("label word edges (#64): digit-glued anchor is anchor-missing (kept strict, ruled 2026-10-13)", () => {
+  const n = val("number", "gte", 0, { anchor: "From " });
+  red("From59 US dollars", n, "anchor-missing");
+  green("From 59 US dollars", n);
+  red("Price12 total", val("number", "gte", 0, { anchor: "Price" }), "anchor-missing");
+  red("Qty3 total", val("number", "gte", 0, { anchor: "Qty" }), "anchor-missing");
+  green("Qty 3 total", val("number", "gte", 0, { anchor: "Qty" }));
+  assert.equal(one("From 59 US dollars", n).results[0].extracted, "59");
+  red("From59 US dollars", money("lt", 100, { anchor: "From " }), "anchor-missing");
+  green("From $59 US dollars", money("lt", 100, { anchor: "From " }));
+});
