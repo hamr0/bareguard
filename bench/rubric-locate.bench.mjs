@@ -2,7 +2,7 @@
 // The pathological 5 MiB decide-core cases moved here from test/rubric-locate-decide.test.js.
 // The default suite keeps a 16 KiB -> 64 KiB linearity guard. Exits non-zero on a breached bound.
 import assert from "node:assert/strict";
-import { decideQuote, extractValue } from "../src/primitives/rubric-locate.js";
+import { decideQuote, extractValue, evalDecide, textPresent, textAfter } from "../src/primitives/rubric-locate.js";
 
 const val = (valueKind, op, bound, more = {}) => ({ valueKind, op, ...(op === "between" ? bound : { value: bound }), ...more });
 const money = (op, v, more = {}) => val("money", op, v, { currency: "$", ...more });
@@ -25,6 +25,9 @@ const cases = {
 const decs = [
   val("number", "lt", 5), money("lt", 5), val("money", "lt", 5, { unit: "US dollars" }), val("date", "gte", "2026-01-01"), val("time", "lt", "12:00"),
   val("number", "lt", 5, { anchor: "Total:" }), val("time", "lt", "12:00", { anchor: "Total: " }), { phrases: ["zzz"] },
+  // bind-only (RULED #56): membership scans every value, anchored reads the one after the anchor; text (RULED #58) has its own anchor read
+  { valueKind: "number" }, { valueKind: "money", currency: "$" }, { valueKind: "money", unit: "US dollars" }, { valueKind: "date" }, { valueKind: "time" },
+  { valueKind: "time", anchor: "Total: " }, { valueKind: "text" }, { valueKind: "text", anchor: "Total:" },
 ];
 
 let worst = 0;
@@ -39,7 +42,7 @@ for (const [name, q] of Object.entries(cases)) {
     assert.ok(ms < 30000, `${name} ${JSON.stringify(d)} took ${ms}ms`); // includes the existing normalizeForQuote
   }
 }
-console.log(`5 MiB decide (96 cases): worst single decide ${worst.toFixed(0)} ms, total ${(Number(process.hrtime.bigint() - t0) / 1e6).toFixed(0)} ms`);
+console.log(`5 MiB decide (${Object.keys(cases).length * decs.length} cases): worst single decide ${worst.toFixed(0)} ms, total ${(Number(process.hrtime.bigint() - t0) / 1e6).toFixed(0)} ms`);
 
 // extraction alone (no normalize) is linear: 5x the input costs well under 15x the time
 const tm = (q) => { const t1 = process.hrtime.bigint(); extractValue({ valueKind: "time" }, q); extractValue({ valueKind: "number" }, q); extractValue(money("lt", 1), q); return Number(process.hrtime.bigint() - t1) / 1e6; };
@@ -53,4 +56,50 @@ assert.ok(large < 10000 && large < small * 15 + 50, `not linear: ${small} -> ${l
 // one huge number is still exact and bounded
 assert.equal(extractValue({ valueKind: "number" }, cases.digits).ok, true);
 assert.equal(decideQuote(cases.digits, [val("number", "gt", 5)]).ok, true);
+// the `text` matchers (RULED #58): presence is native indexOf plus an O(1) boundary test per hit (value <= 200 chars); the cases
+// are the hostile ones: every hit fails the boundary, every hit is a near-miss, combining marks, surrogate pairs
+const textCases = {
+  as: "a".repeat(MiB5),
+  glued: "xMS791 ".repeat(Math.floor(MiB5 / 7)),
+  marks: "a\u0301".repeat(MiB5 / 2),
+  pairs: "\u{1D400}".repeat(MiB5 / 2),
+};
+const textVals = ["a".repeat(199) + "b", "b" + "a".repeat(199), "a", "ms791", "\u{1D400}", "a\u0301"];
+let worstText = 0;
+for (const [name, q] of Object.entries(textCases)) {
+  const f = q.toLowerCase();
+  for (const v of textVals) {
+    const t1 = process.hrtime.bigint();
+    assert.equal(typeof textPresent(f, v), "boolean", name);
+    assert.equal(typeof textAfter(q, 0, v), "boolean", name);
+    assert.equal(typeof evalDecide({ valueKind: "text", anchor: "xMS791" }, q).ok, "boolean", name);
+    const ms = Number(process.hrtime.bigint() - t1) / 1e6;
+    worstText = Math.max(worstText, ms);
+    assert.ok(ms < 30000, `text ${name} ${JSON.stringify(v.slice(0, 8))} took ${ms}ms`);
+  }
+}
+console.log(`5 MiB text matchers (${Object.keys(textCases).length * textVals.length} cases): worst ${worstText.toFixed(0)} ms`);
+// text `until` (RULED #61): the anchor is found once, then ONE indexOf for the until; hostile = an until that never
+// matches / matches only far away, an anchor-heavy quote (ambiguous), a huge field, a hyphen-digit-glue grid (RULED #62)
+const untilCases = {
+  nomatch: "Leaves " + "a".repeat(MiB5),
+  far: "Leaves " + "a".repeat(MiB5) + " at 9",
+  nearmiss: "Leaves " + "a ".repeat(MiB5 / 2),
+  ambiguous: "Leaves ".repeat(Math.floor(MiB5 / 7)),
+  hyphens: "Leaves " + "1-a".repeat(MiB5 / 3),
+};
+let worstUntil = 0;
+for (const [name, q] of Object.entries(untilCases)) {
+  for (const until of [" at", " b", "a".repeat(200)]) {
+    const d = { valueKind: "text", anchor: "Leaves", until };
+    const t1 = process.hrtime.bigint();
+    assert.equal(typeof evalDecide(d, q).ok, "boolean", name);
+    assert.equal(typeof decideQuote(q, [d]).ok, "boolean", name);
+    const ms = Number(process.hrtime.bigint() - t1) / 1e6;
+    worstUntil = Math.max(worstUntil, ms);
+    assert.ok(ms < 30000, `until ${name} took ${ms}ms`);
+  }
+  assert.equal(typeof textPresent(q.toLowerCase(), "1-a"), "boolean", name);
+}
+console.log(`5 MiB text until (${Object.keys(untilCases).length * 3} cases): worst ${worstUntil.toFixed(0)} ms`);
 console.log("bench:rubric ok");

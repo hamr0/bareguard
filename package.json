@@ -1,6 +1,6 @@
 {
   "name": "bareguard",
-  "version": "0.22.0",
+  "version": "0.23.0",
   "description": "Action-side runtime policy library for autonomous agents — gates what the agent does — and whether its work is done — with deterministic checks only. Sibling of bareagent in the bare suite.",
   "type": "module",
   "main": "./src/index.js",
@@ -29,7 +29,7 @@
   ],
   "primitives": "./primitives.json",
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "scripts": {
     "test": "node --test",

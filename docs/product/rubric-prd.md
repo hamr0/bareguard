@@ -489,6 +489,10 @@ value in `claim.values["d<j>"]`, and that value must EQUAL the value the decide 
 - **Key.** `values` is a plain object keyed by `d<j>`, `j` the decimal 0-based index of the decide in the
   signed `decides` list (`d0`, `d1`, ... `d9`; no leading zeros, case-sensitive). The index form is used in
   every gap item, so the worker's fix loop already speaks it; it adds no signed field and cannot collide.
+  **`j` indexes the WHOLE `decides` list, presence decides included (RULED #59; verified against
+  `src/primitives/rubric.js`, where the value indexes are taken over the full list and a presence decide
+  keeps its slot).** With `decides = [value, value, presence, value]` the keys are `d0`, `d1` and `d3`;
+  `d2` is the presence decide's slot and is `claim-value-unknown`. It is never "the n-th value decide".
   A position is bound to its role by the signed order, so the worker cannot swap roles (a price into a
   duration slot): the value in `d1` is compared with the value extracted by decide 1 only. (The alternative
   of a signed per-decide `id` is open question 1.)
@@ -533,7 +537,9 @@ value in `claim.values["d<j>"]`, and that value must EQUAL the value the decide 
 decide reds in decide order, then the binding reds in decide order then unknown keys in the object's own
 key order, then `numbers`), clipped and bounded to 20 with `itemsTotal` when cut. The new reason words are
 the new "gap kinds": `claim-value-missing`, `claim-value-malformed`, `claim-value-mismatch`,
-`claim-value-unknown`, `quote-too-long`, plus the §5.2 decide kinds under a `d<j>:` prefix. An item is
+`claim-value-unknown`, `quote-too-long`, plus the §5.2 decide kinds under a `d<j>:` prefix. Built (RULED #56-#58, unreleased):
+`claim-value-absent` (a `text` decide's value is not in the quote / not after the anchor) and
+the list form of `claim-value-mismatch` for an unanchored bind-only decide. An item is
 assembled from clipped output-derived parts (claim values, keys, quotes: 120) and UNCLIPPED signed parts,
 so a signed phrase in `#<i>:d<j>:phrase-missing:<phrase>` is never cut; anchors, bounds and units are not
 in items (the worker has the spec). `renderGaps` renders it as the default JSON row (no plain sentence).
@@ -556,6 +562,191 @@ free text of the claim beyond its numbers (the carrier name, a prose adjective):
 presence decide or a typed value. It does NOT prove the worker picked the BEST option ("cheapest",
 "earliest", "N best"): that is the superlative check of §11 build step 3. The claim's source is one signed
 input today; pages registered mid-run (§5.3) are build step 2.
+
+**Bind-only decides, membership, and the `text` value kind (RULED 2026-10-12, #56-#59, requested by
+bareloop for its "required facts" design; BUILT, unreleased (it ships together with the Node >= 22
+requirement). Everything in this subsection is the contract the build meets, and nothing
+above it changes for a check that signs neither a bind-only decide nor `text`.)**
+
+*Why.* Today a value decide must carry `op` and a bound, so a spec author who only needs "the worker's
+price is the price ON the quote" has to invent a bound. And a fact that is a word, not a number (a flight
+number, a carrier, a version), has no decide at all. Two additions, both bind-only (they judge nothing,
+they tie the claim's declared value to the quote): an `op`-less value decide, and a `text` value kind.
+
+*Bind-only value decide (RULED #56).* A value decide (`number`, `money`, `date`, `time`) MAY omit `op`.
+Then it must not carry `value`, `lo` or `hi` (refused at `createRubric`, the error naming the path, for
+example `rubric.checkpoints[0].checks[1].decides[0].value: is refused on a bind-only decide (sign an op,
+or drop the bound)`). `currency` / `unit` / `anchor` are as today (money still signs exactly one of
+`currency`/`unit`). A bind-only decide runs NO condition: `value-over` and `value-under` can never come
+from it. It runs extraction and binding only, and the claim MUST carry `values.d<j>` for it (a missing
+one is `claim-value-missing`, exactly as for any value decide; malformed is `claim-value-malformed`, same
+parser as today). It is a value decide in every other respect (it counts for the `d<j>` key set, it is
+memoized per distinct quote, its reds are `#<i>:d<j>:<reason>`).
+
+- **WITH `anchor`**: extraction is unchanged (the ONE value right after the anchor; `anchor-missing`,
+  `anchor-ambiguous`, `value-none`, `value-malformed` exactly as §5.2), then the binding is unchanged
+  (`claim-value-mismatch:<claim>!=<quote>` when the canonical values differ).
+- **WITHOUT `anchor` = MEMBERSHIP.** The quote may hold any number of values of the kind. The claim's
+  value must canonically EQUAL ONE OF them:
+  - zero values of the kind in the quote = `value-none`;
+  - any malformed token of the kind in the quote = `value-malformed` (unsure = red, Law 1; a malformed
+    token is never counted away, the same as an unanchored condition decide);
+  - the claim value is not among the quote's values = `claim-value-mismatch`; `value-many` NEVER fires
+    for an unanchored bind-only decide (many values is the normal case here).
+  - **Mismatch item.** `#<i>:d<j>:claim-value-mismatch:<claim>!=<q1>,<q2>,...`: `<claim>` is the
+    canonical claim value (as today, clipped 120); the right side lists the quote's canonical values in
+    quote order, comma-separated, each clipped to 120, **bounded to 20 values**; when cut, the list ends
+    `,...(<total> in all)`. With exactly one quote value the item is byte-identical to the anchored one
+    (`...:199!=389`). This is the same bound and the same "list the values the quote does hold" idea as
+    `value-many`'s `values` / `valuesTotal`, carried in the reason because a mismatch has no gap-level
+    field (a `cited` gap's detail lives in `items`, §4.6 "Gap").
+  - **Documented limit.** Membership cannot tell WHICH field of the quote a value is (depart vs arrive,
+    price vs a fee that happens to equal it): any value of the kind on the quote passes. The human sees the
+    quote and the value at Accept. Where the field matters the author signs an `anchor`.
+  - Examples (bareloop's). Quote `Alaska 8:15 AM $389 Nonstop`, decide `{valueKind:"money",
+    currency:"$"}`: `values {d0:"199"}` = red `#0:d0:claim-value-mismatch:199!=389`; `{d0:"389"}` = green.
+    Two-time row `8:15 AM – 9:47 AM`, decide `{valueKind:"time"}`: `"9:47 AM"` green (`"09:47"` green),
+    `"8:15 AM"` green, `"10:00"` red `claim-value-mismatch:10:00!=08:15,09:47`. A quote with no `$`
+    token = `value-none`; a quote holding `$5USD` = `value-malformed`.
+
+*Condition decides are unchanged (RULED #57).* A value decide WITH `op` keeps ruling #32 exactly: ONE value
+of the kind (or the one right after the anchor), else `value-many` / `value-none`. A worker never chooses
+which value a condition reads, or it would pick the passing one. A two-time row such as `8:15 AM - 9:47 AM`
+under `op` needs an `anchor` or a narrower quote. Only `op`-less decides gain membership.
+
+*The `text` value kind (RULED #58; bind only).* `{ valueKind: "text", anchor? }`.
+- **Refused at `createRubric`** (error naming the path): `op`, `value`, `lo`, `hi`, `currency`, `unit`.
+  Only `valueKind` and an optional `anchor` are allowed. `text` is a value decide for the `d<j>` key set,
+  so the claim MUST carry `values.d<j>` (missing = `claim-value-missing`).
+- **No extraction**: nothing is parsed out of the quote, so a `text` decide has no `value-none` /
+  `value-many` / `value-malformed`.
+- **The claim value** `values.d<j>` is a non-empty string of at most 200 characters AFTER normalization;
+  a non-string, an empty or whitespace-only string, or one over 200 = `claim-value-malformed` (200 is
+  counted in UTF-16 code units, like every other length bound here).
+- **Normalization** (both the claim value and the quote): trim; collapse every whitespace run to one
+  space; then a case-insensitive compare by `String.prototype.toLowerCase()` on both sides. That is the
+  fold the codebase already uses everywhere (`carries` / presence decides, `mustCarry`, headings): it is
+  locale-independent, NOT full Unicode case folding (`ß` is not `SS`; a char whose lower-case form is
+  longer, such as `İ`, lowers to two code units on both sides, so offsets are taken in the folded text).
+  The quote has already passed `normalizeForQuote` (which also drops `**` and `__`); the value gets the
+  trim and whitespace collapse only, so a value that itself contains `**` or `__` can never be found
+  (documented, harmless: it fails closed).
+- **WITHOUT `anchor` = PRESENCE.** The folded value must appear in the folded quote as a WHOLE-TOKEN
+  sequence: the character before the match and the character after it are each either absent (quote
+  start / end) or NOT a Unicode letter (`\p{L}`), combining mark (`\p{M}`) or decimal digit (`\p{Nd}`).
+  Punctuation, `_` and spaces are boundaries, EXCEPT digit glue (RULED #60): a `.` or `,` with a decimal
+  digit immediately on both sides holds the number together and is not a boundary (`0.41` is not in
+  `0.41.0`, `3` is not in `3.5`, `1` is not in `1,234`); and hyphen digit glue (RULED #62): a `-` with a
+  decimal digit immediately before it and a letter or digit immediately after it is not a boundary (`0.41.0`
+  is not in `[0.41.0-rc1]`, `2026` is not in `2026-10-12`, `rc1` is not in `0.41.0-rc1`; `LAX` in `LAX-SFO`,
+  an en dash with spaces, and `5` in `costs 5-` are unaffected). At the match END the last match character
+  is the digit and the character after the `-` is a letter or digit; at the START the character before the
+  match is the `-`, the one before that a digit, and the first match character a letter or digit. Many occurrences are fine; one qualifying occurrence is
+  enough (an earlier occurrence glued to letters, `xMS791 MS791`, does not hide a later whole one).
+  The boundary test reads code points with a single-character class lookup: linear, no backtracking, no
+  user regex. Boundaries are tested on the match as given, so a value that starts or ends in punctuation
+  (`-5`, `a.b.`) is bounded by its OUTER neighbours only.
+- **WITH `anchor`**: the same anchor rules as value decides (the anchor normalized, case-sensitive, found
+  exactly once: else the decide itself is red `anchor-missing` / `anchor-ambiguous`, item
+  `#<i>:d<j>:anchor-missing`). The value must START right after the anchor with only whitespace between
+  (skipped), compared case-insensitively, and END on a whole-token boundary (the character after the match
+  is absent or not a letter / mark / digit; digit glue, RULED #60, applies: `0.41` does not end before the
+  `.` of `0.41.0`; hyphen digit glue, RULED #62, applies: `0.41.0` does not end before the `-` of
+  `0.41.0-rc1`). The character BEFORE the match is the anchor's own last
+  character or whitespace and is not tested.
+- **WITH `anchor` AND `until` (RULED #61): the END LABEL.** `until` is an optional non-empty string (same
+  length and shape limits as `anchor`), allowed ONLY on a `text` decide that also signs `anchor`
+  (`until` without `anchor`, or on any non-text decide, is refused at `createRubric` naming the path).
+  The anchor rules are unchanged (exactly once, else `anchor-missing` / `anchor-ambiguous`). Then the FIRST
+  occurrence of `until` after the anchor's END is found in the normalized quote (case-sensitive; none =
+  the decide itself is red `until-missing`, item `#<i>:d<j>:until-missing`, so the binding is not
+  evaluated). The FIELD is the quote text strictly between the anchor's end and that `until`, trimmed
+  (whitespace is already collapsed); an empty field is `value-none`. The claim value (normalized as for
+  `text`) must EQUAL the field case-insensitively (`toLowerCase()`): no prefix, no overlong run. Not equal =
+  `#<i>:d<j>:claim-value-mismatch:<claim>!=<field>` (both clipped to 120). `until` is normalized like the
+  quote (`**` / `__` dropped, whitespace runs collapsed) but NOT trimmed, whereas an `anchor` is trimmed
+  (the quote is trimmed, so a signed `"From "` is `"From"`): a signed `" at"` keeps its leading space, so it
+  keeps that space at its start edge; whether it can match inside a word is decided by the label word-edge rule
+  (RULED #64): `" at"` ends in a word character, so it needs a boundary after it (`" attendant"` does not match).
+  Example: quote `Leaves San Francisco International Airport at 9:27 AM`, anchor `Leaves`, until
+  ` at`: `"San Francisco International Airport"` green, `"san francisco international airport"` green,
+  `"San Francisco"` red `claim-value-mismatch:San Francisco!=San Francisco International Airport`,
+  `"San Francisco International Airport at"` red mismatch.
+- **LABEL WORD EDGES (RULED #64).** A signed `anchor` (any decide that takes one: value decides AND `text`) and a
+  signed `until` match only where their word-character edges (`\p{L}\p{M}\p{Nd}`) sit on a token boundary: if the
+  label's FIRST character is a word character, the quote character before the match must be a boundary or the
+  quote start; if its LAST character is a word character, the character after the match must be a boundary or
+  the quote end. The same helpers as the text boundaries decide it, so the digit glue (#60) and hyphen glue
+  (#62) apply (anchor `v1` does not match in `v1.2` nor `v1-b`). A non-qualifying occurrence is SKIPPED: it does
+  not count toward `anchor-ambiguous`, and for `until` the search continues to the next occurrence. A label edge
+  that is punctuation or a space (`Total:`, a leading `" at"` space) is unaffected at that edge. This TIGHTENS
+  released behavior for value-decide anchors (anchors on value decides shipped in 0.22.0): the release CHANGELOG
+  lists it under Changed. DIGIT-GLUED ANCHORS are kept strict on purpose (hamr, 2026-10-13; unsure = red): a signed
+  anchor `From ` is trimmed to `From`, so quote `From59` is `anchor-missing` (0.22.0 read `59`), while `From 59` is
+  still green; likewise `Price12` / `Qty3`. Sign the anchor against a page that puts a space or punctuation after
+  the label. Examples: quote `City: Boston atlas Hotel at X`, anchor `City:`, until `" at"`: field
+  `Boston atlas Hotel` (`"Boston"` red mismatch); anchor `Leaves` does not match in `Leavesley Park` (text and
+  time decides: `anchor-missing`), and `Leavesley Leaves 9:27 AM` finds the anchor once; anchor `Total` on
+  `Totals: $5 Total $7` reads `$7`.
+- **Limits from real data (bareloop).** A text claim `8:15` inside `8:15-9:47` is red (glued by the hyphen),
+  while time membership on `8:15-9:47 AM` still finds both times; `2026` inside `2026-10-12` is red;
+  `W-2` and `BA-4` are NOT glued (the hyphen glue of #62 applies only after a digit), so the whole token and
+  its parts (`W`, `2`, `BA`, `4`) are all green; `MS791` against `MS791-B` is red (digit before the hyphen). A field containing the
+  `until` string is cut at the first QUALIFYING match (`Stratford at Avon Airport` with until `" at"` gives
+  field `Stratford`). A membership or bind-only decide is red `value-malformed` if ANY token of the kind in the
+  quote is malformed (e.g. `9:27 AM or 9:27AM`): sign an `anchor` to scope past noisy text.
+- **Without `until`, anchored `text` is a PREFIX read.** A whole-token prefix (`San Francisco` for `San
+  Francisco International Airport`) or an overlong run passes, because the value only has to start at the
+  anchor and end on a boundary. Sign `until` to close it (RULED #61).
+- **Absent = new red `claim-value-absent`** (a CLAIM-vs-QUOTE red, in the family of
+  `claim-value-mismatch`, not a decide red): the value is not in the quote (no anchor), or not right after
+  the anchor. Item `#<i>:d<j>:claim-value-absent:<value>`, where `<value>` is the claim value in its
+  NORMALIZED form (trimmed, whitespace collapsed, ORIGINAL case, output-derived, clipped to 120), so the
+  worker's fix loop sees what it sent. Not evaluated when the decide's own red already says the extraction
+  failed (`anchor-missing` / `anchor-ambiguous`), and not evaluated when the value was missing or
+  malformed (those reds say so).
+- **Membership lists DISTINCT values (RULED #63).** In a membership `claim-value-mismatch` item the quote's
+  canonical values are de-duplicated (first-occurrence order), and the 20 bound and the `(N in all)` total
+  count DISTINCT values: a row with `09:27` three times and `11:07` three times, claim `12:34`, is
+  `12:34!=09:27,11:07`.
+- **Spelling limits (no code change).** (a) Time spelling stays per ruling #34: lowercase `am` / `pm` and no-space
+  `9:27AM` are malformed in both claim and quote (deliberate; a site that writes them needs a different
+  decide). (b) `v0.41.0` in the quote does not match the claim `0.41.0`: `v0` is one whole token (by
+  design; claim `v0.41.0` instead).
+- **No regex, no wildcards** (decided: either can be added later without breaking any signed spec; a
+  signed string with `*` or `.` is a literal today and stays one).
+- **Documented limit.** Without an anchor `text` cannot tell which field the value is in. Real evidence
+  (bareloop POC round 2, 44 Google Flights listitem blocks): `LAX` and `SFO` are each present in 44/44
+  blocks, so an unanchored "from SFO" passes on a wrong-way page; `Departure time:` / `Arrival time:`
+  anchors are 44/44. That is why the anchor is in v1.
+- **Examples.** Quote `EgyptAir MS791 USD 420`: `"MS791"` green, `"ms791"` green, `"MS79"` red
+  `#0:d0:claim-value-absent:MS79` (a prefix of a token). Quote `## [0.41.0] - 2026-10-12`: `"0.41.0"` green.
+  Quote `Alaska Airlines 8:15 AM`: `"alaska   airlines"` green (whitespace collapsed, case folded). Quote
+  `Alaska 8:15 AM $389 Nonstop`: `"Delta"` red `claim-value-absent:Delta`. Anchored: quote `Departure time:
+  8:15 AM. Arrival time: 9:47 AM.`, anchor `Departure time:`, `"8:15 AM"` green, `"9:47 AM"` red.
+
+*Layout note on the examples (RULED #59).* The right money form depends on the page's layout, and a spec
+author checks it on the real capture. On bareloop's per-flight `listitem` blocks, `unit: "US dollars"` is
+`value-many` (a button label repeats the amount) while `currency: "$"` finds exactly one token (44/44). On
+the one-line link rows (E4 above) it is the reverse: the price is spelled `59 US dollars`, so `unit` works
+and `currency: "$"` is `value-none`. With a bind-only decide the same holds for the symbol/unit choice,
+except that a repeated amount is no longer `value-many` (membership).
+
+*Vocabulary and createRubric (how `rubricVocabulary` stays driven by the same table).* The DECIDES
+descriptor in `src/primitives/rubric.js` is the single table `createRubric` validates against and
+`rubricVocabulary` / `describeRule` print. The build changes it, and only it, in four ways: (1) the value
+shape's `valueKind` enum gains `"text"` (`["number","money","date","time","text"]`); (2) `op` on the value
+shape flips from `required: true` to `required: false`; (3) its `conditions` list is rewritten to say it:
+"op may be omitted (a bind-only decide: then value, lo and hi are refused, and without an anchor the claim
+value must equal one of the quote's values)"; "an op decide: between needs lo and hi (lo <= hi) and forbids
+value; the other ops need value and forbid lo and hi"; "valueKind text is bind-only: it refuses op, value, lo,
+hi, currency and unit, and the claim value is a non-empty string of at most 200 characters"; "money needs
+exactly one of currency or unit; currency and unit are refused on any other valueKind"; (4) the list-level
+condition says "a claim must carry a string in values.d<j> for every value decide, any valueKind, with or
+without op, `text` included; j indexes the whole decides list". The validator's per-field checks read
+those same entries (`required`, `enum`), so the descriptor and the refusals cannot drift; the both-directions
+vocabulary test (§10) pins it. The bind-only / `text` shapes are valid only under `cited`: the PARKED
+`judged` check keeps requiring `op` and refuses `valueKind: "text"` (it has no claim to bind, §5.2).
 
 **Not now (RULED #55).** One claim backed by TWO quotes from TWO sources (multi-source claims) is Later.
 
@@ -729,8 +920,8 @@ A decide is EXACTLY one of two shapes (a mix, or neither, is refused at `createR
 
 | Field | Value decide | Presence decide | Rule |
 |---|---|---|---|
-| `valueKind` | `"number"` \| `"money"` \| `"date"` \| `"time"` | refused | which parser runs (below) |
-| `op` | `"lt"` \| `"lte"` \| `"gt"` \| `"gte"` \| `"between"` | refused | `value < bound`, `<=`, `>`, `>=`, or `lo <= value <= hi` (BOTH ends inclusive) |
+| `valueKind` | `"number"` \| `"money"` \| `"date"` \| `"time"` (and, under `cited` only, `"text"`: bind only, no parser, BUILT, RULED #58, §4.6) | refused | which parser runs (below) |
+| `op` | `"lt"` \| `"lte"` \| `"gt"` \| `"gte"` \| `"between"` | refused | `value < bound`, `<=`, `>`, `>=`, or `lo <= value <= hi` (BOTH ends inclusive). Required on a `locate` decide; under `cited` it MAY be omitted (BUILT, RULED #56: a bind-only decide, then `value`/`lo`/`hi` are refused and an unanchored one is a membership test, §4.6) |
 | `value` | number (`number`, `money`) or string (`date`, `time`) | refused | the bound; required unless `between`, refused with `between`. Parsed by the SAME parser as the quote's value, at `createRubric`; a bad bound is refused naming the path |
 | `lo`, `hi` | same type as `value` | refused | both required with `between`, refused otherwise; `lo <= hi` required (a wrap-around window such as 22:00-02:00 is refused) |
 | `currency` | `"$"` \| `"€"` \| `"£"` | refused | with `money`: exactly one of `currency` or `unit` is required (XOR, RULED #43); refused otherwise. The only symbol that counts as a money value |
@@ -992,6 +1183,20 @@ fields, plus one new optional `anchor`:
 | `value-under` | `judged` | `measured` = value, `limit` = the bound, `direction` | below `gte` / `gt` / `between` `lo` |
 | `phrase-missing` | `judged` | `measured` = the first missing signed phrase (never clipped) | a presence decide's phrase is not in the quote |
 | `disagree` | `agree` | `measured` = distinct outcomes, `limit` = `reads` | the reads decided or extracted differently |
+
+The next two are `cited` ITEM reasons (`#<i>:d<j>:<reason>`, §4.6 "Gap"), listed here with the decide kinds so
+the reason words live in one place. BUILT (RULED #56, #58):
+
+| item reason | where | Meaning |
+|---|---|---|
+| `claim-value-mismatch:<claim>!=<q1>,<q2>,...` | `cited` binding | a bind-only decide WITHOUT an anchor (membership): the canonical claim value equals none of the quote's values; the quote's canonical values listed in quote order, each clipped 120, at most 20, `,...(<total> in all)` when cut. With one quote value it equals the anchored form `<claim>!=<quote>` |
+| `claim-value-absent:<value>` | `cited` binding | a `text` decide: the normalized claim value is not in the quote as a whole-token sequence (no anchor), or not right after the anchor; `<value>` is the normalized claim value (original case), clipped 120 (digit glue, RULED #60: a `.`/`,` between digits is not a boundary; hyphen digit glue, RULED #62) |
+| `until-missing` | `cited` decide | an anchored `text` decide signing `until` (RULED #61): no `until` after the anchor; item `#<i>:d<j>:until-missing`, a decide red like `anchor-missing`, the binding is not evaluated. An empty field between the anchor and `until` is `value-none`. With `until` the binding is `claim-value-mismatch:<claim>!=<field>` (the claim must equal the field, case-insensitively); a membership mismatch lists DISTINCT values (RULED #63) |
+
+For a bind-only unanchored decide `value-many` never fires; `value-none` (zero values of the kind) and
+`value-malformed` (any malformed token of the kind) keep their meaning. A `text` decide has no extraction, so
+it has none of `value-none` / `value-many` / `value-malformed` (only `anchor-missing` / `anchor-ambiguous`
+from its own anchor).
 
 `direction` for the value gaps: `"at-most"` (`lte`, `between` `hi`), `"at-least"` (`gte`, `between`
 `lo`), plus two NEW values `"below"` (`lt`) and `"above"` (`gt`) because the existing two mean
@@ -1281,9 +1486,9 @@ audit write failure still propagates.
 | Kind | Added |
 |---|---|
 | exports | `createRubric(spec)`, `rubricSha(spec)`, `checkStep(rubric, checkpointId, output, opts)`, `quoteIn(quote, source)`, `numbersInQuote(claim, quote)`, `renderGaps(gaps)`, `rubricVocabulary` |
-| `rubricVocabulary` | frozen, machine-readable; lists every rule with its field names, types, required/optional, bounds (count fields integers >= 1, no max; string lists non-empty arrays of non-empty strings; no whitespace-only strings; the `cited` caps `quoteSourceMaxBytes`, `quoteWorkMax` and `quoteMaxChars`) and defaults (including `strict`); a drafting LLM reads it; every check description shown to anyone is GENERATED from it, never hand-written |
+| `rubricVocabulary` | frozen, machine-readable; lists every rule with its field names, types, required/optional, bounds (count fields integers >= 1, no max; string lists non-empty arrays of non-empty strings; no whitespace-only strings; the `cited` caps `quoteSourceMaxBytes`, `quoteWorkMax` and `quoteMaxChars`) and defaults (including `strict`); a drafting LLM reads it; every check description shown to anyone is GENERATED from it, never hand-written. BUILT (RULED #56-#58): the `decides` descriptor's `valueKind` enum gains `"text"`, `op` becomes optional, and its conditions are rewritten (§4.6 "Vocabulary and createRubric"); the shape also carries the `textFields` key (the fields a `text` decide may sign: `anchor`, `until`), the `until` field, and the `text` member of the `valueKind` enum; the descriptor and the validator stay driven by the one table |
 | gate methods | `checkStep(checkpoint, output, opts)`, `drainGaps()`, `recordAccept({...})` (harness-only) |
-| config keys | `rubric: { spec, sha256, advanceOn }`; signed spec keys `onExhausted`, `maxReds`, `reads`, `requiresHuman`, per-checkpoint `accept`, per-check `id`, `text`, `strict`, `phrases`, `noneExit`, `expectExit`, `direction`, `baseline`, `patterns`, `allowPrefixes`, `requireNonEmpty`, `size`, `items`, `itemsFrom`; for `cited` (§4.6, RULED #48) `decides` and, inside a decide, the same fields as below; the claim shape `{claim, quote, values?}` with `values` keyed `d<j>` and the `cited` gap item reasons `claim-value-missing`, `claim-value-malformed`, `claim-value-mismatch`, `claim-value-unknown`, `quote-too-long` and `d<j>:<decide kind>`; for `judged` (PARKED, §5.2) `kind`, `ask`, `sources`, `decides`, and inside a decide `valueKind`, `op`, `value`, `lo`, `hi`, `currency`, `unit`, `anchor`, `phrases` |
+| config keys | `rubric: { spec, sha256, advanceOn }`; signed spec keys `onExhausted`, `maxReds`, `reads`, `requiresHuman`, per-checkpoint `accept`, per-check `id`, `text`, `strict`, `phrases`, `noneExit`, `expectExit`, `direction`, `baseline`, `patterns`, `allowPrefixes`, `requireNonEmpty`, `size`, `items`, `itemsFrom`; for `cited` (§4.6, RULED #48) `decides` and, inside a decide, the same fields as below; the claim shape `{claim, quote, values?}` with `values` keyed `d<j>` and the `cited` gap item reasons `claim-value-missing`, `claim-value-malformed`, `claim-value-mismatch`, `claim-value-unknown`, `quote-too-long` and `d<j>:<decide kind>`; BUILT, unreleased (RULED #56-#59, ships with Node >= 22; #64 label word edges for `anchor` and `until`): `op` optional on a `cited` value decide (bind-only), the value kind `text` (inside a decide: `{valueKind:"text", anchor?, until?}`; `until` RULED #61, hyphen digit glue RULED #62, distinct membership list RULED #63), the item reasons `claim-value-absent` and the list form of `claim-value-mismatch` (`<claim>!=<q1>,<q2>,...`), the 200-character claim-value bound for `text`, the `createRubric` refusals for `value`/`lo`/`hi` without `op` and for `op`/`value`/`lo`/`hi`/`currency`/`unit` on `text`, and the `d<j>` rule that `j` indexes the whole `decides` list; for `judged` (PARKED, §5.2) `kind`, `ask`, `sources`, `decides`, and inside a decide `valueKind`, `op`, `value`, `lo`, `hi`, `currency`, `unit`, `anchor`, `phrases` |
 | rule strings | every rule in §4; deny rules `rubric.invalid`, `rubric.red`, `rubric.stopped`, `rubric.unminted`, `rubric.output-mismatch`, `rubric.exhausted`, `rubric.needs-accept` |
 | audit | phases `rubric` (`rubricSha`, `checkpoint`, `verdict`, `outputSha`, bounded `gaps` / `fault`), `rubric_baseline` (`baselineSource`), `rubric_accept`, `rubric_accept_refused` |
 | event | the `humanChannel` event gains `rubric: { rubricSha, checkpoint, outputSha, verdict, gaps }` on a `rubric.needs-accept` ask |
@@ -1382,6 +1587,20 @@ Name: **rubric**.
   - Stray number: claim text `United $45` with `values {d0:"59",...}` over a quote with `59` = red `#0:numbers:45` (the typed value is right; the free text is wrong); claim text `59.00` against quote `59` = `numbers:59.00` false red (documented looseness, §4.2); all reds of one claim are listed together (a mismatch AND a stray number in one claim = two items).
   - Unchanged behaviour with no `decides`: every existing `cited` test passes byte-for-byte (items, `measured`, `limit`, `no-claims`, `too-many`, `stopped`); `rubricSha` changes when `decides`, a decide field or the decide order changes; `createRubric` refuses `decides` that is empty, over 10, not an array, a decide that is value AND presence or neither, `between` with `value`, `money` with both or neither of `currency`/`unit`, a bad bound, naming the path; `rubricVocabulary` lists `decides` on `cited` with its conditions and the generated description matches.
   - Verdict: a `cited` check with decides that passes is plain `green` (never `soft-green`), at a gating checkpoint it advances with no `requiresHuman`; reds are `red` with the gap in `drainGaps()`; a source sha mismatch is still `stopped`; the work cap still applies and `decideQuote` runs once per distinct normalized quote (spy).
+- **Bind-only decides, membership and `text` (RULED 2026-10-12, §4.6, #56-#59; BUILT: these are the cases the build passes, in `test/rubric-cited-decides.test.js`).** Every case also runs the falsify-by-revert of the source it exercises (reverting the membership compare must turn the wrong-price case green; reverting the whole-token boundary must turn the `MS79` case green; reverting the "anchor required exactly once" rule must turn the ambiguous-anchor case green). Hostile `values` (throwing getter, Proxy, `__proto__` key) stay red, never a throw.
+  - Refusals at `createRubric`, each naming the path: a value decide without `op` carrying `value`, `lo` or `hi` (each of three); `op` WITH `value` is still fine; `{valueKind:"text", op:"lt"}`, and `text` with each of `value`, `lo`, `hi`, `currency`, `unit`; `text` with an `anchor` is fine; a blank / over-1000 `anchor` on `text` refused as today; `money` without `op` still needs exactly one of `currency`/`unit`; an op-less decide (and `text`) on a `judged` check refused. `rubricSha` changes when `op` is dropped or added, and when `valueKind` becomes `text`.
+  - Bind-only, unanchored (membership): quote `Alaska 8:15 AM $389 Nonstop`, `{valueKind:"money", currency:"$"}`: `values {d0:"389"}` green; `{d0:"199"}` red `#0:d0:claim-value-mismatch:199!=389`; `{d0:"$389"}` / `{d0:"389 dollars"}` / a JSON number `claim-value-malformed`; no `values` `claim-value-missing`. Quote `Total: $389 (was $420)`: `"389"` green AND `"420"` green (membership, the documented limit), `"400"` red `claim-value-mismatch:400!=389,420`; `value-many` NEVER appears. Two-time row `8:15 AM – 9:47 AM`, `{valueKind:"time"}`: `"9:47 AM"`, `"09:47"`, `"8:15 AM"` green; `"10:00"` red `claim-value-mismatch:10:00!=08:15,09:47`; `"9:47 PM"` red (AM vs PM). A quote with 21 `$` values and a claim equal to none: the item lists exactly 20 and ends `,...(21 in all)`; a claim equal to the 21st (not listed) is GREEN (membership sees all values, only the DISPLAY is bounded; assert it). A quote with no `$` token = `#0:d0:value-none` (and no mismatch item); a quote with `$5USD` = `#0:d0:value-malformed`; `number` kind with `0.41.0` in the quote = `value-malformed` (unsure = red).
+  - Bind-only, anchored: quote `Departure time: 8:15 AM. Arrival time: 9:47 AM.`, `{valueKind:"time", anchor:"Departure time:"}`: `"8:15 AM"` green; `"9:47 AM"` red `claim-value-mismatch:09:47!=08:15` (unanchored membership would have passed it: assert both, so the case proves the anchor narrows); anchor missing = `anchor-missing`, twice = `anchor-ambiguous`, anchor not followed by a value = `value-none`, each with NO binding item.
+  - Condition decides unchanged (#57): the same two-time row with `{valueKind:"time", op:"lt", value:"12:00"}` and no anchor = red `#0:d0:value-many` (still, byte-for-byte); with an anchor = the one value; an op decide never gets membership (a claim value that is among the quote's values does not rescue `value-many`).
+  - `text`, unanchored (presence): quote `EgyptAir MS791 USD 420`: `"MS791"` green, `"ms791"` green, `" MS791 "` green (trim), `"MS79"` red `#0:d0:claim-value-absent:MS79`, `"S791"` red, `"EgyptAir MS791"` green (a whole-token SEQUENCE), `"MS791 USD"` green, `"791"` red. Quote `## [0.41.0] - 2026-10-12`: `"0.41.0"` green, `"0.41"` red and `"41.0"` red (digit glue, #60), `"2026-10-12"` green. Digit glue (#60): `"3"` vs `Price 3.5 now` red, `"3.5"` green; `"1"` vs `1,234 seats` red, `"1,234"` green; `"5"` vs `costs 5.` green (dot then end) and vs `costs 5, then` green (comma then space); `"MS791"` vs `MS791.` green; `"v1"` vs `v1.2` red; anchored `Version:` on `Version: 0.41.0`: `"0.41"` red, `"0.41.0"` green. Quote `Alaska Airlines 8:15 AM`: `"alaska   airlines"` green, `"ALASKA"` green. Quote `Alaska 8:15 AM $389 Nonstop`: `"Delta"` red. Boundary grid at AND over every edge: match at quote start, at quote end, glued to a letter before, glued after, glued to a digit, glued to a non-ASCII letter (`éMS791`, `MS791é`), to a combining mark (`MS791` + U+0301), to `_` (`_MS791_` is green: `_` is a boundary), to punctuation (`(MS791)` green); an earlier glued occurrence followed by a later whole one = green; many whole occurrences = green. Claim value of 200 characters AT = proceeds, 201 = `claim-value-malformed`, `""`, `"   "`, a JSON number, `null`, an object = `claim-value-malformed`. Case-fold probe: `ß` vs `SS` stays absent (documented: `toLowerCase`, not full folding).
+  - `text`, anchored: quote `Departure time: 8:15 AM. Arrival time: 9:47 AM.`, anchor `Departure time:`, `"8:15 AM"` green, `"8:15"` green (the next character is a space, a boundary; a prefix is accepted only at a boundary), `"8:1"` red, `"9:47 AM"` red `claim-value-absent` (present in the quote but not after the anchor); whitespace between anchor and value skipped; anything else between (`Departure time: about 8:15 AM`) = red absent; the anchor twice = `#0:d0:anchor-ambiguous` with NO absent item; anchor missing = `anchor-missing`. Real evidence fixture (bareloop POC round 2, 44 listitem blocks): `LAX` and `SFO` unanchored are green on 44/44 (assert the documented limit); `Departure time:` / `Arrival time:` anchored values are read 44/44 and a swapped pair is red on every block.
+  - `until` (#61): quote `Leaves San Francisco International Airport at 9:27 AM`, `{valueKind:"text", anchor:"Leaves", until:" at"}`: `"San Francisco International Airport"` green, `"san francisco international airport"` green, `"San Francisco"` red `claim-value-mismatch:San Francisco!=San Francisco International Airport`, `"San Francisco International Airport at"` red mismatch; without `until` `"San Francisco"` is green (the documented limit); `until` absent after the anchor = `#0:d0:until-missing` (no mismatch item); an `until` only BEFORE the anchor = `until-missing`; the FIRST `until` after the anchor wins; empty field = `value-none`; `until` is case-sensitive; refusals naming the path: `until` without `anchor`, on `money` / `time` / presence, empty or blank `until`, over-1000, non-string.
+  - Hyphen digit glue (#62): `"0.41.0"` vs `## [0.41.0-rc1]` red, `"0.41.0-rc1"` green, `"rc1"` vs `0.41.0-rc1` red, `"2026"` vs `2026-10-12` red, `"2026-10-12"` green, `"LAX"` vs `LAX-SFO` green, `"9:47 AM"` vs `8:15 AM – 9:47 AM` green, `"5"` vs `costs 5-` green; anchored `Version:` on `Version: 0.41.0-rc1`: `"0.41.0"` red.
+  - Label word edges (#64): `City: Boston atlas Hotel at X`, anchor `City:`, until `" at"`: field `Boston atlas Hotel` (claim `Boston` red mismatch); `From: Joe attendant at Avon` green for `Joe attendant`; anchor `Leaves` vs `Leavesley Park X` = `anchor-missing` (text and time); `Leavesley Leaves 9:27 AM` finds the anchor once (not ambiguous); anchor `Total` vs `Totals: $5 Total $7` reads `$7`, `Total:` unchanged; `xTotal` skipped (start edge); until `at` skips `flat`; anchor `v1` vs `v1.2 v1 x` skips the glued first occurrence.
+  - Distinct membership list (#63): a row with `09:27` x3 and `11:07` x3, claim `12:34` = `12:34!=09:27,11:07`; 25 distinct numbers each twice, claim `99` lists 20 and ends `,...(25 in all)`.
+  - `d<j>` indexing (#59), asserted against `rubric.js`: `decides = [money value, time value, presence, time value]`: the claim keys are `d0`, `d1`, `d3`; `values.d2` is `claim-value-unknown`; `values.d3` binds the LAST decide; a claim with `d0`, `d1`, `d2` and no `d3` = `d3` `claim-value-missing` AND `d2` `claim-value-unknown`. A `text` decide at index 2 behind a presence at index 1 is keyed `d2`.
+  - Mixed check: one `cited` check with an op decide, a bind-only decide, a `text` decide and a presence decide on one quote reports all reds together in decide order (decide reds, then binding reds in decide order, then unknown keys, then `numbers`); `decideQuote` still runs once per distinct normalized quote (spy) and the bind-only / `text` binding is evaluated per claim; no `decides` signed = byte-for-byte as before.
+  - `rubricVocabulary` (both directions): `valueKind` enum lists `text`; `op` is `required:false`; the new conditions are present; every refusal above is read from the descriptor (mutating the descriptor in a test changes the refusal); generated descriptions match.
 - PARKED: `locate` judge and value decide (RULED 2026-10-12, §5.2, revised by #34-#46; the decide-level cases are live, the judge-call cases are not built). Every case below also
   runs the falsify-by-revert of the source it exercises. Notation: `decides` entries are written
   `kind op bound @anchor`.
@@ -1524,6 +1743,7 @@ Name: **rubric**.
 |---|---|
 | **Day 1** | `quoteIn`, `numbersInQuote` · `rubricVocabulary` · `createRubric` / `rubricSha` · `checkStep` with all deterministic checks (shape rules incl. `blockLines` and `strict`, value rules, `complete`, `cited`, and the four borrowed shapes `commandExit` / `notWorse` / `patternAbsent` / `filesChanged`) · the four verdicts minus soft-green (green / red / stopped) · liveness proof · gating checkpoint + `outputSha` + `requiresHuman` · `drainGaps` · `renderGaps` · audit-backed state · `onExhausted: "fail"` |
 | **Build order (RULED 2026-10-12, #48-#55)** | **(1) BUILT on `feat/locate-judge` (df699b9, unreleased): `cited` + `decides` + typed claim binding (§4.6).** Wired the built pure core (`rubric-locate.js`) into `cited`: decides on the claim's quote, `values` keyed `d<j>` equal to the extracted values, `numbersInQuote` kept on the free text, plain green. Adds `parseClaimValue`, the new gap reasons, the `cited` `decides` descriptor and `rubricVocabulary`/primitives.json entries. Source = a frozen signed `inputs` entry |
+| BUILT, unreleased (RULED 2026-10-12 #56-#59, bareloop's "required facts"; #60-#64 amendments: digit glue, `until`, hyphen glue, distinct list, label word edges) | **bind-only decides + membership + the `text` value kind (with `until`) + the `d<j>` whole-list clarification (§4.6).** Built on `feat/cited-bind-text`; ships in the next release together with the Node >= 22 requirement; the version number is not fixed here |
 | Next, step 2 | search inputs registered mid-run (bareloop, §5.3): quotes checked against the arbiter's frozen copy of the exact snapshot the worker saw (F1: one url, several snapshots). Design next, NOT built |
 | Next, step 3 | SUPERLATIVES ("cheapest", "earliest", "N best"): a new deterministic aggregate check over the frozen source. For every line matching a signed selector (presence phrases plus anchors), extract the anchored value; the claim's value must be the minimum or maximum. The flight job's real ask is "cheapest nonstop in window". Design after step 2, NOT built |
 | PARKED (design kept, §5.1, §5.2) | the `locate` judge (judge call, `reads`/`agree`, soft-green + ACCEPT wiring), the `verdict` judge (jev), calibration. A future `locate` judge REQUIRES an output-binding claim using the typed binding (RULED #53) |
@@ -1646,6 +1866,21 @@ Status of #30-#47: kept as history. Live and shared with `cited`: #32 (exactly o
 53. RULED (hamr, 2026-10-12): any future `locate` judge REQUIRES an output-binding claim that uses the typed binding of #49. This supersedes the earlier idea of binding with `numbersInQuote` plus "no numbers = red" (which the $0 re-run showed too loose).
 54. RULED (hamr, 2026-10-12): BUILD ORDER. (1) `cited` + `decides` + typed binding, this build. (2) §5.3 mid-run registered pages: bareloop's flight job needs quotes checked against the arbiter's frozen copy of the exact snapshot the worker saw (F1: one url may have several snapshots with different sha256); design next, NOT built. (3) SUPERLATIVES ("cheapest", "earliest", "N best"): a new deterministic aggregate check over the frozen source: for every line matching a signed selector (for example presence phrases plus anchors) extract the anchored value, and the claim's value must be the minimum or maximum; the flight job's real ask is "cheapest nonstop in window"; design after step 2. (4) PARKED: the judge work of #50.
 55. RULED (hamr, 2026-10-12): multi-source claims (one claim backed by two quotes from two sources) are Later; noted, not designed.
+
+**2026-10-12 (bind-only decides and `text`; requested by bareloop for its "required facts" design, its PRD v1.96 RF1-RF11; BUILT, unreleased, ships in the next release together with Node >= 22)**
+
+56. RULED (hamr, 2026-10-12): BIND-ONLY VALUE DECIDE. A value decide (`number`/`money`/`date`/`time`) may omit `op`; then it must not carry `value`/`lo`/`hi` (refused at `createRubric`, the error naming the path). `currency`/`unit`/`anchor` as today. It runs no condition (never `value-over` / `value-under`), only extraction and binding, and the claim MUST carry `values.d<j>` for it (missing = `claim-value-missing`, as for any value decide). WITH an anchor: extraction unchanged (the one value after the anchor; `anchor-missing` / `anchor-ambiguous` as today), then binding as today (`claim-value-mismatch` when the canonical values differ). WITHOUT an anchor = MEMBERSHIP: the claim's value must canonically equal ONE OF the quote's values of that kind; zero values of the kind = `value-none`; any malformed token of the kind = `value-malformed` (unsure = red, Law 1); a value not among them = `claim-value-mismatch` (the item shows the canonical claim value, and the quote's canonical values ride the reason the way `value-many` lists them: bounded to 20 with a total when cut); `value-many` never fires for an unanchored bind-only decide. Documented limit: membership cannot tell which field (depart vs arrive); the human sees it at Accept. Example (loop's): quote `Alaska 8:15 AM $389 Nonstop`, `{valueKind:"money", currency:"$"}`: `values {d0:"199"}` red `#0:d0:claim-value-mismatch:...`, `{d0:"389"}` green; two-time row `8:15 AM – 9:47 AM`, bind-only `time`: `"9:47 AM"` green, `"10:00"` red.
+57. RULED (hamr, 2026-10-12): CONDITION DECIDES UNCHANGED. A value decide WITH `op` keeps ruling #32: exactly one value of the kind (or the one after the anchor), else `value-many` / `value-none`; a worker never chooses which value a condition reads (else it picks the passing one). A two-time row needs an anchor or a narrower quote.
+58. RULED (hamr, 2026-10-12; boundary amended by #60 digit glue): `text` VALUE KIND (bind only). `{ valueKind: "text", anchor? }`. `op`, `value`, `lo`, `hi`, `currency`, `unit` are refused at `createRubric`. No extraction. The claim's `values.d<j>` is a non-empty string of at most 200 characters after normalization (longer / empty / non-string = `claim-value-malformed`). Normalization on both the claim value and the quote: trim, collapse whitespace runs to one space, case-insensitive compare (`toLowerCase()`, the fold the codebase already uses). WITHOUT an anchor = PRESENCE: the value appears in the quote as a whole-token sequence (the character before and after the match is not a Unicode letter or digit, or is the quote start/end); many occurrences are fine. WITH an anchor: the same anchor rules as value decides (the anchor occurs exactly once, else `anchor-missing` / `anchor-ambiguous`); the value must start right after the anchor with only whitespace between, and end on a whole-token boundary. Absent / not-after-anchor = the new red `claim-value-absent` (item `#<i>:d<j>:claim-value-absent`). No regex, no wildcards (decided: either can be added later without breaking anyone). Documented limit: without an anchor it cannot tell which field; real evidence (bareloop POC round 2, 44 Google Flights listitem blocks): `LAX` and `SFO` are each present in 44/44 blocks, so an unanchored "from SFO" passes on a wrong-way page, while `Departure time:` / `Arrival time:` anchors are 44/44, which is why the anchor is in v1. Examples: quote `EgyptAir MS791 USD 420`: `"MS791"` green, `"ms791"` green, `"MS79"` red `claim-value-absent`; `## [0.41.0] - 2026-10-12`: `"0.41.0"` green; `"Alaska Airlines"` matches `alaska   airlines`; `"Delta"` vs `Alaska 8:15 AM $389 Nonstop` red.
+59. RULED (hamr, 2026-10-12): DOC CLARIFICATION. The `d<j>` key in `values` indexes the WHOLE `decides` list, presence decides included (a presence decide at index 2 makes the next value decide's key `d3`). Verified against `src/primitives/rubric.js` before writing (the value indexes are taken over the full list). Every place in the PRD and `bareguard.context.md` that implied `j` counts value decides only is fixed; the layout note is added to the examples (on bareloop's per-flight `listitem` blocks `unit: "US dollars"` is `value-many` because a button label repeats the amount while `currency: "$"` is 44/44; on one-line link rows it is the reverse).
+60. RULED (hamr, 2026-10-12): DIGIT GLUE (amends #58's boundary). A `.` or `,` with a decimal digit (`\p{Nd}`) immediately on BOTH sides is NOT a boundary; it holds a number together. Applied at both ends of a match: the end is glued when the character after the match is `.`/`,`, the match's last character is a digit and the character after that mark is a digit; the start is glued when the character before the match is `.`/`,`, the match's first character is a digit and the character before that mark is a digit. Applies to unanchored presence and to the end boundary of anchored `text`. Everywhere else punctuation stays a boundary. Reason: versions and decimals; a claim `0.41` must not pass against `0.41.0`, nor `3` against `3.5`, nor `1` against `1,234`. O(1) per hit, no regex built from input. BUILT.
+
+**2026-10-13 (bareloop's real POC: 44 Google Flights listitem blocks + 46 CHANGELOG headings; BUILT, unreleased)**
+
+61. RULED (hamr, 2026-10-13): `until` END LABEL for anchored `text`. Optional `until` (non-empty string, the `anchor` field's limits), allowed only on a `text` decide that also signs `anchor` (otherwise refused at `createRubric` naming the path). Anchor rules unchanged; then the first `until` after the anchor's end (none = decide red `until-missing`, item `#<i>:d<j>:until-missing`); the field is the quote between them, trimmed; empty = `value-none`; the claim value must EQUAL the field case-insensitively, else `#<i>:d<j>:claim-value-mismatch:<claim>!=<field>` (both clipped 120). Without `until` anchored `text` keeps the prefix-ending-on-a-boundary read, documented: a whole-token prefix or an overlong run passes; sign `until` to close it. Build choice: `until` is whitespace-collapsed but not trimmed (an anchor is trimmed), so a signed `" at"` cannot match inside a word. BUILT.
+62. RULED (hamr, 2026-10-13): HYPHEN DIGIT GLUE (extends #60). A `-` with a decimal digit (`\p{Nd}`) immediately before it and a letter or digit (`\p{L}`|`\p{Nd}`) immediately after it is not a boundary, at both match ends and for presence and the anchored end boundary. Unaffected: a letter before the `-` (`LAX-SFO`), an en dash, a space after the `-`, nothing after it (`costs 5-`). Reason: a wrong red is safer than a wrong green (Law 1). BUILT.
+63. RULED (hamr, 2026-10-13): DEDUPE the membership mismatch list. The quote's canonical values in a membership `claim-value-mismatch` item are de-duplicated (first-occurrence order); the 20 bound and the `(N in all)` total count DISTINCT values. Doc-only alongside: lowercase `am`/`pm` and no-space `9:27AM` stay malformed (ruling #34), and `v0.41.0` does not match claim `0.41.0` (`v0` is one whole token). BUILT.
+64. RULED (hamr, 2026-10-13): LABEL WORD EDGES. A signed `anchor` (any decide that takes one: value decides AND `text`) and a signed `until` match only where their word-character edges (`\p{L}\p{M}\p{Nd}`) sit on a token boundary: if the label's FIRST character is a word character, the quote character before the match must be a boundary or the quote start; if its LAST character is a word character, the character after the match must be a boundary or the quote end. Reuses `boundaryBefore` / `boundaryAfter` (so the #60 digit glue and #62 hyphen glue apply: this differs from a plain class check only for a label edge that is a digit next to a glued `.` `,` or `-`, e.g. anchor `v1` does not match in `v1.2`). A non-qualifying occurrence is SKIPPED: it does not count toward `anchor-ambiguous`, and for `until` the search continues to the next occurrence. Labels whose edge is punctuation or a space (`Total:`, a leading `" at"` space) are unaffected at that edge. Reason: `until:" at"` matched the start of `" attendant"` / `" atlas"` (quote `City: Boston atlas Hotel at X`, claim `Boston` was a false GREEN) and anchor `Leaves` matched inside `Leavesley`. Digit-glued anchors stay strict on purpose (hamr, 2026-10-13, unsure = red): signed anchor `From ` is trimmed to `From`, so quote `From59` is `anchor-missing` (it read `59` in 0.22.0), `From 59` is still ok, same for `Price12` / `Qty3`; sign the anchor against a page that puts a space or punctuation after the label. NOTE: this TIGHTENS released behavior for value-decide anchors (anchors on value decides shipped in 0.22.0; pre-1.0, a tightening ships in a minor/patch): the release CHANGELOG must list it under Changed. BUILT.
 
 **Open questions after #55** (for hamr; what the rulings did not decide; each has a spec default in §4.6 that the build follows unless changed):
 1. KEY SHAPE for `values`. Spec default: the decide's 0-based index `d<j>` (no new signed field, matches the gap items `d<j>:<kind>`, cannot collide; the cost is that reordering `decides` re-keys the claims, which is a re-sign anyway). Alternative: a signed per-decide `id` (safer against a reader mistaking positions, but adds a signed field, a uniqueness rule and a vocabulary entry to the decide shape shared with `judged`). RESOLVED (bareloop confirmed 2026-10-12): spec default.

@@ -85,5 +85,5 @@ bareguard/
 │   └── _worker.mjs
 └── .github/
     └── workflows/
-        └── test.yml               # matrix: ubuntu/macos/windows × Node 20/22
+        └── ci.yml                 # matrix: ubuntu/macos/windows × Node 22/24
 ```

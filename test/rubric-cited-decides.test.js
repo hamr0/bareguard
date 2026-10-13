@@ -397,7 +397,8 @@ test("rubricVocabulary lists decides on cited with its shapes and conditions; th
   assert.equal(f.decides.type, "decide-list");
   assert.equal(f.decides.required, false);
   assert.equal(f.decides.maxItems, 10);
-  assert.deepEqual(f.decides.shapes.value.fields.valueKind.enum, ["number", "money", "date", "time"]);
+  assert.deepEqual(f.decides.shapes.value.fields.valueKind.enum, ["number", "money", "date", "time", "text"]);
+  assert.equal(f.decides.shapes.value.fields.op.required, false, "op is optional (a bind-only decide)");
   assert.deepEqual(f.decides.shapes.value.fields.op.enum, ["lt", "lte", "gt", "gte", "between"]);
   assert.deepEqual(f.decides.shapes.value.fields.currency.enum, ["$", "€", "£"]);
   assert.equal(f.decides.shapes.value.fields.unit.maxLength, 100);
@@ -405,7 +406,7 @@ test("rubricVocabulary lists decides on cited with its shapes and conditions; th
   assert.ok(f.decides.shapes.value.conditions.some((c) => c.includes("exactly one of currency or unit")));
   const d = rubricVocabulary.rules.cited.description;
   assert.equal(d, describeRule("cited"));
-  for (const w of ["decides?", "valueKind", "op:", "lo?", "hi?", "currency?", "unit?", "anchor?", "phrases", "between needs lo and hi", "exactly one of currency or unit"]) assert.ok(d.includes(w), w);
+  for (const w of ["decides?", "valueKind", "op?:", "lo?", "hi?", "currency?", "unit?", "anchor?", "phrases", "between needs lo and hi", "exactly one of currency or unit"]) assert.ok(d.includes(w), w);
   // the vocabulary is the validator's: every enum value it lists is accepted, nothing else is
   assert.ok(Object.isFrozen(f.decides) && Object.isFrozen(f.decides.shapes.value.fields.op));
 });
@@ -458,4 +459,455 @@ test("parseClaimValue: one token of the kind, nothing else; canonical", () => {
   for (const raw of ["2026-13-45", "2026-02-30", "26-10-12", "2026-10-12T08:00", "2026-10-12 2026-10-13", "Oct 12", "12026-10-12"]) bad("date", raw);
   for (const raw of ["9:27 am", "9:27AM", "9:27 a.m.", "00:30 AM", "13:05 PM", "24:00", "8:7", "9:27 American", "9:27 AMX", "about 9:27", "9:27 10:27", "9", 927]) bad("time", raw);
   bad("bogus", "1");
+});
+
+// --- bind-only decides, membership and the `text` value kind (docs/product/rubric-prd.md §4.6, RULED #56-#59) -----------------
+
+// A one-claim run over `quote` (the source IS the quote, so the quote is always found verbatim).
+const bind = (quote, decide, values, claim = "c") => runWith(quote, [decide], [{ claim, quote, ...(values === undefined ? {} : { values }) }]);
+const red = async (quote, decide, values, ...want) => {
+  const r = await bind(quote, decide, values);
+  assert.equal(r.verdict, "red", `${JSON.stringify(values)} on ${quote}`);
+  assert.deepEqual(items(r), want, JSON.stringify(values));
+};
+const green = async (quote, decide, values) => {
+  const r = await bind(quote, decide, values);
+  assert.equal(r.verdict, "green", `${JSON.stringify(values)} on ${quote}: ${JSON.stringify(r.gaps)}`);
+};
+const refusePath = (decides, re) => assert.throws(() => mkRubric(REAL, decides), re, JSON.stringify(decides));
+
+const ALASKA = "Alaska 8:15 AM $389 Nonstop";
+const DOLLAR = { valueKind: "money", currency: "$" };
+const TIME_ROW = "8:15 AM – 9:47 AM";
+const TIME = { valueKind: "time" };
+const TXT = { valueKind: "text" };
+const FLIGHT = "EgyptAir MS791 USD 420";
+
+test("createRubric: a bind-only decide refuses value / lo / hi, naming the path (op WITH value is still fine)", () => {
+  for (const k of ["value", "lo", "hi"]) {
+    refusePath([{ ...DOLLAR, [k]: 5 }], new RegExp(`checkpoints\\.cp\\.checks\\[0\\]\\.decides\\[0\\]\\.${k} is refused on a bind-only decide \\(sign an op, or drop the bound\\)`));
+  }
+  refusePath([{ valueKind: "time", lo: "06:00", hi: "09:00" }], /decides\[0\]\.lo is refused on a bind-only decide/);
+  assert.doesNotThrow(() => mkRubric(REAL, [{ ...DOLLAR, op: "lt", value: 400 }]));
+  for (const d of [{ valueKind: "number" }, DOLLAR, { valueKind: "money", unit: "US dollars" }, { valueKind: "date" }, TIME, { ...TIME, anchor: "Leaves at " }]) {
+    assert.doesNotThrow(() => mkRubric(REAL, [d]), JSON.stringify(d));
+  }
+  refusePath([{ valueKind: "money" }], /decides\[0\]\.currency money needs exactly one of currency or unit/);
+  refusePath([{ valueKind: "money", currency: "$", unit: "US dollars" }], /needs exactly one of currency or unit/);
+  refusePath([{ valueKind: "number", anchor: " " }], /decides\[0\]\.anchor/);
+  refusePath([{ valueKind: "number", currency: "$" }], /decides\[0\]\.currency is refused unless valueKind is money/);
+});
+
+test("createRubric: a text decide refuses op, value, lo, hi, currency and unit (each named); anchor is fine; bad anchor refused", () => {
+  const bad = { op: "lt", value: 5, lo: 1, hi: 2, currency: "$", unit: "US dollars" };
+  for (const [k, v] of Object.entries(bad)) refusePath([{ ...TXT, [k]: v }], new RegExp(`decides\\[0\\]\\.${k} is refused on a text decide`));
+  refusePath([{ valueKind: "text", op: "lt" }], /decides\[0\]\.op is refused on a text decide/);
+  assert.doesNotThrow(() => mkRubric(REAL, [TXT]));
+  assert.doesNotThrow(() => mkRubric(REAL, [{ ...TXT, anchor: "Departure time:" }]));
+  refusePath([{ ...TXT, anchor: "  " }], /decides\[0\]\.anchor/);
+  refusePath([{ ...TXT, anchor: "a".repeat(1001) }], /decides\[0\]\.anchor/);
+  refusePath([{ ...TXT, extra: 1 }], /decides\[0\]\.extra is not a recognised decide field/);
+  refusePath([{ valueKind: "color" }], /decides\[0\]\.valueKind/);
+});
+
+test("`judged` is still not a check type: op-less and text decides are cited-only (refused on any other rule)", () => {
+  const judged = (decides) => createRubric({ schema: 1, goal: "g", checkpoints: { cp: { gating: true, checks: [{ id: "j", rule: "judged", kind: "locate", ask: "q", sources: ["a"], decides }] } } });
+  assert.throws(() => judged([DOLLAR]), /not a known check type: "judged"/);
+  assert.throws(() => judged([TXT]), /not a known check type: "judged"/);
+  assert.throws(() => createRubric({ schema: 1, goal: "g", checkpoints: { cp: { gating: true, checks: [{ id: "m", rule: "mustCarry", field: "text", phrases: ["a"], decides: [TXT] }] } } }), /decides is not a recognised field/);
+});
+
+test("rubricSha changes when op is dropped or added, and when valueKind becomes text", () => {
+  const spec = (d) => ({ schema: 1, goal: "g", inputs: [{ name: "offers", sha256: sha(REAL) }], checkpoints: { cp: { gating: true, checks: [{ id: "c", rule: "cited", claims: "claims", source: "offers", decides: [d] }] } } });
+  const withOp = rubricSha(spec({ ...DOLLAR, op: "lt", value: 400 }));
+  const opless = rubricSha(spec(DOLLAR));
+  assert.notEqual(withOp, opless);
+  assert.notEqual(opless, rubricSha(spec({ valueKind: "text" })));
+  assert.notEqual(rubricSha(spec(TXT)), rubricSha(spec({ ...TXT, anchor: "a" })));
+});
+
+test("membership (#56): bareloop's price row; the claim must equal the quote's value", async () => {
+  await green(ALASKA, DOLLAR, { d0: "389" });
+  await red(ALASKA, DOLLAR, { d0: "199" }, "#0:d0:claim-value-mismatch:199!=389");
+  await red(ALASKA, DOLLAR, { d0: "$389" }, "#0:d0:claim-value-malformed");
+  await red(ALASKA, DOLLAR, { d0: "389 dollars" }, "#0:d0:claim-value-malformed");
+  await red(ALASKA, DOLLAR, { d0: 389 }, "#0:d0:claim-value-malformed");
+  await red(ALASKA, DOLLAR, undefined, "#0:d0:claim-value-missing");
+});
+
+test("membership: several values, any one passes (the documented limit); value-many NEVER appears", async () => {
+  const Q = "Total: $389 (was $420)";
+  await green(Q, DOLLAR, { d0: "389" });
+  await green(Q, DOLLAR, { d0: "420" });
+  await red(Q, DOLLAR, { d0: "400" }, "#0:d0:claim-value-mismatch:400!=389,420");
+  // a repeated amount is no longer value-many
+  await green("Fare $59. Book: $59", DOLLAR, { d0: "59" });
+});
+
+test("membership: the two-time row", async () => {
+  await green(TIME_ROW, TIME, { d0: "9:47 AM" });
+  await green(TIME_ROW, TIME, { d0: "09:47" });
+  await green(TIME_ROW, TIME, { d0: "8:15 AM" });
+  await red(TIME_ROW, TIME, { d0: "10:00" }, "#0:d0:claim-value-mismatch:10:00!=08:15,09:47");
+  await red(TIME_ROW, TIME, { d0: "9:47 PM" }, "#0:d0:claim-value-mismatch:21:47!=08:15,09:47");
+});
+
+test("membership: zero values = value-none (no mismatch item); a malformed token = value-malformed; number kind on 0.41.0 is value-malformed", async () => {
+  await red("Alaska 8:15 AM Nonstop", DOLLAR, { d0: "389" }, "#0:d0:value-none");
+  await red("Fare $5USD", DOLLAR, { d0: "5" }, "#0:d0:value-malformed");
+  await red("Release 0.41.0 notes", { valueKind: "number" }, { d0: "0.41" }, "#0:d0:value-malformed");
+  // one malformed token among good ones is never counted away
+  await red("Fare $59 and $5USD", DOLLAR, { d0: "59" }, "#0:d0:value-malformed");
+});
+
+test("membership sees ALL values: over 20 the item lists 20 and ends ,...(21 in all); the 21st value is still green", async () => {
+  const Q = Array.from({ length: 21 }, (_, k) => `$${100 + k}`).join(" ");
+  const shown = Array.from({ length: 20 }, (_, k) => 100 + k).join(",");
+  await red(Q, DOLLAR, { d0: "999" }, `#0:d0:claim-value-mismatch:999!=${shown},...(21 in all)`);
+  await green(Q, DOLLAR, { d0: "120" }); // the 21st, not displayed
+  // exactly 20 values: no tail
+  const Q20 = Array.from({ length: 20 }, (_, k) => `$${100 + k}`).join(" ");
+  await red(Q20, DOLLAR, { d0: "999" }, `#0:d0:claim-value-mismatch:999!=${shown}`);
+});
+
+test("bind-only ANCHORED keeps the one-value read: an anchor narrows the membership", async () => {
+  const Q = "Departure time: 8:15 AM. Arrival time: 9:47 AM.";
+  const dep = { valueKind: "time", anchor: "Departure time:" };
+  await green(Q, dep, { d0: "8:15 AM" });
+  await red(Q, dep, { d0: "9:47 AM" }, "#0:d0:claim-value-mismatch:09:47!=08:15");
+  await green(Q, TIME, { d0: "9:47 AM" }); // unanchored membership would have passed it
+  await red(Q, { valueKind: "time", anchor: "Boarding:" }, { d0: "8:15 AM" }, "#0:d0:anchor-missing");
+  await red(`${Q} Departure time: 10:00`, dep, { d0: "8:15 AM" }, "#0:d0:anchor-ambiguous");
+  await red("Departure time: soon", dep, { d0: "8:15 AM" }, "#0:d0:value-none");
+});
+
+test("condition decides are unchanged (#57): two values under an op is still value-many, byte for byte; membership never rescues it", async () => {
+  const lt = { valueKind: "time", op: "lt", value: "12:00" };
+  await red(TIME_ROW, lt, { d0: "9:47 AM" }, "#0:d0:value-many");
+  const r = await bind(TIME_ROW, lt, { d0: "9:47 AM" });
+  assert.deepEqual(r.gaps[0].items, ["#0:d0:value-many"]);
+  await green("Departs 8:15 AM", lt, { d0: "8:15 AM" });
+  await green(TIME_ROW, { ...lt, anchor: "8:15 AM –" }, { d0: "9:47 AM" });
+  await red("Fare $5 or $6", { ...DOLLAR, op: "lt", value: 10 }, { d0: "5" }, "#0:d0:value-many");
+});
+
+test("text, unanchored (#58): whole-token presence over a flight number", async () => {
+  for (const v of ["MS791", "ms791", " MS791 ", "EgyptAir MS791", "MS791 USD", "egyptair   ms791"]) await green(FLIGHT, TXT, { d0: v });
+  await red(FLIGHT, TXT, { d0: "MS79" }, "#0:d0:claim-value-absent:MS79");
+  await red(FLIGHT, TXT, { d0: "S791" }, "#0:d0:claim-value-absent:S791");
+  await red(FLIGHT, TXT, { d0: "791" }, "#0:d0:claim-value-absent:791");
+  await red(FLIGHT, TXT, { d0: "  MS79  " }, "#0:d0:claim-value-absent:MS79"); // the item shows the normalized value, original case
+  await red(FLIGHT, TXT, { d0: "ms79" }, "#0:d0:claim-value-absent:ms79");
+});
+
+test("text: a version in a changelog heading, and a carrier with spaces", async () => {
+  const CL = "## [0.41.0] - 2026-10-12";
+  await green(CL, TXT, { d0: "0.41.0" });
+  await green(CL, TXT, { d0: "2026-10-12" });
+  await green("Alaska Airlines 8:15 AM", TXT, { d0: "alaska   airlines" });
+  await green("Alaska Airlines 8:15 AM", TXT, { d0: "ALASKA" });
+  await red(ALASKA, TXT, { d0: "Delta" }, "#0:d0:claim-value-absent:Delta");
+});
+
+test("text: the whole-token boundary grid, at and over every edge", async () => {
+  const at = async (quote, ok) => (ok ? green : (q, d, v) => red(q, d, v, "#0:d0:claim-value-absent:MS791"))(quote, TXT, { d0: "MS791" });
+  await at("MS791 later", true); // quote start
+  await at("later MS791", true); // quote end
+  await at("MS791", true);
+  await at("xMS791", false); // glued before
+  await at("MS791x", false); // glued after
+  await at("7MS791", false); // digit before
+  await at("MS7917", false); // digit after
+  await at("éMS791", false); // non-ASCII letter before
+  await at("MS791é", false); // non-ASCII letter after
+  await at("MS791́", false); // combining mark after
+  await at("MS791́ MS791", true); // ... but a later whole one is enough
+  await at("_MS791_", true); // _ is a boundary
+  await at("(MS791)", true);
+  await at("a-MS791-b", false); // digit, then - then a letter: hyphen digit glue (#62)
+  await at("a-MS791 b", true);
+  await at("a-MS791-", true);
+  await at("xMS791 MS791", true); // an earlier glued occurrence does not hide a later whole one
+  await at("MS791 MS791 MS791", true);
+  await at("𝐀MS791", false); // supplementary-plane letter before (a surrogate pair)
+  await at("MS791𝐀", false);
+  await at("😀MS791😀", true); // an emoji is no letter
+});
+
+test("text: the claim value is a non-empty string of at most 200 characters AFTER normalization", async () => {
+  const v200 = "a".repeat(200);
+  await green(`x ${v200} y`, TXT, { d0: v200 });
+  await red(`x ${v200}a y`, TXT, { d0: "a".repeat(201) }, "#0:d0:claim-value-malformed");
+  await green(`x ${v200} y`, TXT, { d0: `   ${v200}   ` }); // trimmed first
+  await green("a b", TXT, { d0: `a${" ".repeat(500)}b` }); // collapsed to 3 characters
+  for (const bad of ["", "   ", 5, null, {}, [], true]) await red(FLIGHT, TXT, { d0: bad }, "#0:d0:claim-value-malformed");
+  await red(FLIGHT, TXT, undefined, "#0:d0:claim-value-missing");
+});
+
+test("text: lower-case fold is toLowerCase, not full Unicode folding; ** and __ in the value fail closed", async () => {
+  await red("Straße 5", TXT, { d0: "STRASSE" }, "#0:d0:claim-value-absent:STRASSE");
+  await green("Straße 5", TXT, { d0: "STRAßE" });
+  await green("İstanbul 5", TXT, { d0: "İSTANBUL" }); // İ lowers to two code units on both sides
+  await red("bold **MS791** text", TXT, { d0: "**MS791**" }, "#0:d0:claim-value-absent:**MS791**"); // the quote's ** are dropped, the value's are not
+  await green("bold **MS791** text", TXT, { d0: "MS791" });
+  await red("a __b__ c", TXT, { d0: "__b__" }, "#0:d0:claim-value-absent:__b__");
+});
+
+test("text, anchored (#58): the value starts right after the anchor and ends on a boundary", async () => {
+  const Q = "Departure time: 8:15 AM. Arrival time: 9:47 AM.";
+  const dep = { valueKind: "text", anchor: "Departure time:" };
+  await green(Q, dep, { d0: "8:15 AM" });
+  await green(Q, dep, { d0: "8:15" }); // the next character is a space: a boundary
+  await red(Q, dep, { d0: "8:1" }, "#0:d0:claim-value-absent:8:1"); // a prefix of a token
+  await red(Q, dep, { d0: "9:47 AM" }, "#0:d0:claim-value-absent:9:47 AM"); // present in the quote, not after the anchor
+  await red("Departure time: about 8:15 AM", dep, { d0: "8:15 AM" }, "#0:d0:claim-value-absent:8:15 AM");
+  await green("Code:MS791 USD", { valueKind: "text", anchor: "Code:" }, { d0: "ms791" }); // right after the anchor, no space
+  await green("Departure time:    8:15 AM", dep, { d0: "8:15 AM" }); // whitespace between is skipped
+  await green(Q, { valueKind: "text", anchor: "Arrival time:" }, { d0: "9:47 AM." }); // the value may end in punctuation; bounded by its OUTER neighbour
+  await red(`${Q} Departure time: 10:00`, dep, { d0: "8:15 AM" }, "#0:d0:anchor-ambiguous"); // no absent item
+  await red(Q, { valueKind: "text", anchor: "Boarding:" }, { d0: "8:15 AM" }, "#0:d0:anchor-missing");
+  // the anchor is case-sensitive
+  await red(Q, { valueKind: "text", anchor: "departure time:" }, { d0: "8:15 AM" }, "#0:d0:anchor-missing");
+  // an anchor failure and a malformed claim value are both reported; the absent item is not
+  await red(Q, { valueKind: "text", anchor: "Boarding:" }, { d0: "" }, "#0:d0:anchor-missing", "#0:d0:claim-value-malformed");
+});
+
+test("text unanchored cannot tell which field the value is in (the documented limit); an anchor can", async () => {
+  const block = "Flight LAX to SFO. Departure time: 8:15 AM. Arrival time: 9:47 AM.";
+  await green(block, TXT, { d0: "SFO" }); // "from SFO" passes on a wrong-way page
+  await green(block, TXT, { d0: "LAX" });
+  await green(block, { valueKind: "text", anchor: "Departure time:" }, { d0: "8:15 AM" });
+  await red(block, { valueKind: "text", anchor: "Departure time:" }, { d0: "9:47 AM" }, "#0:d0:claim-value-absent:9:47 AM");
+  await red(block, { valueKind: "text", anchor: "Arrival time:" }, { d0: "8:15 AM" }, "#0:d0:claim-value-absent:8:15 AM");
+});
+
+test("d<j> indexes the WHOLE decides list: a presence decide in the middle keeps its slot (#59)", async () => {
+  const Q = "Alaska Nonstop 8:15 AM $389 MS791";
+  const decides = [DOLLAR, { phrases: ["Nonstop"] }, TXT, TIME];
+  const ok = { d0: "389", d2: "MS791", d3: "8:15 AM" };
+  const run = (values) => runWith(Q, decides, [{ claim: "c", quote: Q, values }]);
+  assert.equal((await run(ok)).verdict, "green");
+  let r = await run({ d0: "389", d1: "Nonstop", d2: "MS791", d3: "8:15 AM" });
+  assert.deepEqual(items(r), ["#0:d1:claim-value-unknown"], "d1 is the presence decide's slot");
+  r = await run({ d0: "389", d2: "MS791" });
+  assert.deepEqual(items(r), ["#0:d3:claim-value-missing"]);
+  r = await run({ d0: "389", d3: "8:15 AM" });
+  assert.deepEqual(items(r), ["#0:d2:claim-value-missing"]);
+  r = await run({ d0: "1", d2: "Delta", d3: "9:00 AM" });
+  assert.deepEqual(items(r), ["#0:d0:claim-value-mismatch:1!=389", "#0:d2:claim-value-absent:Delta", "#0:d3:claim-value-mismatch:09:00!=08:15"]);
+});
+
+test("a mixed check reports decide reds, then binding reds in decide order, then unknown keys, then numbers; decideQuote runs once per distinct quote", async () => {
+  const Q = "Alaska Nonstop $389 MS791 8:15 AM";
+  const decides = [{ valueKind: "money", currency: "$", op: "lt", value: 100 }, DOLLAR, TXT, { phrases: ["Direct"] }];
+  const r = await runWith(Q, decides, [
+    { claim: "x 77", quote: Q, values: { d0: "389", d1: "1", d2: "Delta", extra: "1" } },
+    { claim: "y", quote: Q, values: { d0: "389", d1: "389", d2: "ms791" } },
+  ]);
+  assert.deepEqual(items(r), [
+    "#0:d0:value-over", "#0:d3:phrase-missing:Direct", "#0:d1:claim-value-mismatch:1!=389", "#0:d2:claim-value-absent:Delta", "#0:extra:claim-value-unknown", "#0:numbers:77",
+    "#1:d0:value-over", "#1:d3:phrase-missing:Direct",
+  ]);
+});
+
+test("hostile values stay red, never a throw (throwing getter, Proxy, __proto__ key) on bind-only and text decides", async () => {
+  const getter = {};
+  Object.defineProperty(getter, "d0", { enumerable: true, get() { throw new Error("boom"); } });
+  const proxy = new Proxy({}, { has() { throw new Error("boom"); }, get() { throw new Error("boom"); }, ownKeys() { throw new Error("boom"); }, getOwnPropertyDescriptor() { throw new Error("boom"); } });
+  const proto = JSON.parse('{"d0":"MS791","__proto__":{"d0":"x"}}');
+  for (const d of [DOLLAR, TXT]) {
+    for (const values of [getter, proxy, proto]) {
+      const r = await runWith(ALASKA + " MS791", [d], [{ claim: "c", quote: ALASKA + " MS791", values }]);
+      assert.equal(typeof r.verdict, "string");
+    }
+  }
+  assert.equal((await runWith(FLIGHT, [TXT], [{ claim: "c", quote: FLIGHT, values: proxy }])).verdict, "red");
+  assert.equal((await runWith(FLIGHT, [TXT], [{ claim: "c", quote: FLIGHT, values: getter }])).verdict, "red");
+});
+
+test("vocabulary and validator agree, both directions, for the decide value shape", () => {
+  const shape = rubricVocabulary.rules.cited.fields.decides.shapes.value;
+  const ok = { valueKind: "number" };
+  // vocab -> validator: every listed valueKind is accepted bare-or-minimal; every listed op is accepted with its bound
+  const minimal = { number: {}, money: { currency: "$" }, date: {}, time: {}, text: {} };
+  for (const k of shape.fields.valueKind.enum) assert.doesNotThrow(() => mkRubric(REAL, [{ valueKind: k, ...minimal[k] }]), `valueKind ${k}`);
+  for (const op of shape.fields.op.enum) {
+    const d = op === "between" ? { valueKind: "number", op, lo: 1, hi: 2 } : { valueKind: "number", op, value: 1 };
+    assert.doesNotThrow(() => mkRubric(REAL, [d]), `op ${op}`);
+  }
+  // validator -> vocab: nothing outside the listed enums is accepted
+  refusePath([{ ...ok, valueKind: "string" }], /decides\[0\]\.valueKind/);
+  refusePath([{ ...ok, op: "eq", value: 1 }], /decides\[0\]\.op/);
+  // the vocab's `required` flags are the validator's: valueKind is required, op is not
+  assert.equal(shape.fields.valueKind.required, true);
+  assert.equal(shape.fields.op.required, false);
+  refusePath([{ op: "lt", value: 1 }], /decides\[0\]\.valueKind is required/);
+  assert.doesNotThrow(() => mkRubric(REAL, [{ valueKind: "date" }]));
+  // every field the vocab lists is a field the validator takes, and an unlisted one is refused
+  for (const f of Object.keys(shape.fields)) assert.ok(["valueKind", "op", "value", "lo", "hi", "currency", "unit", "anchor", "until"].includes(f), f);
+  refusePath([{ ...ok, color: "red" }], /decides\[0\]\.color is not a recognised decide field/);
+  // the text shape's listed fields are exactly what text accepts
+  for (const f of shape.textFields) assert.doesNotThrow(() => mkRubric(REAL, [{ valueKind: "text", ...(f === "anchor" || f === "until" ? { anchor: "a" } : {}), ...(f === "until" ? { until: "b" } : {}) }]), f);
+  for (const f of Object.keys(shape.fields).filter((x) => !shape.textFields.includes(x))) {
+    const sample = { op: "lt", value: 1, lo: 1, hi: 2, currency: "$", unit: "u" }[f];
+    refusePath([{ valueKind: "text", [f]: sample }], new RegExp(`decides\\[0\\]\\.${f} is refused on a text decide`));
+  }
+  // the conditions say it, and the generated description carries it
+  const joined = shape.conditions.join(" | ");
+  for (const w of ["op may be omitted", "bind-only", "valueKind text is bind-only", "at most 200 characters", "exactly one of currency or unit"]) assert.ok(joined.includes(w), w);
+  assert.ok(rubricVocabulary.rules.cited.fields.decides.conditions[0].includes("j indexes the whole decides list"));
+  const d = describeRule("cited");
+  assert.equal(d, rubricVocabulary.rules.cited.description);
+  for (const w of ["op?:", '"text"', "op may be omitted", "valueKind text is bind-only", "j indexes the whole decides list"]) assert.ok(d.includes(w), w);
+});
+
+test("hostile text and membership input: never throws and stays linear 16 KiB -> 64 KiB", async () => {
+  const { evalDecide, textPresent, textAfter } = await import("../src/primitives/rubric-locate.js");
+  const v = "a".repeat(199) + "b";
+  const cases = (n) => ({
+    as: "a".repeat(n),
+    glued: "xMS791 ".repeat(Math.floor(n / 7)),
+    marks: "á".repeat(n / 2),
+    pairs: "\u{1D400}".repeat(n / 2),
+    money: "$1,234.50 ".repeat(Math.floor(n / 10)),
+    times: "12:05 AM ".repeat(Math.floor(n / 9)),
+  });
+  const run = (n) => {
+    const t = process.hrtime.bigint();
+    for (const [name, q] of Object.entries(cases(n))) {
+      const f = q.toLowerCase();
+      for (const val of [v, "a", "ms791", "\u{1D400}", "á"]) {
+        assert.equal(typeof textPresent(f, val), "boolean", name);
+        assert.equal(typeof textAfter(q, 0, val), "boolean", name);
+      }
+      for (const d of [DOLLAR, TIME, { valueKind: "number" }, { valueKind: "date" }, { valueKind: "money", unit: "US dollars" }, TXT, { ...TXT, anchor: "xMS791" }]) assert.equal(typeof evalDecide(d, q).ok, "boolean", name);
+    }
+    return Number(process.hrtime.bigint() - t) / 1e6;
+  };
+  run(4096); // warm up
+  const small = run(16 * 1024);
+  const large = run(64 * 1024);
+  // loose catastrophic-blow-up guard only (see the decide-core guard); the 5 MiB scaling check is `npm run bench:rubric`
+  assert.ok(large < small * 40 + 100, `not linear: ${small} ms -> ${large} ms`);
+});
+
+test("text digit glue (#60): . or , between digits is not a boundary; elsewhere punctuation still is", async () => {
+  const CL = "## [0.41.0] - 2026-10-12";
+  await red(CL, TXT, { d0: "0.41" }, "#0:d0:claim-value-absent:0.41");
+  await red(CL, TXT, { d0: "41.0" }, "#0:d0:claim-value-absent:41.0");
+  await green(CL, TXT, { d0: "0.41.0" });
+  await green(CL, TXT, { d0: "2026-10-12" });
+  await red("Price 3.5 now", TXT, { d0: "3" }, "#0:d0:claim-value-absent:3");
+  await green("Price 3.5 now", TXT, { d0: "3.5" });
+  await red("1,234 seats", TXT, { d0: "1" }, "#0:d0:claim-value-absent:1");
+  await green("1,234 seats", TXT, { d0: "1,234" });
+  await green("costs 5.", TXT, { d0: "5" });
+  await green("costs 5, then", TXT, { d0: "5" });
+  await green("MS791.", TXT, { d0: "MS791" });
+  await red("v1.2", TXT, { d0: "v1" }, "#0:d0:claim-value-absent:v1");
+  // the start side: "234" inside "1,234" and "5" inside "3.5"
+  await red("1,234 seats", TXT, { d0: "234" }, "#0:d0:claim-value-absent:234");
+  await red("Price 3.5 now", TXT, { d0: "5" }, "#0:d0:claim-value-absent:5");
+  // anchored (end boundary)
+  const A = { valueKind: "text", anchor: "Version:" };
+  await red("Version: 0.41.0", A, { d0: "0.41" }, "#0:d0:claim-value-absent:0.41");
+  await green("Version: 0.41.0", A, { d0: "0.41.0" });
+});
+
+test("text hyphen digit glue (#62): a - after a digit and before a letter/digit is not a boundary", async () => {
+  await red("## [0.41.0-rc1]", TXT, { d0: "0.41.0" }, "#0:d0:claim-value-absent:0.41.0");
+  await green("## [0.41.0-rc1]", TXT, { d0: "0.41.0-rc1" });
+  await red("0.41.0-rc1", TXT, { d0: "rc1" }, "#0:d0:claim-value-absent:rc1");
+  await red("date 2026-10-12", TXT, { d0: "2026" }, "#0:d0:claim-value-absent:2026");
+  await green("date 2026-10-12", TXT, { d0: "2026-10-12" });
+  await green("LAX-SFO", TXT, { d0: "LAX" }); // a letter before the hyphen is unaffected
+  await green("LAX-SFO", TXT, { d0: "SFO" });
+  await green("8:15 AM – 9:47 AM", TXT, { d0: "9:47 AM" }); // en dash with spaces
+  await green("costs 5-", TXT, { d0: "5" }); // nothing after the hyphen
+  await green("costs 5 - 6", TXT, { d0: "5" }); // a space after the hyphen
+  // anchored end boundary
+  const A = { valueKind: "text", anchor: "Version:" };
+  await red("Version: 0.41.0-rc1", A, { d0: "0.41.0" }, "#0:d0:claim-value-absent:0.41.0");
+  await green("Version: 0.41.0-rc1", A, { d0: "0.41.0-rc1" });
+});
+
+test("text until (#61): the claim must EQUAL the field between the anchor and the first until", async () => {
+  const Q = "Leaves San Francisco International Airport at 9:27 AM";
+  const U = { valueKind: "text", anchor: "Leaves", until: " at" };
+  await green(Q, U, { d0: "San Francisco International Airport" });
+  await green(Q, U, { d0: "san francisco international airport" });
+  await green(Q, U, { d0: "  San   Francisco International Airport " }); // the claim is normalized
+  await red(Q, U, { d0: "San Francisco" }, "#0:d0:claim-value-mismatch:San Francisco!=San Francisco International Airport");
+  await red(Q, U, { d0: "San Francisco International Airport at" }, "#0:d0:claim-value-mismatch:San Francisco International Airport at!=San Francisco International Airport");
+  // without until the whole-token prefix still passes (the documented limit)
+  await green(Q, { valueKind: "text", anchor: "Leaves" }, { d0: "San Francisco" });
+  // an anchor with trailing space is trimmed like today; the leading space of until is kept (so " at" is not "Intern-at-ional")
+  await green(Q, { ...U, anchor: "Leaves " }, { d0: "San Francisco International Airport" });
+  // until-missing is a decide red (the binding is not evaluated); anchor reds are unchanged
+  await red(Q, { ...U, until: " by" }, { d0: "x" }, "#0:d0:until-missing");
+  await red(Q, { ...U, anchor: "Boards" }, { d0: "x" }, "#0:d0:anchor-missing");
+  await red(`${Q} Leaves`, U, { d0: "x" }, "#0:d0:anchor-ambiguous");
+  // until before the anchor does not count; the FIRST until after the anchor wins
+  await red("at Leaves Paris", { valueKind: "text", anchor: "Leaves", until: " at" }, { d0: "Paris" }, "#0:d0:until-missing");
+  await green("Leaves Paris at Rome at Oslo", U, { d0: "Paris" });
+  // empty field
+  await red("Leaves at 9", U, { d0: "x" }, "#0:d0:value-none");
+  // until is case-sensitive; a malformed claim is still reported
+  await red(Q, { ...U, until: " AT" }, { d0: "x" }, "#0:d0:until-missing");
+  await red(Q, U, { d0: "" }, "#0:d0:claim-value-malformed");
+  const long = "z".repeat(200);
+  const r = await bind(`Leaves ${long} at 9`, U, { d0: long.slice(1) });
+  assert.equal(r.verdict, "red");
+  assert.ok(items(r)[0].startsWith("#0:d0:claim-value-mismatch:zzz") && items(r)[0].length < 300, "both sides clipped");
+});
+
+test("text until (#61): refusals", () => {
+  refusePath([{ valueKind: "text", until: " at" }], /decides\[0\]\.until is refused without an anchor/);
+  refusePath([{ valueKind: "text", anchor: "a", until: "" }], /decides\[0\]\.until/);
+  refusePath([{ valueKind: "text", anchor: "a", until: "  " }], /decides\[0\]\.until/);
+  refusePath([{ valueKind: "text", anchor: "a", until: "u".repeat(1001) }], /decides\[0\]\.until/);
+  refusePath([{ valueKind: "text", anchor: "a", until: 5 }], /decides\[0\]\.until/);
+  refusePath([{ valueKind: "money", currency: "$", anchor: "a", until: "b" }], /decides\[0\]\.until is refused on a non-text decide/);
+  refusePath([{ valueKind: "time", op: "lt", value: "12:00", anchor: "a", until: "b" }], /decides\[0\]\.until is refused on a non-text decide/);
+  refusePath([{ valueKind: "number", until: "b" }], /decides\[0\]\.until/);
+  refusePath([{ phrases: ["a"], until: "b" }], /decides\[0\]\.until/);
+  assert.doesNotThrow(() => mkRubric(REAL, [{ valueKind: "text", anchor: "a", until: " at" }]));
+});
+
+test("membership mismatch lists DISTINCT values, and counts them (#63)", async () => {
+  const Q = "09:27 AM 11:07 AM 9:27 AM 11:07 AM 9:27 AM 11:07 AM";
+  await red(Q, TIME, { d0: "12:34" }, "#0:d0:claim-value-mismatch:12:34!=09:27,11:07");
+  const many = [...Array(25).keys()].map((n) => n + 1).join(" ");
+  const want = `#0:d0:claim-value-mismatch:99!=${[...Array(20).keys()].map((n) => n + 1).join(",")},...(25 in all)`;
+  await red(`${many} ${many}`, { valueKind: "number" }, { d0: "99" }, want);
+});
+
+test("label word edges (#64): anchor and until match only on a token boundary at their word-character edges", async () => {
+  // until " at" no longer matches the start of " attendant" / " atlas"
+  const C = { valueKind: "text", anchor: "City:", until: " at" };
+  const Q = "City: Boston atlas Hotel at X";
+  await green(Q, C, { d0: "Boston atlas Hotel" });
+  const r = await bind(Q, C, { d0: "Boston" });
+  assert.equal(r.verdict, "red");
+  assert.deepEqual(items(r), ["#0:d0:claim-value-mismatch:Boston!=Boston atlas Hotel"]);
+  await green("From: Joe attendant at Avon", { valueKind: "text", anchor: "From:", until: " at" }, { d0: "Joe attendant" });
+  // a field containing the until string is cut at the first QUALIFYING match
+  await green("From: Stratford at Avon Airport", { valueKind: "text", anchor: "From:", until: " at" }, { d0: "Stratford" });
+  // anchor "Leaves" does not match inside "Leavesley"
+  await red("Leavesley Park X", { valueKind: "text", anchor: "Leaves" }, { d0: "ley Park" }, "#0:d0:anchor-missing");
+  await red("Leavesley Park X", { valueKind: "time", anchor: "Leaves" }, { d0: "9:27 AM" }, "#0:d0:anchor-missing");
+  // the skipped occurrence does not count toward anchor-ambiguous
+  await green("Leavesley Leaves 9:27 AM", { valueKind: "time", anchor: "Leaves" }, { d0: "9:27 AM" });
+  // value decide anchor "Total" skips "Totals"; an edge-punctuation anchor is unchanged
+  const M = { valueKind: "money", currency: "$", anchor: "Total" };
+  await green("Totals: $5 Total $7", M, { d0: "7" });
+  await red("Totals: $5 Total $7", M, { d0: "5" }, "#0:d0:claim-value-mismatch:5!=7");
+  await green("Total: $5 Totals: $7", { ...M, anchor: "Total:" }, { d0: "5" });
+  // digit edge (the #60 digit glue is reused): "v1" followed by ".2" is glued, so that occurrence is skipped; only the second counts
+  await green("v1.2 v1 x", { valueKind: "text", anchor: "v1" }, { d0: "x" });
+  await red("v1.2 x", { valueKind: "text", anchor: "v1" }, { d0: "x" }, "#0:d0:anchor-missing");
+  await green("v1 v1.2 x", { valueKind: "text", anchor: "v1" }, { d0: "v1.2 x" }); // first occurrence qualifies, glued second skipped
+  // the START edge: an anchor / until beginning with a word character must not start inside a word
+  await green("xTotal $5 Total $7", M, { d0: "7" });
+  await green("From: Joe flat at X", { valueKind: "text", anchor: "From:", until: "at" }, { d0: "Joe flat" });
 });
