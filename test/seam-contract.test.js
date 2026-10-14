@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 import { Gate } from "../src/index.js";
 import { makeTmpDir, cleanup, uniquePaths, makeHumanChannel } from "./_helpers.js";
 // REPINNED (2026-06-14): the seam now runs against litectx's REAL write-gate
-// emitter from the PUBLISHED package (`litectx` devDependency, ^0.13.0) — CI-safe,
+// emitter from the PUBLISHED package (`litectx` devDependency, ^0.36.0) — CI-safe,
 // no relative path, no sibling checkout needed. This closes baresuite-litectx-prd
 // §5B (the release handshake, step 6): the write-gate seam is live on both sides.
 import { toWriteAction } from "litectx";
