@@ -419,3 +419,8 @@ test("#65 bind-only membership over the union of forms", () => {
   assert.equal(evalDecide(d, "none").kind, "value-none");
   assert.equal(evalDecide(d, "$5USD").kind, "value-malformed");
 });
+
+test("#65 symbol + unit on one run, anchored: one token", () => {
+  green("From $43 US dollars", { valueKind: "money", currency: "$", unit: "US dollars", op: "lt", value: 450, anchor: "From " });
+  assert.equal(extractValue({ valueKind: "money", currency: "$", unit: "US dollars", anchor: "From " }, "From $43 US dollars").canon, "43");
+});

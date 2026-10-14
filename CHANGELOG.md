@@ -8,6 +8,7 @@ All notable changes to bareguard are documented here. Format: [Keep a Changelog]
 ### Added
 
 - **Money forms (ruling #65).** A `cited` money decide may sign `currency` as one symbol or a list of 1-3 unique ones (`"$"`, `"€"`, `"£"`), `unit` as one string or a list of 1-10 unique non-blank strings (max 100 characters each), and BOTH on one decide. It needs at least one of the two (the 0.23.0 "exactly one" rule is replaced); neither is refused naming `decides[j].currency`. The decide reads every token matching any signed form, in quote order, each form with its unchanged grammar; a run matched by two forms (`$43 US dollars`) is one token. A malformed token of any signed form is `value-malformed`. Bind-only membership works over the union. Forms must come from the real captured page; bareguard matches only what was signed. Not covered: a code before the number (`USD 43`, use `unit: ["USD"]` for `43 USD`); `US$43` and decimal-comma `43,50 €` stay `value-malformed`.
+- **`rubricVocabulary` descriptor shapes a drafter may meet.** The `cited` descriptor's `decides` field (type `decide-list`, announced in 0.22.0) holds fields of descriptor type `bound` (`value` / `lo` / `hi`) and `string` with `maxLength` (`unit`, `anchor`, `until`); `currency` and `unit` now also carry `list: { max }` (3 and 10), marking that they take one value or a list of that many unique ones.
 
 ### Changed
 
