@@ -69,7 +69,8 @@ test("a 10 MB output is checked without a throw and the gap stays small and boun
   assert.equal(w.measured, 2_000_000);
   assert.ok(JSON.stringify(r.gaps).length < 5000, "no output bytes ride the gaps");
   assert.match(r.outputSha, /^[0-9a-f]{64}$/);
-  assert.ok(Date.now() - t0 < 5000, `took ${Date.now() - t0}ms`);
+  // Hang guard, not a speed test: ~0.75 s alone, 5.15 s once seen under full-suite parallel load; 30 s still catches a runaway scan.
+  assert.ok(Date.now() - t0 < 30_000, `took ${Date.now() - t0}ms`);
 });
 
 test("a 10 MB value in a gap-bearing field is clipped, never echoed whole", async () => {

@@ -583,7 +583,7 @@ export function extractValue(decide, text) {
       if (c === 45 || c === U_MINUS || c === 40) q = p + 1; // a sign / "(" directly before the token is judged by the token
     }
     const r = q < text.length ? rd.read(text, q) : { tok: undefined };
-    if (r.tok === undefined) return { ok: false, kind: "value-none", anchor: decide.anchor };
+    if (r.tok === undefined) return { ok: false, kind: "value-none", ...anchorField(decide) };
     if (r.tok.mal) return { ok: false, kind: "value-malformed", measured: clip(r.tok.raw) };
     return { ok: true, value: r.tok.value, canon: canonOf(kind, r.tok.value) };
   }
@@ -776,7 +776,7 @@ function evalText(decide, text) {
   while (ue !== -1 && !edgesOk(text, u, ue)) ue = text.indexOf(u, ue + 1); // RULED #64: skip non-qualifying, keep searching
   if (ue === -1) return { type: "value", ok: false, kind: "until-missing", until: decide.until, measured: 0 };
   const field = text.slice(at.end, ue).trim();
-  if (field === "") return { type: "value", ok: false, kind: "value-none", anchor: decide.anchor };
+  if (field === "") return { type: "value", ok: false, kind: "value-none", ...anchorField(decide) };
   return { type: "value", ok: true, textField: field };
 }
 

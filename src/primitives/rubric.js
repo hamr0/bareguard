@@ -787,13 +787,15 @@ function runCited(ctx, c) {
   /** The typed claim binding (§4.6, RULED #49, #56, #58). `dq` is null when the check signs no decides (any `values` is then unknown); `q` is the normalized quote. */
   function binding(cc, i, dq, q) {
     let values;
+    let malformed = false;
     try {
       values = Object.hasOwn(cc, "values") ? cc.values : undefined;
+      malformed = values !== undefined && !isPlainObject(values); // Array.isArray throws on a revoked Proxy
     } catch {
-      return note(`#${i}:values:claim-value-malformed`);
+      malformed = true;
     }
+    if (malformed) return note(`#${i}:values:claim-value-malformed`);
     if (values === undefined && valueIdx.length === 0) return;
-    if (values !== undefined && !isPlainObject(values)) return note(`#${i}:values:claim-value-malformed`);
     for (const j of valueIdx) {
       const key = `d${j}`;
       let raw;
