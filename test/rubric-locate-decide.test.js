@@ -350,3 +350,72 @@ test("label word edges (#64): digit-glued anchor is anchor-missing (kept strict,
   red("From59 US dollars", money("lt", 100, { anchor: "From " }), "anchor-missing");
   green("From $59 US dollars", money("lt", 100, { anchor: "From " }));
 });
+
+// --- RULED #65: money forms (currency list, unit list, both signed), same amount = one price ----------------------
+
+test("#65 money forms: union in quote order, anchored any-form, single token", () => {
+  const both = (more = {}) => ({ valueKind: "money", currency: "$", unit: ["US dollars"], ...more });
+  // union, quote order
+  const e = extractValue(both({ op: "lt", value: 450 }), "was $43 now 44 US dollars");
+  assert.equal(e.ok, false);
+  assert.equal(e.kind, "value-many");
+  assert.deepEqual(e.values ?? e.items, ["43", "44"]);
+  const rev = extractValue(both({ op: "lt", value: 450 }), "was 44 US dollars now $43");
+  assert.deepEqual(rev.values ?? rev.items, ["44", "43"]);
+  // the real Google Flights line (bareloop mv7qabx4)
+  const real = "From 43 US dollars. Nonstop flight with American.";
+  green(real, both({ op: "lt", value: 450, anchor: "From" }));
+  assert.equal(extractValue(both({ op: "lt", value: 450, anchor: "From" }), real).canon, "43");
+  // anchored, symbol form
+  assert.equal(extractValue(both({ anchor: "Total:" }), "Total: $318.40").canon, "318.4");
+  // array of one currency and scalar behave alike
+  assert.equal(extractValue({ valueKind: "money", currency: ["€"] }, "x €5").canon, "5");
+  assert.equal(extractValue({ valueKind: "money", currency: ["$", "£"] }, "x £7").canon, "7");
+  assert.equal(extractValue({ valueKind: "money", currency: ["$", "£"] }, "x €7").ok, false);
+  // several units
+  assert.equal(extractValue({ valueKind: "money", unit: ["USD", "US dollars"] }, "x 9 USD").canon, "9");
+  assert.equal(extractValue({ valueKind: "money", unit: ["USD", "US dollars"] }, "x 9 US dollars").canon, "9");
+  // "$43 US dollars" is ONE token (not two)
+  const one = extractValue(both({ op: "lt", value: 450 }), "$43 US dollars");
+  assert.equal(one.ok, true);
+  assert.equal(one.canon, "43");
+  // unit order never changes the result (longest match among units on one run)
+  for (const u of [["US", "US dollars"], ["US dollars", "US"]]) assert.equal(extractValue({ valueKind: "money", unit: u }, "5 US dollars").ok, true);
+  // malformed token in either signed form
+  red("$5USD and 3 US dollars", both({ op: "lt", value: 9 }), "value-malformed");
+  red("$3 and 1.2k US dollars", both({ op: "lt", value: 9 }), "value-malformed");
+  red("From 1.2k US dollars", both({ op: "lt", value: 9, anchor: "From " }), "value-malformed");
+  // single-form behaviour unchanged: a currency-only decide ignores the unit form
+  red("From 43 US dollars", money("lt", 450), "value-none");
+});
+
+test("#65 same amount = one price (money, op decide, unanchored)", () => {
+  const d = { valueKind: "money", currency: "$", unit: "US dollars", op: "lt", value: 450 };
+  green("buy $43 now, or 43 US dollars", d);
+  green("$43 ... 43 US dollars", d);
+  green("$43.00 and 43 US dollars", d); // same canonical amount
+  red("$43 and 44 US dollars", d, "value-many", { values: ["43", "44"] });
+  // the comparison still runs on the one amount
+  red("$500 and 500 US dollars", d, "value-over", { measured: "500", limit: "450" });
+  // single-form repeat now passes (behaviour change)
+  green("Total $43 (Select $43)", money("lt", 450));
+  red("Total $43 (Select $44)", money("lt", 450), "value-many");
+  // between op collapses too
+  green("$43 and $43", { valueKind: "money", currency: "$", op: "between", lo: 40, hi: 50 });
+  // other valueKinds are unchanged: repeated equal values are still value-many
+  red("5 and 5", val("number", "lt", 9), "value-many");
+  red("08:15 and 08:15", val("time", "lt", "12:00"), "value-many");
+  // a malformed token among equal amounts still reds
+  red("$43 and $43 and $4x", money("lt", 450), "value-malformed");
+});
+
+test("#65 bind-only membership over the union of forms", () => {
+  const d = { valueKind: "money", currency: "$", unit: ["US dollars"] };
+  const q = "was $420, now 389 US dollars";
+  for (const [claim, ok] of [["389", true], ["420", true], ["400", false]]) {
+    const r = evalDecide(d, q);
+    assert.ok(r.members.has(claim) === ok, claim);
+  }
+  assert.equal(evalDecide(d, "none").kind, "value-none");
+  assert.equal(evalDecide(d, "$5USD").kind, "value-malformed");
+});

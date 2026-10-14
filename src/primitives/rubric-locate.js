@@ -305,14 +305,40 @@ function timeToString(mins) {
 
 // --- per-kind plumbing --------------------------------------------------------
 
+/**
+ * RULED #65: a money decide's reader is the UNION of its signed forms (each `currency` symbol, each `unit`), every form
+ * keeping its own #37 / #43 grammar. A symbol start belongs to the currency forms, a digit start to the unit forms (a
+ * symbol form consumes its digits, so "$43 US dollars" is one token). Among unit forms on one numeric run, a malformed
+ * token wins, else the longest match, so the result never depends on the order the unit list was signed in.
+ */
+function moneyReader(d) {
+  const symbols = d.currency === undefined ? [] : Array.isArray(d.currency) ? d.currency : [d.currency];
+  const units = d.unit === undefined ? [] : Array.isArray(d.unit) ? d.unit : [d.unit];
+  const symCodes = new Set(symbols.map((x) => x.charCodeAt(0)));
+  const read = (t, s) => {
+    const c = t.charCodeAt(s);
+    if (symCodes.has(c)) return readCurrency(t, s, t.charAt(s));
+    /** @type {{ end: number, tok: any }} */
+    let best = ignored(s + 1);
+    for (const u of units) {
+      const r = readUnit(t, s, u);
+      if (r.tok === undefined) {
+        if (best.tok === undefined && r.end > best.end) best = r;
+      } else if (r.tok.mal) return r;
+      else if (best.tok === undefined || r.end > best.end) best = r;
+    }
+    return best;
+  };
+  return { read, starts: (c) => symCodes.has(c) || (units.length > 0 && isDigit(c)), prefixes: true };
+}
+
 /** The reader for a decide's valueKind: `(text, s) => {end, tok}`. Null for an unknown kind. */
 function readerFor(d) {
   switch (d.valueKind) {
     case "number":
       return { read: readNumber, starts: (c) => isDigit(c), prefixes: true };
     case "money":
-      if (typeof d.unit === "string") return { read: (t, s) => readUnit(t, s, d.unit), starts: (c) => isDigit(c), prefixes: true };
-      return { read: (t, s) => readCurrency(t, s, d.currency), starts: (c) => d.currency !== undefined && c === d.currency.charCodeAt(0), prefixes: true };
+      return moneyReader(d);
     case "date":
       return { read: readDate, starts: (c) => isDigit(c) || c === 45, quick: quickDate, prefixes: false };
     case "time":
@@ -565,7 +591,9 @@ export function extractValue(decide, text) {
   const s = scanValues(rd, kind, text, null);
   if (s.mal) return { ok: false, kind: "value-malformed", measured: clip(s.mal.raw) };
   if (s.count === 0) return { ok: false, kind: "value-none" };
-  if (s.count > 1) {
+  // RULED #65 SAME AMOUNT = ONE PRICE: a money op decide whose tokens all carry one canonical amount reads as that one value
+  const onePrice = s.count > 1 && kind === "money" && decide.op !== undefined && s.allSame;
+  if (s.count > 1 && !onePrice) {
     return { ok: false, kind: "value-many", measured: s.count, items: s.items, ...(s.count > MAX_ITEMS ? { itemsTotal: s.count } : {}) };
   }
   return { ok: true, value: s.firstVal, canon: canonOf(kind, s.firstVal) };
@@ -618,6 +646,8 @@ function scanValues(rd, kind, text, canons) {
   let count = 0;
   const items = [];
   let firstVal;
+  let firstCanon;
+  let allSame = true; // RULED #65: every value has the same canonical amount (money only is acted on)
   let mal;
   let i = 0;
   while (i < n) {
@@ -639,7 +669,10 @@ function scanValues(rd, kind, text, canons) {
         mal = r.tok;
         break;
       }
-      if (count === 0) firstVal = r.tok.value;
+      if (count === 0) {
+        firstVal = r.tok.value;
+        if (kind === "money") firstCanon = canonOf(kind, firstVal);
+      } else if (allSame && kind === "money" && canonOf(kind, r.tok.value) !== firstCanon) allSame = false;
       count++;
       let fresh = true; // membership lists DISTINCT values (RULED #63)
       if (canons !== null) {
@@ -651,7 +684,7 @@ function scanValues(rd, kind, text, canons) {
     }
     i = r.end > i ? r.end : i + 1;
   }
-  return { count, items, firstVal, mal };
+  return { count, items, firstVal, allSame, mal };
 }
 
 function anchorField(d) {

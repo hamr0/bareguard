@@ -44,7 +44,7 @@ import { parseBound, compareBounds, decideQuote, parseClaimValue, displayCanon, 
  * @property {string[]} [allowed] `allowedKeys` only: the signed allowed keys (never clipped)
  *
  * @typedef {Object} Decide
- * One signed decide of a `cited` check (§4.6): a VALUE decide `{ valueKind, op?, value | lo+hi, currency | unit (money), anchor? }`
+ * One signed decide of a `cited` check (§4.6): a VALUE decide `{ valueKind, op?, value | lo+hi, currency and/or unit (money), anchor? }`
  * (without `op` it is bind-only: no `value`/`lo`/`hi`, and without an `anchor` the claim value must equal one of the
  * quote's values), a TEXT decide `{ valueKind: "text", anchor?, until? }` (bind-only; `until` only with an `anchor`), or a PRESENCE decide `{ phrases }`.
  * @property {"number"|"money"|"date"|"time"|"text"} [valueKind]
@@ -52,8 +52,8 @@ import { parseBound, compareBounds, decideQuote, parseClaimValue, displayCanon, 
  * @property {number|string} [value] the bound: a number for `number`/`money`, a string for `date`/`time`
  * @property {number|string} [lo]
  * @property {number|string} [hi]
- * @property {"$"|"€"|"£"} [currency]
- * @property {string} [unit]
+ * @property {"$"|"€"|"£"|Array<"$"|"€"|"£">} [currency]
+ * @property {string|string[]} [unit]
  * @property {string} [anchor]
  * @property {string} [until] text decide only, needs an anchor: the claim value must equal the quote text between the anchor and the first `until` after it
  * @property {string[]} [phrases]
@@ -253,8 +253,8 @@ const DECIDES = {
         value: DECIDE_BOUND,
         lo: DECIDE_BOUND,
         hi: DECIDE_BOUND,
-        currency: { type: "enum", required: false, enum: ["$", "€", "£"] },
-        unit: { type: "string", required: false, maxLength: 100 },
+        currency: { type: "enum", required: false, enum: ["$", "€", "£"], list: { max: 3 } },
+        unit: { type: "string", required: false, maxLength: 100, list: { max: 10 } },
         anchor: { type: "string", required: false, maxLength: MAX_SIGNED_LEN },
         until: { type: "string", required: false, maxLength: MAX_SIGNED_LEN },
       },
@@ -265,7 +265,7 @@ const DECIDES = {
         "an op decide: between needs lo and hi (lo <= hi) and forbids value; the other ops need value and forbid lo and hi",
         "valueKind text is bind-only: it refuses op, value, lo, hi, currency and unit, and the claim value is a non-empty string of at most 200 characters",
         "until is allowed only on a text decide that also signs an anchor: the claim value must then equal, case-insensitively, the quote text between the anchor and the first until after it",
-        "money needs exactly one of currency or unit; currency and unit are refused on any other valueKind",
+        "money needs at least one of currency or unit (both are allowed; each takes one value or a list); currency and unit are refused on any other valueKind",
       ],
     },
     presence: {
@@ -1105,6 +1105,7 @@ function describeField(name, d) {
   if (d.type === "integer" && d.min !== undefined) t = `integer >= ${d.min}`;
   if (d.type === "number") t = "finite number";
   if (d.type === "enum") t = d.enum.map((e) => JSON.stringify(e)).join(" | ");
+  if (d.list) t += ` or a list of 1-${d.list.max} unique ones`;
   if (d.type === "number-or-enum") t = `finite number | ${d.enum.map((e) => JSON.stringify(e)).join(" | ")}`;
   if (d.unique) t += ", no duplicates";
   const def = d.default !== undefined ? ` = ${JSON.stringify(d.default)}` : "";
@@ -1239,12 +1240,19 @@ function checkDecides(d, v, where) {
     }
     if (between && compareBounds(kind, parseBound(kind, x.lo).value, parseBound(kind, x.hi).value) > 0) throw fail(`${w}.lo`, "must be <= hi (a wrap-around window is refused)");
     if (kind === "money") {
-      if ((x.currency === undefined) === (x.unit === undefined)) throw fail(`${w}.currency`, "money needs exactly one of currency or unit");
+      if (x.currency === undefined && x.unit === undefined) throw fail(`${w}.currency`, "money needs at least one of currency or unit");
     } else {
       for (const k of ["currency", "unit"]) if (x[k] !== undefined) throw fail(`${w}.${k}`, "is refused unless valueKind is money");
     }
     for (const k of ["currency", "unit", "anchor"]) if (x[k] !== undefined) checkValue(f[k], x[k], `${w}.${k}`);
   });
+}
+
+/** RULED #65: a money `currency` / `unit` may be a list of 1..`d.list.max` unique items, each valid as the scalar form. */
+function checkFormList(d, v, where) {
+  if (v.length < 1 || v.length > d.list.max) throw fail(where, `must hold 1 to ${d.list.max} items when a list`);
+  v.forEach((e, i) => checkValue({ ...d, list: undefined }, e, `${where}[${i}]`));
+  if (new Set(v).size !== v.length) throw fail(where, "must not contain duplicates");
 }
 
 function checkValue(d, v, where) {
@@ -1254,6 +1262,7 @@ function checkValue(d, v, where) {
     case "name":
       return checkName(v, where);
     case "string":
+      if (d.list && Array.isArray(v)) return checkFormList(d, v, where);
       if (blank(v)) throw fail(where, "must be a non-blank string");
       if (v.length > (d.maxLength ?? MAX_SIGNED_LEN)) throw fail(where, `must be at most ${d.maxLength ?? MAX_SIGNED_LEN} characters`);
       return;
@@ -1281,6 +1290,7 @@ function checkValue(d, v, where) {
       return;
     }
     case "enum":
+      if (d.list && Array.isArray(v)) return checkFormList(d, v, where);
       if (typeof v !== "string" || !d.enum.includes(v)) throw fail(where, `must be one of ${d.enum.map((e) => JSON.stringify(e)).join(", ")}`);
       return;
     case "number-or-enum":

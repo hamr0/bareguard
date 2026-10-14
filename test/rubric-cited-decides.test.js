@@ -362,8 +362,8 @@ test("createRubric refuses bad decides, naming the path", () => {
   refuse([{ valueKind: "date", op: "gte", value: "2026-02-30" }], /decides\[0\]\.value is not a valid date bound/);
   refuse([{ valueKind: "date", op: "gte", value: 5 }], /decides\[0\]\.value is not a valid date bound/);
   refuse([{ valueKind: "time", op: "lt", value: "9:27am" }], /decides\[0\]\.value is not a valid time bound/);
-  refuse([{ valueKind: "money", op: "lt", value: 5 }], /decides\[0\]\.currency money needs exactly one of currency or unit/);
-  refuse([{ valueKind: "money", op: "lt", value: 5, currency: "$", unit: "US dollars" }], /needs exactly one of currency or unit/);
+  refuse([{ valueKind: "money", op: "lt", value: 5 }], /decides\[0\]\.currency money needs at least one of currency or unit/);
+  assert.doesNotThrow(() => mkRubric(REAL, [{ valueKind: "money", op: "lt", value: 5, currency: "$", unit: "US dollars" }])); // #65: both allowed
   refuse([{ valueKind: "money", op: "lt", value: 5, currency: "USD" }], /decides\[0\]\.currency/);
   refuse([{ valueKind: "money", op: "lt", value: 5, unit: " " }], /decides\[0\]\.unit/);
   refuse([{ valueKind: "money", op: "lt", value: 5, unit: "u".repeat(101) }], /decides\[0\]\.unit must be at most 100/);
@@ -403,10 +403,10 @@ test("rubricVocabulary lists decides on cited with its shapes and conditions; th
   assert.deepEqual(f.decides.shapes.value.fields.currency.enum, ["$", "€", "£"]);
   assert.equal(f.decides.shapes.value.fields.unit.maxLength, 100);
   assert.equal(f.decides.shapes.presence.fields.phrases.type, "string-list");
-  assert.ok(f.decides.shapes.value.conditions.some((c) => c.includes("exactly one of currency or unit")));
+  assert.ok(f.decides.shapes.value.conditions.some((c) => c.includes("at least one of currency or unit")));
   const d = rubricVocabulary.rules.cited.description;
   assert.equal(d, describeRule("cited"));
-  for (const w of ["decides?", "valueKind", "op?:", "lo?", "hi?", "currency?", "unit?", "anchor?", "phrases", "between needs lo and hi", "exactly one of currency or unit"]) assert.ok(d.includes(w), w);
+  for (const w of ["decides?", "valueKind", "op?:", "lo?", "hi?", "currency?", "unit?", "anchor?", "phrases", "between needs lo and hi", "at least one of currency or unit", "a list of 1-3 unique ones", "a list of 1-10 unique ones"]) assert.ok(d.includes(w), w);
   // the vocabulary is the validator's: every enum value it lists is accepted, nothing else is
   assert.ok(Object.isFrozen(f.decides) && Object.isFrozen(f.decides.shapes.value.fields.op));
 });
@@ -492,8 +492,8 @@ test("createRubric: a bind-only decide refuses value / lo / hi, naming the path 
   for (const d of [{ valueKind: "number" }, DOLLAR, { valueKind: "money", unit: "US dollars" }, { valueKind: "date" }, TIME, { ...TIME, anchor: "Leaves at " }]) {
     assert.doesNotThrow(() => mkRubric(REAL, [d]), JSON.stringify(d));
   }
-  refusePath([{ valueKind: "money" }], /decides\[0\]\.currency money needs exactly one of currency or unit/);
-  refusePath([{ valueKind: "money", currency: "$", unit: "US dollars" }], /needs exactly one of currency or unit/);
+  refusePath([{ valueKind: "money" }], /decides\[0\]\.currency money needs at least one of currency or unit/);
+  assert.doesNotThrow(() => mkRubric(REAL, [{ valueKind: "money", currency: "$", unit: "US dollars" }])); // #65: both allowed
   refusePath([{ valueKind: "number", anchor: " " }], /decides\[0\]\.anchor/);
   refusePath([{ valueKind: "number", currency: "$" }], /decides\[0\]\.currency is refused unless valueKind is money/);
 });
@@ -754,7 +754,7 @@ test("vocabulary and validator agree, both directions, for the decide value shap
   }
   // the conditions say it, and the generated description carries it
   const joined = shape.conditions.join(" | ");
-  for (const w of ["op may be omitted", "bind-only", "valueKind text is bind-only", "at most 200 characters", "exactly one of currency or unit"]) assert.ok(joined.includes(w), w);
+  for (const w of ["op may be omitted", "bind-only", "valueKind text is bind-only", "at most 200 characters", "at least one of currency or unit"]) assert.ok(joined.includes(w), w);
   assert.ok(rubricVocabulary.rules.cited.fields.decides.conditions[0].includes("j indexes the whole decides list"));
   const d = describeRule("cited");
   assert.equal(d, rubricVocabulary.rules.cited.description);
@@ -910,4 +910,66 @@ test("label word edges (#64): anchor and until match only on a token boundary at
   // the START edge: an anchor / until beginning with a word character must not start inside a word
   await green("xTotal $5 Total $7", M, { d0: "7" });
   await green("From: Joe flat at X", { valueKind: "text", anchor: "From:", until: "at" }, { d0: "Joe flat" });
+});
+
+// --- RULED #65: money forms --------------------------------------------------------------------------------------
+
+test("#65 createRubric: currency/unit take one value or a list; at least one for money; bad forms refused naming the path", () => {
+  const m = (more) => [{ valueKind: "money", op: "lt", value: 450, ...more }];
+  for (const more of [{ currency: "$" }, { currency: ["$", "€", "£"] }, { unit: "US dollars" }, { unit: ["US dollars", "USD"] }, { currency: ["$"], unit: ["US dollars"] }, { currency: "$", unit: "US dollars" }, { unit: Array.from({ length: 10 }, (_, i) => `u${i}`) }]) {
+    assert.doesNotThrow(() => mkRubric(REAL, m(more)), JSON.stringify(more));
+  }
+  refuse(m({}), /decides\[0\]\.currency money needs at least one of currency or unit/);
+  refuse(m({ currency: [] }), /decides\[0\]\.currency must hold 1 to 3 items/);
+  refuse(m({ unit: [] }), /decides\[0\]\.unit must hold 1 to 10 items/);
+  refuse(m({ currency: ["$", "$"] }), /decides\[0\]\.currency must not contain duplicates/);
+  refuse(m({ unit: ["a", "a"] }), /decides\[0\]\.unit must not contain duplicates/);
+  refuse(m({ currency: ["$", "€", "£", "$"] }), /decides\[0\]\.currency must hold 1 to 3 items/);
+  refuse(m({ unit: Array.from({ length: 11 }, (_, i) => `u${i}`) }), /decides\[0\]\.unit must hold 1 to 10 items/);
+  refuse(m({ unit: ["ok", " "] }), /decides\[0\]\.unit\[1\] must be a non-blank string/);
+  refuse(m({ unit: ["ok", "u".repeat(101)] }), /decides\[0\]\.unit\[1\] must be at most 100/);
+  refuse(m({ currency: ["$", "USD"] }), /decides\[0\]\.currency\[1\] must be one of/);
+  refuse(m({ unit: ["ok", 5] }), /decides\[0\]\.unit\[1\]/);
+  refuse(m({ currency: ["$", ["€"]] }), /decides\[0\]\.currency\[1\]/);
+  // a list on a non-money kind, and on text, is still refused
+  refuse([{ valueKind: "number", op: "lt", value: 5, unit: ["x"] }], /decides\[0\]\.unit is refused unless valueKind is money/);
+  refuse([{ valueKind: "date", op: "gte", value: "2026-01-01", currency: ["$"] }], /decides\[0\]\.currency is refused unless valueKind is money/);
+  refuse([{ valueKind: "text", unit: ["x"] }], /decides\[0\]\.unit is refused on a text decide/);
+  refuse([{ valueKind: "text", currency: ["$"] }], /decides\[0\]\.currency is refused on a text decide/);
+});
+
+test("#65 hashing: an array unit hashes stably; reordering the list changes the hash (arrays are ordered)", () => {
+  const a = mkRubric(REAL, [{ valueKind: "money", op: "lt", value: 450, unit: ["US dollars", "USD"] }]);
+  const a2 = mkRubric(REAL, [{ unit: ["US dollars", "USD"], value: 450, op: "lt", valueKind: "money" }]);
+  const b = mkRubric(REAL, [{ valueKind: "money", op: "lt", value: 450, unit: ["USD", "US dollars"] }]);
+  assert.equal(rubricSha(a), rubricSha(a2));
+  assert.notEqual(rubricSha(a), rubricSha(b));
+  assert.ok(Object.isFrozen(a.checkpoints.cp.checks[0].decides[0].unit));
+});
+
+test("#65 end to end: the real Google Flights line (bareloop mv7qabx4) and the one-price / two-price blocks", async () => {
+  const LINE = 'link "From 43 US dollars. Nonstop flight with American. Leaves Los Angeles International Airport at 9:27 AM on Thursday, November 12. Select flight"';
+  const d = [{ valueKind: "money", currency: "$", unit: ["US dollars"], op: "lt", value: 450, anchor: "From" }];
+  const quote = "From 43 US dollars. Nonstop flight with American.";
+  const g = await runWith(LINE, d, [{ claim: "American nonstop, 43 US dollars", quote, values: { d0: "43" } }]);
+  assert.equal(g.verdict, "green", JSON.stringify(g));
+  const one = [{ valueKind: "money", currency: "$", unit: "US dollars", op: "lt", value: 450 }];
+  const SRC_ONE = 'row "Flight $43 button 43 US dollars"';
+  const SRC_TWO = 'row "Flight $43 button 44 US dollars"';
+  const ok = await runWith(SRC_ONE, one, [{ claim: "cheap", quote: "Flight $43 button 43 US dollars", values: { d0: "43" } }]);
+  assert.equal(ok.verdict, "green", JSON.stringify(ok));
+  const many = await runWith(SRC_TWO, one, [{ claim: "cheap", quote: "Flight $43 button 44 US dollars", values: { d0: "43" } }]);
+  assert.equal(many.verdict, "red", JSON.stringify(many));
+  assert.ok(JSON.stringify(many.gaps).includes("value-many"), JSON.stringify(many.gaps));
+});
+
+test("#65 typed claim binding is still canonical with a both-forms decide", async () => {
+  const SRC = 'row "was $420 now 389 US dollars"';
+  const bind = [{ valueKind: "money", currency: "$", unit: ["US dollars"] }];
+  const good = await runWith(SRC, bind, [{ claim: "price", quote: "was $420 now 389 US dollars", values: { d0: "389" } }]);
+  assert.equal(good.verdict, "green", JSON.stringify(good));
+  const bad = await runWith(SRC, bind, [{ claim: "price", quote: "was $420 now 389 US dollars", values: { d0: "400" } }]);
+  assert.equal(bad.verdict, "red", JSON.stringify(bad));
+  const sym = await runWith(SRC, bind, [{ claim: "price", quote: "was $420 now 389 US dollars", values: { d0: "$389" } }]);
+  assert.equal(sym.verdict, "red", "a claim value with a symbol is malformed");
 });
