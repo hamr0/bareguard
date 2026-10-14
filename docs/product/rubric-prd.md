@@ -231,7 +231,7 @@ keys.
 | `max` / `min` | `field`, `value` | finite number <= / >= |
 | `cited` | `claims` field, `source` input name, `decides?:[...]` (the shared decide core, §5.2; RULED #48, built df699b9, unreleased) | every claim's quote passes `quoteIn` against the frozen input AND `numbersInQuote`; with `decides`, also every decide on that quote AND the claim's typed `values` equal the values extracted from the quote (§4.6) |
 | `complete` | `items:[...]` or `itemsFrom:"caller"`, `claims` field | every item is covered by a claim (§4.4) |
-| `judged` | `kind:"locate"\|"verdict"`, `ask`; for `locate`: `sources`, `decides:[...]` (each decide a value decide `valueKind`, `op`, `value` or `lo`+`hi`, `currency?` or `unit?`, `anchor?`, or a presence decide `phrases`) | see §5 and §5.2 (PARKED, RULED #50: `locate` is no longer the next build; the decide core it defined is shared with `cited`, §4.6) |
+| `judged` | `kind:"locate"\|"verdict"`, `ask`; for `locate`: `sources`, `decides:[...]` (each decide a value decide `valueKind`, `op`, `value` or `lo`+`hi`, `currency?` and/or `unit?` (money, RULED #65), `anchor?`, or a presence decide `phrases`) | see §5 and §5.2 (PARKED, RULED #50: `locate` is no longer the next build; the decide core it defined is shared with `cited`, §4.6) |
 
 **Forgiving defaults:**
 - **Word**: per line, strip a leading `/^#+\s*/`, split on `/\s+/`, count the non-empty tokens; the
@@ -610,7 +610,8 @@ memoized per distinct quote, its reds are `#<i>:d<j>:<reason>`).
     token = `value-none`; a quote holding `$5USD` = `value-malformed`.
 
 *Condition decides are unchanged (RULED #57).* A value decide WITH `op` keeps ruling #32 exactly: ONE value
-of the kind (or the one right after the anchor), else `value-many` / `value-none`. A worker never chooses
+of the kind (or the one right after the anchor), else `value-many` / `value-none` (one exception: a money decide whose
+tokens all share one amount reads as one price, RULED #65). A worker never chooses
 which value a condition reads, or it would pick the passing one. A two-time row such as `8:15 AM - 9:47 AM`
 under `op` needs an `anchor` or a narrower quote. Only `op`-less decides gain membership.
 
@@ -727,7 +728,8 @@ under `op` needs an `anchor` or a narrower quote. Only `op`-less decides gain me
 
 *Layout note on the examples (RULED #59).* The right money form depends on the page's layout, and a spec
 author checks it on the real capture. On bareloop's per-flight `listitem` blocks, `unit: "US dollars"` is
-`value-many` (a button label repeats the amount) while `currency: "$"` finds exactly one token (44/44). On
+`value-many` (a button label repeats the amount; since RULED #65 an `op` decide reads a repeated SAME amount as one price,
+so only different amounts stay `value-many`) while `currency: "$"` finds exactly one token (44/44). On
 the one-line link rows (E4 above) it is the reverse: the price is spelled `59 US dollars`, so `unit` works
 and `currency: "$"` is `value-none`. With a bind-only decide the same holds for the symbol/unit choice,
 except that a repeated amount is no longer `value-many` (membership).
@@ -1044,7 +1046,8 @@ value right after the anchor". The anchor is normalized with `normalizeForQuote`
 same quote; one decide's anchor never moves another's.
 
 **Without an anchor** (per decide) every token of the kind is counted: zero = red `value-none`, two or more =
-red `value-many` (`measured` = the count, `values` = the values, canonical, clipped, bounded 20 with `valuesTotal` when cut), one
+red `value-many` (`measured` = the count, `values` = the values, canonical, clipped, bounded 20 with `valuesTotal` when cut; a money `op`
+decide whose tokens all share one amount is the exception, one price, RULED #65), one
 = the value. A malformed token in an unanchored quote is red `value-malformed` (it is not counted
 away: a quote with `0.41.0` in a `number` check is unsure).
 
@@ -1088,7 +1091,8 @@ unread (RULED #37; `43 USD` works as `unit: ["USD"]`), `US$43` is `value-malform
   `From ` is 1234. A number NOT followed by a single space plus the unit (`59 dollars`, `59US dollars`,
   `59US dollars`, a bare `59`) is not a value of this decide: it is ignored, not
   malformed. The shared adjacency rule still applies to the numeric run (`v59 US dollars`, `1.2k US
-  dollars` are malformed). Still exactly one value: unanchored, two matches are `value-many`, none are
+  dollars` are malformed). Still exactly one value: unanchored, two matches of different amounts are `value-many` (the same
+  amount repeated is one price, RULED #65), none are
   `value-none`; still anchorable, with strict adjacency as for every other kind: the anchor, then (at
   most whitespace skipped) the number, then one space and the unit (`From 59 US dollars` with anchor
   `From ` reads 59; an anchor followed by a number that is not followed by the unit is `value-none`).
@@ -1190,7 +1194,7 @@ fields, plus one new optional `anchor`:
 | `quote-too-long` | `judged` | `measured` = length, `limit` = 4000 | |
 | `anchor-missing` / `anchor-ambiguous` | `judged` | `anchor` (signed, unclipped), `measured` = occurrences | |
 | `value-none` | `judged` | `anchor?` | no value of the kind (or none right after the anchor) |
-| `value-many` | `judged` | `measured` = count, `values` = the values (`valuesTotal` when cut) | two or more, unanchored |
+| `value-many` | `judged` | `measured` = count, `values` = the values (`valuesTotal` when cut) | two or more, unanchored (a money `op` decide: two or more DIFFERENT amounts, RULED #65) |
 | `value-malformed` | `judged` | `measured` = the token, clipped 120 | shaped but invalid, a letter suffix, a bad am/pm, a unit |
 | `value-over` | `judged` | `measured` = value, `limit` = the bound, `direction` | above `lte` / `lt` / `between` `hi` |
 | `value-under` | `judged` | `measured` = value, `limit` = the bound, `direction` | below `gte` / `gt` / `between` `lo` |
@@ -1674,7 +1678,7 @@ Name: **rubric**.
       `59 US dollarsX` = red `value-none`; unanchored `59 US dollars and 61 US dollars` = red `value-many`
       (both listed); unanchored line with `1 hr 40 min` and `0 checked bags` and one `59 US dollars` = 59
       (the other numbers are not money values); `v59 US dollars` = red `value-malformed`; `-59 US dollars` =
-      red `value-malformed`. `currency` and `unit` both signed on one decide, neither signed on `money`, and
+      red `value-malformed`. Neither `currency` nor `unit` signed on `money` (both signed together is allowed since RULED #65), and
       `unit` on a `number` / `date` / `time` decide, a blank `unit`, a non-string `unit`, a `unit` over 100
       characters are each refused at `createRubric` naming the path. Changing the `unit` changes `rubricSha`.
     - **One quote per read (#36).** The judge returns two quotes (L and `StaticText "$59"`) = red
@@ -1736,8 +1740,8 @@ Name: **rubric**.
     refused; cold start rebuilds a soft-green.
   - Spec shape: `kind: "verdict"` refused (names §5.1); `decides` missing / empty / over 10 entries /
     not an array refused; a decide that is both value and presence, or neither, refused; `valueKind` /
-    `op` / `currency` / `value` combinations (`between` with `value`, `lt` with `lo`, `money` without
-    `currency`, `currency` on `date`, a non-string date bound, `2026-02-30` as a bound, `13:00 PM` as a
+    `op` / `currency` / `value` combinations (`between` with `value`, `lt` with `lo`, `money` with neither
+    `currency` nor `unit`, `currency` on `date`, a non-string date bound, `2026-02-30` as a bound, `13:00 PM` as a
     bound, `1e21`, an unknown `sources` name, a duplicate source, an empty `sources`, an empty or
     non-string `phrases`) each refused at `createRubric`; the old flat `compare`/`bound` fields are an
     unknown key; changing `anchor`, a source, a bound, a phrase, the order of `decides` or `reads` changes
