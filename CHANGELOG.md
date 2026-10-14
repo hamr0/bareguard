@@ -3,7 +3,7 @@
 All notable changes to bareguard are documented here. Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [SemVer](https://semver.org/).
 
 
-## [Unreleased]
+## [0.24.0] - 2026-10-14
 
 ### Added
 
@@ -13,6 +13,7 @@ All notable changes to bareguard are documented here. Format: [Keep a Changelog]
 ### Changed
 
 - **Behavior change: same amount = one price (money only).** An unanchored money `op` decide that finds 2+ tokens which ALL carry the same canonical amount now reads them as one value and runs its condition, instead of red `value-many`. This applies to a single-form decide too (`$43 ... $43` used to be `value-many`). Two different amounts are still `value-many`; other value kinds are unchanged. SemVer surface: the money `currency` / `unit` spec shape is widened (specs that were refused are now accepted); arrays hash in order, so reordering a list changes `rubricSha`.
+- **Revoked-Proxy claim `values` is now red, not `stopped`.** A `cited` claim whose `values` is a revoked Proxy (a read that throws) is now reported as red `#<i>:values:claim-value-malformed` through the normal malformed path; before, the throw escaped the shape test and the check came back `stopped`.
 
 ## [0.23.0] - 2026-10-13
 
