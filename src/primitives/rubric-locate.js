@@ -122,7 +122,7 @@ const F_DATE = { minus: false, signs: false, negOk: false, paren: false, dotcomm
 // A token result is `{ end, tok }`: `end` is where the scan resumes; `tok` is undefined (nothing here),
 // `{ mal: true, raw }` (shaped but invalid, unsure = red) or `{ value, raw }`.
 const ignored = (end) => ({ end, tok: undefined });
-const malformed = (text, from, end) => ({ end, tok: { mal: true, raw: text.slice(from, end) } });
+const malformed = (text, from, end) => ({ end, tok: { mal: true, raw: text.slice(from, end), vs: from, ve: end } });
 
 /** The numeric run starting at the digit `s`: [s, e) is maximal over 0-9 , . ; t is e minus trailing . and , */
 function numRun(text, s) {
@@ -151,7 +151,7 @@ function readNumber(text, s) {
   const dec = parseGrammar(text, s, t);
   if (dec === null) return malformed(text, s, e);
   if (pre === NEG && !(dec.int === "0" && dec.frac === "")) dec.neg = true;
-  return { end: e, tok: { value: dec, raw: text.slice(s, t) } };
+  return { end: e, tok: { value: dec, raw: text.slice(s, t), vs: pre === NEG ? s - 1 : s, ve: t } };
 }
 
 function readCurrency(text, s, symbol) {
@@ -162,7 +162,7 @@ function readCurrency(text, s, symbol) {
   if (pre !== OK || isLetter(text.charCodeAt(e))) return malformed(text, from, e);
   const dec = parseGrammar(text, s + 1, t);
   if (dec === null) return malformed(text, s, e);
-  return { end: e, tok: { value: dec, raw: text.slice(s, t) } };
+  return { end: e, tok: { value: dec, raw: text.slice(s, t), vs: s + 1, ve: t, cs: s, ce: s + 1 } };
 }
 
 function readUnit(text, s, unit) {
@@ -185,7 +185,7 @@ function readUnit(text, s, unit) {
   if (pre !== OK) return malformed(text, s - 1, end);
   const dec = parseGrammar(text, s, t);
   if (dec === null) return malformed(text, s, end);
-  return { end, tok: { value: dec, raw: text.slice(s, t) } };
+  return { end, tok: { value: dec, raw: text.slice(s, t), vs: s, ve: t, us: t + 1, ue: end } };
 }
 
 // --- date ---------------------------------------------------------------------
@@ -220,7 +220,7 @@ function readDate(text, s) {
   const d = +text.slice(s + 8, s + 10);
   const pre = prefixOf(text, s, F_DATE);
   if (pre !== OK || isLetter(text.charCodeAt(e)) || !validDate(y, m, d)) return malformed(text, pre === OK ? s : s - 1, e);
-  return { end: e, tok: { value: text.slice(s, e), raw: text.slice(s, e) } };
+  return { end: e, tok: { value: text.slice(s, e), raw: text.slice(s, e), vs: s, ve: e } };
 }
 
 // --- time ---------------------------------------------------------------------
@@ -289,12 +289,12 @@ function readTime(text, s) {
   }
   if (suffix === "") {
     if (h > 23) return malformed(text, from, e); // 24:00
-    return { end: e, tok: { value: h * 60 + m, raw: text.slice(s, e) } };
+    return { end: e, tok: { value: h * 60 + m, raw: text.slice(s, e), vs: s, ve: e } };
   }
   const end = e + 3;
   if (h < 1 || h > 12) return malformed(text, from, end); // 0:30 AM, 13:05 PM
   const hh = h % 12 + (suffix === "PM" ? 12 : 0);
-  return { end, tok: { value: hh * 60 + m, raw: text.slice(s, end) } };
+  return { end, tok: { value: hh * 60 + m, raw: text.slice(s, end), vs: s, ve: end } };
 }
 
 function timeToString(mins) {
@@ -329,7 +329,7 @@ function moneyReader(d) {
     }
     return best;
   };
-  return { read, starts: (c) => symCodes.has(c) || (units.length > 0 && isDigit(c)), prefixes: true };
+  return { read, starts: (c) => symCodes.has(c) || (units.length > 0 && isDigit(c)), prefixes: true, units };
 }
 
 /** The reader for a decide's valueKind: `(text, s) => {end, tok}`. Null for an unknown kind. */
@@ -550,12 +550,63 @@ export function textPresent(foldedQuote, foldedValue) {
 }
 
 /**
+ * Evidence (RULED #66): where `textPresent` found the value, as `{ start, end }` in `quote` (the first qualifying whole-token
+ * occurrence), or null (not present, or lower-casing changed the quote's length so the offset cannot be trusted).
+ */
+export function textSpanPresent(quote, foldedQuote, foldedValue) {
+  if (foldedQuote.length !== quote.length) return null;
+  for (let at = foldedQuote.indexOf(foldedValue); at !== -1; at = foldedQuote.indexOf(foldedValue, at + 1)) {
+    if (boundaryBefore(foldedQuote, at) && boundaryAfter(foldedQuote, at + foldedValue.length)) return { start: at, end: at + foldedValue.length };
+  }
+  return null;
+}
+
+/** Evidence (RULED #66): where `textAfter` matched, as `{ start, end }` in `quote`, or null (no match, or the fold changed lengths there). */
+export function textSpanAfter(quote, from, foldedValue) {
+  const n = foldedValue.length;
+  if (!textAfter(quote, from, foldedValue)) return null;
+  if (quote.slice(from, from + n).toLowerCase() !== foldedValue) return null;
+  return { start: from, end: from + n };
+}
+
+/**
  * Anchored `text`: the folded value must START at `from` (right after the anchor and its whitespace) and END on a
  * whole-token boundary. The segment is folded after the cut, so offsets never cross a length-changing lower-casing.
  */
 export function textAfter(quote, from, foldedValue) {
   const seg = quote.slice(from).toLowerCase();
   return seg.startsWith(foldedValue) && boundaryAfter(seg, foldedValue.length);
+}
+
+// --- evidence spans (RULED #66) --------------------------------------------------
+// Positions are carried by the SAME reads that produce the verdict (tokens hold their offsets); nothing here searches again.
+// A raw span is `{ role, start, end, canon?, ck? }`: `canon` is the display form of a bind-only value, `ck` its comparable key.
+
+/** Push one token's spans: its value run, plus the currency symbol / unit text that read it (money: a unit that directly follows a symbol form is reported too). */
+function pushTok(sp, rd, kind, text, tok, bindOnly) {
+  if (tok.mal) {
+    sp.push({ role: "value", start: tok.vs, end: tok.ve });
+    return;
+  }
+  const v = { role: "value", start: tok.vs, end: tok.ve };
+  if (bindOnly) {
+    v.canon = String(displayOf(kind, tok.value));
+    v.ck = String(canonOf(kind, tok.value));
+  }
+  sp.push(v);
+  if (tok.cs !== undefined) {
+    sp.push({ role: "currency", start: tok.cs, end: tok.ce });
+    const units = rd.units;
+    if (units !== undefined && units.length > 0 && text.charCodeAt(tok.ve) === 32) {
+      let best = -1;
+      for (const u of units) {
+        const e = tok.ve + 1 + u.length;
+        if (text.startsWith(u, tok.ve + 1) && !isLetter(text.charCodeAt(e)) && e > best) best = e;
+      }
+      if (best !== -1) sp.push({ role: "unit", start: tok.ve + 1, end: best });
+    }
+  }
+  if (tok.us !== undefined) sp.push({ role: "unit", start: tok.us, end: tok.ue });
 }
 
 // --- extraction -----------------------------------------------------------------
@@ -568,13 +619,13 @@ export function textAfter(quote, from, foldedValue) {
  * else `value-none`; a malformed token there is `value-malformed`.
  * Returns `{ ok: true, value, canon }` or `{ ok: false, kind, ...fields }`. Never throws on any string.
  */
-export function extractValue(decide, text) {
+export function extractValue(decide, text, sp) {
   const rd = readerFor(decide);
   if (typeof text !== "string" || rd === null) return { ok: false, kind: "value-none", ...(anchorField(decide)) };
   const kind = decide.valueKind;
 
   if (decide.anchor !== undefined) {
-    const at = locateAnchor(decide, text);
+    const at = locateAnchor(decide, text, sp);
     if (at.gap) return { ok: false, ...at.gap };
     const p = at.p;
     let q = p;
@@ -584,11 +635,12 @@ export function extractValue(decide, text) {
     }
     const r = q < text.length ? rd.read(text, q) : { tok: undefined };
     if (r.tok === undefined) return { ok: false, kind: "value-none", ...anchorField(decide) };
+    if (sp !== undefined) pushTok(sp, rd, kind, text, r.tok, decide.op === undefined);
     if (r.tok.mal) return { ok: false, kind: "value-malformed", measured: clip(r.tok.raw) };
     return { ok: true, value: r.tok.value, canon: canonOf(kind, r.tok.value) };
   }
 
-  const s = scanValues(rd, kind, text, null);
+  const s = scanValues(rd, kind, text, null, sp, false);
   if (s.mal) return { ok: false, kind: "value-malformed", measured: clip(s.mal.raw) };
   if (s.count === 0) return { ok: false, kind: "value-none" };
   // RULED #65 SAME AMOUNT = ONE PRICE: a money op decide whose tokens all carry one canonical amount reads as that one value
@@ -618,7 +670,7 @@ function edgesOk(t, label, at) {
  * The signed anchor (normalized, case-sensitive) must occur exactly once in `text`. Returns `{ p, end }` (`end`: the index just past the anchor; `p`: the first non-whitespace character after it) or `{ gap }` (`anchor-missing` / `anchor-ambiguous` with the
  * gap fields). Shared by value decides and `text` decides.
  */
-function locateAnchor(decide, text) {
+function locateAnchor(decide, text, sp) {
   const a = typeof decide.anchor === "string" ? normalizeForQuote(decide.anchor) : "";
   if (a === "") return { gap: { kind: "anchor-missing", anchor: decide.anchor, measured: 0 } };
   let count = 0;
@@ -627,6 +679,7 @@ function locateAnchor(decide, text) {
     if (!edgesOk(text, a, at)) continue; // RULED #64: a non-qualifying occurrence is skipped, not counted
     if (count === 0) first = at;
     count++;
+    if (sp !== undefined) sp.push({ role: "anchor", start: at, end: at + a.length });
   }
   if (count === 0) return { gap: { kind: "anchor-missing", anchor: decide.anchor, measured: 0 } };
   if (count > 1) return { gap: { kind: "anchor-ambiguous", anchor: decide.anchor, measured: count } };
@@ -641,7 +694,7 @@ function locateAnchor(decide, text) {
  * token (`mal`: unsure = red, never counted away). `count` counts every value; `items` keeps the first
  * MAX_ITEMS as clipped display strings; with `canons` (a Set) every value's comparable form is added (membership).
  */
-function scanValues(rd, kind, text, canons) {
+function scanValues(rd, kind, text, canons, sp, bindOnly) {
   const n = text.length;
   let count = 0;
   const items = [];
@@ -667,8 +720,10 @@ function scanValues(rd, kind, text, canons) {
     if (r.tok !== undefined) {
       if (r.tok.mal) {
         mal = r.tok;
+        if (sp !== undefined) pushTok(sp, rd, kind, text, r.tok, false);
         break;
       }
+      if (sp !== undefined) pushTok(sp, rd, kind, text, r.tok, bindOnly);
       if (count === 0) {
         firstVal = r.tok.value;
         if (kind === "money") firstCanon = canonOf(kind, firstVal);
@@ -701,11 +756,11 @@ const DIRECTION = { lt: "below", lte: "at-most", gt: "above", gte: "at-least" };
  * `extracted` (value decides) is the canonical comparable value when one was extracted (decimal string,
  * YYYY-MM-DD, or integer minutes).
  */
-export function evalDecide(decide, text) {
-  if (Array.isArray(decide.phrases)) return evalPresence(decide, text);
-  if (decide.valueKind === "text") return evalText(decide, text);
-  if (decide.op === undefined && decide.anchor === undefined) return evalMembership(decide, text); // bind-only, no anchor (RULED #56)
-  const ex = extractValue(decide, text);
+export function evalDecide(decide, text, sp) {
+  if (Array.isArray(decide.phrases)) return evalPresence(decide, text, sp);
+  if (decide.valueKind === "text") return evalText(decide, text, sp);
+  if (decide.op === undefined && decide.anchor === undefined) return evalMembership(decide, text, sp); // bind-only, no anchor (RULED #56)
+  const ex = extractValue(decide, text, sp);
   if (!ex.ok) {
     const { kind, ok: _ok, ...fields } = ex;
     return { type: "value", ok: false, kind, ...fields };
@@ -748,11 +803,11 @@ export function evalDecide(decide, text) {
  * result carries `members` (the Set of comparable forms of ALL values), `shown` (the first 20 DISTINCT display strings,
  * first-occurrence order) and `total` (the count of distinct values).
  */
-function evalMembership(decide, text) {
+function evalMembership(decide, text, sp) {
   const rd = readerFor(decide);
   if (typeof text !== "string" || rd === null) return { type: "value", ok: false, kind: "value-none" };
   const members = new Set();
-  const s = scanValues(rd, decide.valueKind, text, members);
+  const s = scanValues(rd, decide.valueKind, text, members, sp, true);
   if (s.mal) return { type: "value", ok: false, kind: "value-malformed", measured: clip(s.mal.raw) };
   if (s.count === 0) return { type: "value", ok: false, kind: "value-none" };
   return { type: "value", ok: true, members, shown: s.items, total: members.size }; // DISTINCT values (RULED #63)
@@ -763,9 +818,9 @@ function evalMembership(decide, text) {
  * (`anchor-missing` / `anchor-ambiguous`) and, with `until` (RULED #61), `until-missing` / `value-none`. Ok carries `textFrom`
  * (where the claim value must start, anchored, or 0) or, with `until`, `textField` (the whole field the claim must equal).
  */
-function evalText(decide, text) {
+function evalText(decide, text, sp) {
   if (decide.anchor === undefined) return { type: "value", ok: true, textFrom: 0 };
-  const at = locateAnchor(decide, text);
+  const at = locateAnchor(decide, text, sp);
   if (at.gap) return { type: "value", ok: false, ...at.gap };
   if (decide.until === undefined) return { type: "value", ok: true, textFrom: at.p };
   // RULED #61: the field is the quote strictly between the anchor's end and the FIRST `until` after it. `until` is matched
@@ -775,9 +830,13 @@ function evalText(decide, text) {
   let ue = u === "" ? -1 : text.indexOf(u, at.end);
   while (ue !== -1 && !edgesOk(text, u, ue)) ue = text.indexOf(u, ue + 1); // RULED #64: skip non-qualifying, keep searching
   if (ue === -1) return { type: "value", ok: false, kind: "until-missing", until: decide.until, measured: 0 };
-  const field = text.slice(at.end, ue).trim();
+  if (sp !== undefined) sp.push({ role: "until", start: ue, end: ue + u.length });
+  const raw = text.slice(at.end, ue);
+  const field = raw.trim();
   if (field === "") return { type: "value", ok: false, kind: "value-none", ...anchorField(decide) };
-  return { type: "value", ok: true, textField: field };
+  const res = { type: "value", ok: true, textField: field };
+  if (sp !== undefined) res.fieldAt = at.end + (raw.length - raw.trimStart().length); // where the field starts (evidence only)
+  return res;
 }
 
 /** A signed `until`, normalized like the quote (markers stripped, whitespace collapsed) but NOT trimmed. */
@@ -785,11 +844,24 @@ function normalizeUntil(s) {
   return s.split("**").join("").split("__").join("").replace(/\s+/g, " ");
 }
 
-function evalPresence(decide, text) {
+function evalPresence(decide, text, sp) {
   const lower = text.toLowerCase();
+  let missing;
+  // Evidence offsets index `text`; a lower-casing that changes the length (e.g. U+0130) cannot be mapped back, so no span then.
+  const aligned = sp !== undefined && lower.length === text.length;
   for (const p of decide.phrases) {
-    if (!carries(text, lower, p, false)) return { type: "presence", ok: false, kind: "phrase-missing", measured: p };
+    if (!carries(text, lower, p, false)) {
+      if (missing === undefined) missing = p;
+      if (sp === undefined) break; // verdict only: the first missing phrase decides; with evidence the rest are still located
+      continue;
+    }
+    if (aligned) {
+      const pl = p.toLowerCase();
+      const at = lower.indexOf(pl); // the FIRST case-insensitive occurrence, exactly what `carries` found
+      if (at !== -1 && pl.length === p.length) sp.push({ role: "phrase", start: at, end: at + pl.length });
+    }
   }
+  if (missing !== undefined) return { type: "presence", ok: false, kind: "phrase-missing", measured: missing };
   return { type: "presence", ok: true };
 }
 
@@ -805,7 +877,7 @@ function evalPresence(decide, text) {
  * `"d<i>:<kind>"` for every red decide (bounded 20, `itemsTotal` when cut); `results[i]` is decide i's
  * own result (with `index`). `decides` must be a non-empty array (a programmer error otherwise: throws).
  */
-export function decideQuote(quote, decides) {
+export function decideQuote(quote, decides, wantSpans = false) {
   if (!Array.isArray(decides) || decides.length === 0) throw new TypeError("decideQuote: decides must be a non-empty array");
   let text = "";
   try {
@@ -817,7 +889,10 @@ export function decideQuote(quote, decides) {
   const reds = [];
   for (let i = 0; i < decides.length; i++) {
     /** @type {any} */
-    const r = { index: i, ...evalDecide(decides[i], text) };
+    const sp = wantSpans ? [] : undefined;
+    /** @type {any} */
+    const r = { index: i, ...evalDecide(decides[i], text, sp) };
+    if (sp !== undefined) r.sp = sp; // evidence spans (RULED #66); only when asked, so a plain result is unchanged
     results.push(r);
     if (!r.ok) reds.push(r);
   }
@@ -826,7 +901,7 @@ export function decideQuote(quote, decides) {
   // `items` is taken twice in the PRD (the d<i> list; value-many's listed values): the list-level gap keeps the
   // d<i> list under `items`, and the first red's own value list rides as `values` (see the Module 1 report).
   /** @type {any} */
-  const { index: _i, type: _t, ok: _o, extracted: _e, items: firstItems, itemsTotal: firstTotal, ...gapFields } = first;
+  const { index: _i, type: _t, ok: _o, extracted: _e, sp: _sp, fieldAt: _fa, items: firstItems, itemsTotal: firstTotal, ...gapFields } = first;
   if (firstItems !== undefined) gapFields.values = firstItems;
   if (firstTotal !== undefined) gapFields.valuesTotal = firstTotal;
   const list = reds.slice(0, MAX_ITEMS).map((r) => `d${r.index}:${r.kind}`);
