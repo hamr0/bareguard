@@ -96,7 +96,7 @@ import { parseBound, compareBounds, decideQuote, parseClaimValue, displayCanon, 
  * @typedef {Object} EvidenceEntry
  * @property {string} check the check's id, as signed
  * @property {number} claim index into the caller's claims array
- * @property {string} [text] the normalized quote the decides ran on (omitted when the quote is not a string or over 4000 characters)
+ * @property {string} [text] the normalized quote the decides ran on (omitted when the claim is malformed, its quote is then not read, or the normalized quote is over 4000 characters)
  * @property {EvidenceSpan[]} spans sorted by (decide, start); at most 50
  * @property {number} [spansTotal] present only when spans were cut
  *
