@@ -3,11 +3,15 @@
 All notable changes to bareguard are documented here. Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [SemVer](https://semver.org/).
 
 
-## [Unreleased]
+## [0.25.1] - 2026-10-19
 
 ### Fixed
 
-- **`renderGaps` extra-keys / section-words sentences.** Each key in the `extra-keys` sentence is now JSON-escaped (a key with `"` or a newline no longer lands raw; ordinary keys render byte-identically). When `itemsTotal` is a number greater than the items shown, the sentence adds ` and N more` (after the key list; on the last `section-words` sentence). Only the rendered text changes; the typed gap objects are unchanged.
+- **`renderGaps` extra-keys / section-words sentences.** Each key in the `extra-keys` sentence is now JSON-escaped (a key with `"` or a newline no longer lands raw; a key without a quote, backslash or control character renders byte-identically). When `itemsTotal` is a number greater than the items shown, the sentence adds ` and N more` (after the key list; on the last `section-words` sentence of each check, so every check's tail counts its own items). Only the rendered text changes; the typed gap objects are unchanged.
+
+### Docs
+
+- The same-amount collapse (0.24.0) compares amounts only, not currency or unit. Clarification of existing behaviour; no code change.
 
 ## [0.25.0] - 2026-10-19
 
