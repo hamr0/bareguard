@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { createHash } from "node:crypto";
 import { Gate, createRubric, checkStep, rubricSha } from "../src/index.js";
+import { normalizeForQuote, carries } from "../src/primitives/rubric.js";
+import { decideQuote } from "../src/primitives/rubric-locate.js";
 import { makeTmpDir, cleanup, uniquePaths } from "./_helpers.js";
 
 // Evidence spans (docs/product/rubric-prd.md §4.6, RULED #66): `full.evidence`, where a `cited` check with `decides` read.
@@ -287,4 +289,88 @@ test("symbol form: the unit span is the token's own read (longest signed unit, e
     const r = await run(q, d, [cl(q, { d0: "43" }, "43")]);
     assert.deepEqual(marks(r.full.evidence[0]), want, q);
   }
+});
+
+// --- U+0130 (İ): spans after / inside İ are mapped back; only an edge inside one İ's expansion is omitted (ruling #66, 2A) ---
+
+test("İ: the only code point whose default toLowerCase changes length", () => {
+  const odd = [];
+  for (let c = 0; c < 0x10000; c++) if (String.fromCharCode(c).toLowerCase().length !== 1) odd.push(c);
+  for (let c = 0x10000; c < 0x110000; c++) if (String.fromCodePoint(c).toLowerCase().length !== 2) odd.push(c);
+  assert.deepEqual(odd, [0x130]);
+});
+
+test("İ: presence phrase after İ gets its span (repro)", async () => {
+  const q = "Hotel İstanbul. Price: 43 USD. Flight nonstop";
+  const r = await run(q, [{ phrases: ["nonstop"] }], [cl(q)]);
+  assert.equal(r.verdict, "green", JSON.stringify(r.gaps));
+  const [s] = r.full.evidence[0].spans;
+  assert.deepEqual([s.start, s.end], [38, 45]);
+  assert.equal(r.full.evidence[0].text.slice(s.start, s.end), "nonstop");
+});
+
+test("İ: a phrase containing İ, and a phrase ending right after İ", async () => {
+  const q = "Visit İstanbul İ";
+  const r = await run(q, [{ phrases: ["İstanbul", "İ"] }], [cl(q)]);
+  assert.equal(r.verdict, "green", JSON.stringify(r.gaps));
+  assert.deepEqual(marks(r.full.evidence[0]), ["phrase:0:İstanbul", "phrase:0:İ"]);
+  const q2 = "ab İ cd";
+  const r2 = await run(q2, [{ phrases: ["b i"] }], [cl(q2)]);
+  assert.deepEqual(marks(r2.full.evidence[0]), []);
+  const q3 = "xİ";
+  const r3 = await run(q3, [{ phrases: ["xi̇"] }], [cl(q3)]);
+  assert.deepEqual(marks(r3.full.evidence[0]), ["phrase:0:xİ"]);
+});
+
+test("İ: an edge inside one İ's expansion has no span; the verdict is unchanged", async () => {
+  const q = "İstanbul";
+  const r = await run(q, [{ phrases: ["i"] }], [cl(q)]); // "i" is the first half of İ's fold: its END edge is mid-expansion
+  assert.equal(r.verdict, "green");
+  assert.deepEqual(r.full.evidence[0].spans, []);
+  const r2 = await run(q, [{ phrases: ["̇stanbul"] }], [cl(q)]); // START edge mid-expansion
+  assert.equal(r2.verdict, "green");
+  assert.deepEqual(r2.full.evidence[0].spans, []);
+});
+
+test("İ: unanchored text value after İ, and anchored text value containing İ", async () => {
+  const q = "Hotel İstanbul Airport and more";
+  const a = await run(q, [{ valueKind: "text" }], [cl(q, { d0: "airport" })]);
+  assert.equal(a.verdict, "green", JSON.stringify(a.gaps));
+  assert.deepEqual(marks(a.full.evidence[0]), ["value:0:Airport"]);
+  const b = await run(q, [{ valueKind: "text", anchor: "Hotel" }], [cl(q, { d0: "İstanbul" })]);
+  assert.equal(b.verdict, "green", JSON.stringify(b.gaps));
+  assert.deepEqual(marks(b.full.evidence[0]), ["anchor:0:Hotel", "value:0:İstanbul"]);
+  const c = await run("Hotel Airport İ", [{ valueKind: "text", anchor: "Airport" }], [cl("Hotel Airport İ", { d0: "İ" })]);
+  assert.deepEqual(marks(c.full.evidence[0]), ["anchor:0:Airport", "value:0:İ"]);
+});
+
+test("İ: a quote without İ is unchanged", async () => {
+  const q = "Hotel Istanbul nonstop";
+  const r = await run(q, [{ phrases: ["NONSTOP"] }], [cl(q)]);
+  assert.deepEqual(marks(r.full.evidence[0]), ["phrase:0:nonstop"]);
+});
+
+test("İ property: every emitted presence span folds to its phrase; verdict equals the plain carries answer (seeded)", async () => {
+  let seed = 20261019;
+  const rnd = () => {
+    seed = (Math.imul(seed, 1103515245) + 12345) & 0x7fffffff;
+    return seed / 0x7fffffff;
+  };
+  const alpha = ["a", "b", "i", "İ", "I", "B", " ", "x", "̇"];
+  const word = (max) => Array.from({ length: 1 + Math.floor(rnd() * max) }, () => alpha[Math.floor(rnd() * alpha.length)]).join("");
+  let withSpan = 0;
+  for (let n = 0; n < 1500; n++) {
+    const q = word(14);
+    const phrases = Array.from({ length: 1 + Math.floor(rnd() * 2) }, () => word(4));
+    const norm = normalizeForQuote(q);
+    if (norm === "" || phrases.some((p) => p.trim() === "" || p !== p.trim())) continue;
+    const res = decideQuote(q, [{ phrases }], true).results[0];
+    const want = phrases.every((p) => carries(norm, norm.toLowerCase(), p, false));
+    assert.equal(res.ok, want, JSON.stringify([q, phrases]));
+    for (const s of res.sp) {
+      withSpan++;
+      assert.ok(phrases.some((p) => norm.slice(s.start, s.end).toLowerCase() === p.toLowerCase()), JSON.stringify([q, phrases, s]));
+    }
+  }
+  assert.ok(withSpan > 200, `only ${withSpan} spans exercised`);
 });

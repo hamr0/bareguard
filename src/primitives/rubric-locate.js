@@ -567,23 +567,46 @@ export function textPresent(foldedQuote, foldedValue) {
 }
 
 /**
- * Evidence (RULED #66): where `textPresent` found the value, as `{ start, end }` in `quote` (the first qualifying whole-token
- * occurrence), or null (not present, or lower-casing changed the quote's length so the offset cannot be trusted).
+ * Map a span [fs, fe) in `text.toLowerCase()` back to `text`. U+0130 (İ) is the only code point whose default lower-casing
+ * changes length (1 -> 2 units, "i" + U+0307), so a folded offset is the original offset plus the number of İ before it.
+ * Returns `{ start, end }` in `text`, or null when an edge lands inside one İ's 2-unit expansion (no original offset exists).
+ * Pure; used only when the fold changed the length.
  */
-export function textSpanPresent(quote, foldedQuote, foldedValue) {
-  if (foldedQuote.length !== quote.length) return null;
-  for (let at = foldedQuote.indexOf(foldedValue); at !== -1; at = foldedQuote.indexOf(foldedValue, at + 1)) {
-    if (boundaryBefore(foldedQuote, at) && boundaryAfter(foldedQuote, at + foldedValue.length)) return { start: at, end: at + foldedValue.length };
+function foldedSpanToOriginal(text, fs, fe) {
+  let start = -1;
+  let f = 0;
+  for (let o = 0; o <= text.length; o++) {
+    if (start === -1 && f === fs) start = o;
+    if (f === fe) return start === -1 ? null : { start, end: o };
+    if (o === text.length) break;
+    f += text.charCodeAt(o) === 0x130 ? 2 : 1;
   }
   return null;
 }
 
-/** Evidence (RULED #66): where `textAfter` matched, as `{ start, end }` in `quote`, or null (no match, or the fold changed lengths there). */
+/**
+ * Evidence (RULED #66): where `textPresent` found the value, as `{ start, end }` in `quote` (the first qualifying whole-token
+ * occurrence), or null (not present, or an edge falls inside one İ's lower-cased expansion). When lower-casing changed the quote's
+ * length the folded span is mapped back to `quote`.
+ */
+export function textSpanPresent(quote, foldedQuote, foldedValue) {
+  const same = foldedQuote.length === quote.length;
+  for (let at = foldedQuote.indexOf(foldedValue); at !== -1; at = foldedQuote.indexOf(foldedValue, at + 1)) {
+    if (boundaryBefore(foldedQuote, at) && boundaryAfter(foldedQuote, at + foldedValue.length)) {
+      return same ? { start: at, end: at + foldedValue.length } : foldedSpanToOriginal(quote, at, at + foldedValue.length);
+    }
+  }
+  return null;
+}
+
+/** Evidence (RULED #66): where `textAfter` matched, as `{ start, end }` in `quote`, or null (no match, or an edge falls inside one İ's lower-cased expansion). */
 export function textSpanAfter(quote, from, foldedValue) {
   const n = foldedValue.length;
   if (!textAfter(quote, from, foldedValue)) return null;
-  if (quote.slice(from, from + n).toLowerCase() !== foldedValue) return null;
-  return { start: from, end: from + n };
+  if (quote.slice(from, from + n).toLowerCase() === foldedValue) return { start: from, end: from + n };
+  // the fold changed lengths inside the matched run: map the slice-local folded span [0, n) back
+  const m = foldedSpanToOriginal(quote.slice(from), 0, n);
+  return m === null ? null : { start: from + m.start, end: from + m.end };
 }
 
 /**
@@ -855,18 +878,20 @@ function normalizeUntil(s) {
 function evalPresence(decide, text, sp) {
   const lower = text.toLowerCase();
   let missing;
-  // Evidence offsets index `text`; a lower-casing that changes the length (e.g. U+0130) cannot be mapped back, so no span then.
-  const aligned = sp !== undefined && lower.length === text.length;
+  const aligned = lower.length === text.length; // else the folded offset is mapped back (U+0130)
   for (const p of decide.phrases) {
     if (!carries(text, lower, p, false)) {
       if (missing === undefined) missing = p;
       if (sp === undefined) break; // verdict only: the first missing phrase decides; with evidence the rest are still located
       continue;
     }
-    if (aligned) {
+    if (sp !== undefined) {
       const pl = p.toLowerCase();
       const at = lower.indexOf(pl); // the FIRST case-insensitive occurrence, exactly what `carries` found
-      if (at !== -1 && pl.length === p.length) sp.push({ role: "phrase", start: at, end: at + pl.length });
+      if (at !== -1) {
+        const m = aligned ? { start: at, end: at + pl.length } : foldedSpanToOriginal(text, at, at + pl.length);
+        if (m !== null) sp.push({ role: "phrase", start: m.start, end: m.end });
+      }
     }
   }
   if (missing !== undefined) return { type: "presence", ok: false, kind: "phrase-missing", measured: missing };
