@@ -1722,24 +1722,30 @@ function renderSentence(g, more = 0) {
 export function renderGaps(gaps) {
   if (!Array.isArray(gaps)) return "";
   const parts = [];
-  // section-words: one gap (sentence) per section, each carrying the same itemsTotal; the " and N more" tail goes on the last one.
-  let swLast = -1;
-  let swCount = 0;
-  let swTotal = 0;
+  // section-words: one gap (sentence) per section, each carrying the check's itemsTotal; the " and N more" tail goes on
+  // the LAST sentence of each signed check (grouped by the gap's `key`, "<checkpoint>:<check id>").
+  const swLast = new Map(); // key -> index of its last section-words gap
+  const swCount = new Map(); // key -> gaps of that key
   try {
     gaps.forEach((g, i) => {
       if (g !== null && typeof g === "object" && g.kind === "section-words") {
-        swLast = i;
-        swCount++;
-        if (typeof g.itemsTotal === "number") swTotal = g.itemsTotal;
+        const k = g.key;
+        swLast.set(k, i);
+        swCount.set(k, (swCount.get(k) ?? 0) + 1);
       }
     });
   } catch {
-    swLast = -1;
+    swLast.clear();
   }
   for (const [i, g] of gaps.entries()) {
     if (g === null || typeof g !== "object") continue;
-    const sentence = renderSentence(g, i === swLast ? swTotal - swCount : 0);
+    let more = 0;
+    try {
+      if (g.kind === "section-words" && swLast.get(g.key) === i && typeof g.itemsTotal === "number") more = g.itemsTotal - swCount.get(g.key);
+    } catch {
+      more = 0;
+    }
+    const sentence = renderSentence(g, more);
     if (sentence !== null) {
       parts.push(sentence);
       continue;

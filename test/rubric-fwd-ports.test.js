@@ -366,3 +366,19 @@ test("renderGaps: 50 off-band sections render 20 sentences, the last with ' and 
   assert.equal(parts[18], "s18: 2 words, about 180 asked (144-216)");
   assert.equal(parts[19], "s19: 2 words, about 180 asked (144-216) and 30 more");
 });
+
+test("renderGaps: the section-words tail is per check (two sectionWords checks in one checkpoint)", async () => {
+  const an = Array.from({ length: 3 }, (_, i) => `a${i}`);
+  const bn = Array.from({ length: 30 }, (_, i) => `b${i}`);
+  const text = [...an, ...bn].map((n) => `## ${n}\nw w\n`).join("");
+  const r = await run([
+    { id: "a", rule: "sectionWords", field: "text", names: an, wordsPerSection: 180 },
+    { id: "b", rule: "sectionWords", field: "text", names: bn, wordsPerSection: 180 },
+  ], text);
+  assert.equal(r.gaps.length, 23);
+  const parts = renderGaps(r.gaps).split("; ");
+  assert.equal(parts.length, 23);
+  assert.ok(parts.slice(0, 3).every((p) => !p.includes(" more")));
+  assert.ok(parts.slice(3, 22).every((p) => !p.includes(" more")));
+  assert.equal(parts[22], "b19: 2 words, about 180 asked (144-216) and 10 more");
+});
