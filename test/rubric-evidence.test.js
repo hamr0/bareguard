@@ -278,6 +278,33 @@ test("malformed claims with a huge quote: normalized once, evidence unchanged in
   }
 });
 
+test("malformed claims with 100 DISTINCT huge quotes: never normalized (the evNormOf skip, not the memo)", async () => {
+  const big = "word  **x** ".repeat(400000);
+  const claims = Array.from({ length: 100 }, (_, k) => ({ claim: 5, quote: big + k }));
+  const t0 = Date.now();
+  const r = await run(FLIGHT, [{ valueKind: "number" }], claims);
+  const ms = Date.now() - t0;
+  assert.ok(ms < 5000, `took ${ms} ms`);
+  assert.equal(r.full.evidence.length, 100);
+  for (const e of r.full.evidence) {
+    assert.deepEqual(e.spans, []);
+    assert.equal("text" in e, false);
+  }
+});
+
+test("malformed claim quote boundary: 4000 kept chars (normalizing to <= 4000) keeps text; 4001 kept chars omits it", async () => {
+  const fits = "x".repeat(2000) + "**__**" + "y".repeat(2000); // 4000 kept chars, 6 markup chars dropped
+  const over = "x".repeat(2001) + "**__**" + "y".repeat(2000); // 4001 kept chars
+  assert.ok(normalizeForQuote(fits).length <= 4000, "the 4000 case must normalize to <= 4000");
+  assert.ok(fits.length > 4000, "the 4000 case has markup runs on top of the 4000 kept chars");
+  const r = await run(FLIGHT, [{ valueKind: "number" }], [{ claim: 5, quote: fits }, { claim: 5, quote: over }]);
+  assert.equal(r.full.evidence.length, 2);
+  assert.equal(r.full.evidence[0].text, normalizeForQuote(fits));
+  assert.deepEqual(r.full.evidence[0].spans, []);
+  assert.equal("text" in r.full.evidence[1], false);
+  assert.deepEqual(r.full.evidence[1].spans, []);
+});
+
 test("symbol form: the unit span is the token's own read (longest signed unit, exact case, not before a letter)", async () => {
   const d = [{ valueKind: "money", currency: "$", unit: ["US", "US dollars"], op: "lt", value: 450 }];
   const cases = [
