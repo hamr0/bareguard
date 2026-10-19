@@ -163,7 +163,7 @@ test("value-none keeps the located anchor; until-missing keeps anchor; value-mal
   assert.ok("5a".startsWith(e.text.slice(e.spans[0].start, e.spans[0].end)) && e.spans[0].end > e.spans[0].start);
 });
 
-test("quote-not-found, empty-quote, malformed, non-string quote: entry with spans [] (text only when the quote is a string)", async () => {
+test("quote-not-found, empty-quote, malformed, non-string quote: entry with spans [] (a malformed claim never has text)", async () => {
   const d = [{ valueKind: "money", currency: "$" }];
   const r = await run(FLIGHT, d, [cl("  **not** on   the page "), cl("   "), { quote: "From 43", values: {} }, { claim: "c", quote: 7 }, { claim: "c" }]);
   const ev = r.full.evidence;
@@ -171,7 +171,7 @@ test("quote-not-found, empty-quote, malformed, non-string quote: entry with span
   assert.deepEqual(ev.map((e) => e.claim), [0, 1, 2, 3, 4]);
   assert.deepEqual(ev[0], { check: "c", claim: 0, text: "not on the page", spans: [] });
   assert.deepEqual(ev[1], { check: "c", claim: 1, text: "", spans: [] });
-  assert.deepEqual(ev[2], { check: "c", claim: 2, text: "From 43", spans: [] });
+  assert.deepEqual(ev[2], { check: "c", claim: 2, spans: [] });
   assert.deepEqual(ev[3], { check: "c", claim: 3, spans: [] });
   assert.deepEqual(ev[4], { check: "c", claim: 4, spans: [] });
 });
@@ -264,45 +264,28 @@ test("gate.checkStep returns full.evidence but the audit line and the human ask 
   assert.equal(raw.includes('"spans"'), false);
 });
 
-test("malformed claims with a huge quote: normalized once, evidence unchanged in shape (perf regression)", async () => {
-  const big = "word  **x** ".repeat(400000);
-  const claims = Array.from({ length: 100 }, () => ({ claim: 5, quote: big }));
+test("malformed claim: entry is { check, claim, spans: [] } with NO text, even for a short quote (ruling #66 am.3)", async () => {
+  const r = await run(FLIGHT, [{ valueKind: "number" }], [{ claim: 5, quote: "From 43 US dollars" }, { quote: "From 43" }, { claim: "c", quote: 7 }]);
+  assert.deepEqual(r.full.evidence, [
+    { check: "c", claim: 0, spans: [] },
+    { check: "c", claim: 1, spans: [] },
+    { check: "c", claim: 2, spans: [] },
+  ]);
+  for (const e of r.full.evidence) assert.equal("text" in e, false);
+});
+
+test("malformed claims with 100 DISTINCT 1 MB whitespace quotes and 100 distinct markup quotes: never scanned (perf)", async () => {
+  const ws = Array.from({ length: 100 }, (_, k) => ({ claim: 5, quote: " ".repeat(1_000_000) + "x".repeat(k) }));
+  const mk = Array.from({ length: 100 }, (_, k) => ({ claim: 5, quote: "word  **x** ".repeat(400000) + k }));
   const t0 = Date.now();
-  const r = await run(FLIGHT, [{ valueKind: "number" }], claims);
+  const r = await run(FLIGHT, [{ valueKind: "number" }], [...ws, ...mk]);
   const ms = Date.now() - t0;
   assert.ok(ms < 2000, `took ${ms} ms`);
-  assert.equal(r.full.evidence.length, 100);
+  assert.equal(r.full.evidence.length, 100); // EVIDENCE_CLAIMS cap
   for (const e of r.full.evidence) {
     assert.deepEqual(e.spans, []);
     assert.equal("text" in e, false);
   }
-});
-
-test("malformed claims with 100 DISTINCT huge quotes: never normalized (the evNormOf skip, not the memo)", async () => {
-  const big = "word  **x** ".repeat(400000);
-  const claims = Array.from({ length: 100 }, (_, k) => ({ claim: 5, quote: big + k }));
-  const t0 = Date.now();
-  const r = await run(FLIGHT, [{ valueKind: "number" }], claims);
-  const ms = Date.now() - t0;
-  assert.ok(ms < 5000, `took ${ms} ms`);
-  assert.equal(r.full.evidence.length, 100);
-  for (const e of r.full.evidence) {
-    assert.deepEqual(e.spans, []);
-    assert.equal("text" in e, false);
-  }
-});
-
-test("malformed claim quote boundary: 4000 kept chars (normalizing to <= 4000) keeps text; 4001 kept chars omits it", async () => {
-  const fits = "x".repeat(2000) + "**__**" + "y".repeat(2000); // 4000 kept chars, 6 markup chars dropped
-  const over = "x".repeat(2001) + "**__**" + "y".repeat(2000); // 4001 kept chars
-  assert.ok(normalizeForQuote(fits).length <= 4000, "the 4000 case must normalize to <= 4000");
-  assert.ok(fits.length > 4000, "the 4000 case has markup runs on top of the 4000 kept chars");
-  const r = await run(FLIGHT, [{ valueKind: "number" }], [{ claim: 5, quote: fits }, { claim: 5, quote: over }]);
-  assert.equal(r.full.evidence.length, 2);
-  assert.equal(r.full.evidence[0].text, normalizeForQuote(fits));
-  assert.deepEqual(r.full.evidence[0].spans, []);
-  assert.equal("text" in r.full.evidence[1], false);
-  assert.deepEqual(r.full.evidence[1].spans, []);
 });
 
 test("symbol form: the unit span is the token's own read (longest signed unit, exact case, not before a letter)", async () => {
