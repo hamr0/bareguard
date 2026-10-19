@@ -329,3 +329,40 @@ test("list marker: a '## 1. X' line starts ONE section even when both signed for
   const o = await run([{ id: "o", rule: "sectionOrder", field: "text", names: ["1. Intro", "Intro"] }], { text: "## 1. Intro\nx" });
   assert.equal(o.verdict, "red"); // one line cannot satisfy two ordered names
 });
+
+// ---- rendered-sentence tail + key escaping ----
+
+test("renderGaps: extra-keys beyond the 20 shown carry ' and N more' after the key list; typed gap unchanged", async () => {
+  const o = { text: "t" };
+  for (let i = 0; i < 25; i++) o[`k${i}`] = 1;
+  const r = await ak(o);
+  assert.equal(r.gaps[0].keys.length, 20);
+  assert.equal(r.gaps[0].itemsTotal, 25);
+  const shown = r.gaps[0].keys.map((k) => `"${k}"`).join(", ");
+  assert.equal(renderGaps(r.gaps), `artifact has key(s) ${shown} and 5 more besides "text"; the check reads "text" only, so put the whole answer in "text"`);
+});
+
+test("renderGaps: no tail when itemsTotal is missing, not a number, or not greater than the items shown", () => {
+  const base = { kind: "extra-keys", keys: ["a", "b"], allowed: ["text"] };
+  const plain = 'artifact has key(s) "a", "b" besides "text"; the check reads "text" only, so put the whole answer in "text"';
+  for (const itemsTotal of [undefined, "9", 2, 1, NaN, null]) assert.equal(renderGaps([{ ...base, itemsTotal }]), plain, String(itemsTotal));
+});
+
+test("renderGaps: an extra key with a quote or newline is JSON-escaped in the sentence", async () => {
+  const r = await ak({ text: "t", 'a"b\nc': 1 });
+  assert.deepEqual(r.gaps[0].keys, ['a"b\nc']);
+  assert.equal(renderGaps(r.gaps), 'artifact has key(s) "a\\"b\\nc" besides "text"; the check reads "text" only, so put the whole answer in "text"');
+});
+
+test("renderGaps: 50 off-band sections render 20 sentences, the last with ' and 30 more'; typed gaps unchanged", async () => {
+  const names = Array.from({ length: 50 }, (_, i) => `s${i}`);
+  const text = names.map((n) => `## ${n}\nw w\n`).join("");
+  const r = await sw(text, 180, names);
+  assert.equal(r.gaps.length, 20);
+  assert.ok(r.gaps.every((g) => g.itemsTotal === 50));
+  const parts = renderGaps(r.gaps).split("; ");
+  assert.equal(parts.length, 20);
+  assert.equal(parts[0], "s0: 2 words, about 180 asked (144-216)");
+  assert.equal(parts[18], "s18: 2 words, about 180 asked (144-216)");
+  assert.equal(parts[19], "s19: 2 words, about 180 asked (144-216) and 30 more");
+});

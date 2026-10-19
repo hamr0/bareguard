@@ -279,7 +279,9 @@ keys.
   `Object.keys`), clipped to 120 and bounded to 20 (`itemsTotal` when cut); `allowed` is the signed list,
   never clipped. The caller strips `done`/`blocker` before calling (no `ignoreKeys`). `renderGaps`:
   `artifact has key(s) "lines" besides "text"; the check reads "text" only, so put the whole answer in
-  "text"` (several allowed keys: `"text", "note"` in the three places).
+  "text"` (several allowed keys: `"text", "note"` in the three places). Each key is `JSON.stringify`-escaped
+  (`"a\"b\nc"`); when `itemsTotal` exceeds the keys shown, ` and N more` follows the key list. A `sectionWords`
+  cut at 20 gaps puts ` and N more` (`itemsTotal` minus the sentences shown) on the last section sentence. Typed gaps unchanged.
 - **`mustCarry`**: every phrase in `phrases` is a case-insensitive substring of the field; a red
   gap lists the missing phrases (bounded).
 - **`blockLines`**: group the field's non-empty lines into blocks of `size` lines (joined with a

@@ -3,6 +3,12 @@
 All notable changes to bareguard are documented here. Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [SemVer](https://semver.org/).
 
 
+## [Unreleased]
+
+### Fixed
+
+- **`renderGaps` extra-keys / section-words sentences.** Each key in the `extra-keys` sentence is now JSON-escaped (a key with `"` or a newline no longer lands raw; ordinary keys render byte-identically). When `itemsTotal` is a number greater than the items shown, the sentence adds ` and N more` (after the key list; on the last `section-words` sentence). Only the rendered text changes; the typed gap objects are unchanged.
+
 ## [0.25.0] - 2026-10-19
 
 ### Added
