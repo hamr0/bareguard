@@ -154,7 +154,12 @@ function readNumber(text, s) {
   return { end: e, tok: { value: dec, raw: text.slice(s, t), vs: pre === NEG ? s - 1 : s, ve: t } };
 }
 
-function readCurrency(text, s, symbol) {
+/** Does `unit` stand at `u` (exact case, not followed by an ASCII letter)? The one unit-match rule, shared by readUnit and readCurrency. */
+function unitAt(text, u, unit) {
+  return text.startsWith(unit, u) && !isLetter(text.charCodeAt(u + unit.length));
+}
+
+function readCurrency(text, s, symbol, units) {
   if (text.charAt(s) !== symbol || !isDigit(text.charCodeAt(s + 1))) return ignored(s + 1);
   const { e, t } = numRun(text, s + 1);
   const pre = prefixOf(text, s, F_CURRENCY);
@@ -162,23 +167,35 @@ function readCurrency(text, s, symbol) {
   if (pre !== OK || isLetter(text.charCodeAt(e))) return malformed(text, from, e);
   const dec = parseGrammar(text, s + 1, t);
   if (dec === null) return malformed(text, s, e);
-  return { end: e, tok: { value: dec, raw: text.slice(s, t), vs: s + 1, ve: t, cs: s, ce: s + 1 } };
+  const tok = { value: dec, raw: text.slice(s, t), vs: s + 1, ve: t, cs: s, ce: s + 1 };
+  // RULED #66: the unit directly after a symbol form ("$43 US dollars") is located here, as evidence only: `end`, the value and
+  // the scan's resume point are untouched. Longest signed unit that matches wins.
+  if (units !== undefined && units.length > 0 && text.charCodeAt(t) === 32) {
+    let best = -1;
+    for (const u of units) {
+      if (unitAt(text, t + 1, u) && t + 1 + u.length > best) best = t + 1 + u.length;
+    }
+    if (best !== -1) {
+      tok.us = t + 1;
+      tok.ue = best;
+    }
+  }
+  return { end: e, tok };
 }
 
 function readUnit(text, s, unit) {
   if (!isDigit(text.charCodeAt(s))) return ignored(s + 1);
   const { e, t } = numRun(text, s);
-  const unitAt = (u) => text.startsWith(unit, u) && !isLetter(text.charCodeAt(u + unit.length));
   let matched = false;
   let end = e;
-  if (text.charCodeAt(t) === 32 && unitAt(t + 1)) {
+  if (text.charCodeAt(t) === 32 && unitAt(text, t + 1, unit)) {
     matched = true;
     end = t + 1 + unit.length;
   } else {
     // letters glued to the number, then the unit (1.2k US dollars): shaped like a value, so unsure = red
     let L = t;
     while (isLetter(text.charCodeAt(L))) L++;
-    if (L > t && text.charCodeAt(L) === 32 && unitAt(L + 1)) return malformed(text, s, L);
+    if (L > t && text.charCodeAt(L) === 32 && unitAt(text, L + 1, unit)) return malformed(text, s, L);
   }
   if (!matched) return ignored(e); // a number NOT followed by one space + the unit is not a value of this decide
   const pre = prefixOf(text, s, F_UNIT);
@@ -317,7 +334,7 @@ function moneyReader(d) {
   const symCodes = new Set(symbols.map((x) => x.charCodeAt(0)));
   const read = (t, s) => {
     const c = t.charCodeAt(s);
-    if (symCodes.has(c)) return readCurrency(t, s, t.charAt(s));
+    if (symCodes.has(c)) return readCurrency(t, s, t.charAt(s), units);
     /** @type {{ end: number, tok: any }} */
     let best = ignored(s + 1);
     for (const u of units) {
@@ -582,7 +599,7 @@ export function textAfter(quote, from, foldedValue) {
 // Positions are carried by the SAME reads that produce the verdict (tokens hold their offsets); nothing here searches again.
 // A raw span is `{ role, start, end, canon?, ck? }`: `canon` is the display form of a bind-only value, `ck` its comparable key.
 
-/** Push one token's spans: its value run, plus the currency symbol / unit text that read it (money: a unit that directly follows a symbol form is reported too). */
+/** Push one token's spans: its value run, plus the currency symbol / unit text the token itself recorded when it was read. */
 function pushTok(sp, rd, kind, text, tok, bindOnly) {
   if (tok.mal) {
     sp.push({ role: "value", start: tok.vs, end: tok.ve });
@@ -596,15 +613,6 @@ function pushTok(sp, rd, kind, text, tok, bindOnly) {
   sp.push(v);
   if (tok.cs !== undefined) {
     sp.push({ role: "currency", start: tok.cs, end: tok.ce });
-    const units = rd.units;
-    if (units !== undefined && units.length > 0 && text.charCodeAt(tok.ve) === 32) {
-      let best = -1;
-      for (const u of units) {
-        const e = tok.ve + 1 + u.length;
-        if (text.startsWith(u, tok.ve + 1) && !isLetter(text.charCodeAt(e)) && e > best) best = e;
-      }
-      if (best !== -1) sp.push({ role: "unit", start: tok.ve + 1, end: best });
-    }
   }
   if (tok.us !== undefined) sp.push({ role: "unit", start: tok.us, end: tok.ue });
 }

@@ -275,3 +275,16 @@ test("malformed claims with a huge quote: normalized once, evidence unchanged in
     assert.equal("text" in e, false);
   }
 });
+
+test("symbol form: the unit span is the token's own read (longest signed unit, exact case, not before a letter)", async () => {
+  const d = [{ valueKind: "money", currency: "$", unit: ["US", "US dollars"], op: "lt", value: 450 }];
+  const cases = [
+    ["Fare $43 US dollars.", ["currency:0:$", "value:0:43", "unit:0:US dollars"]],
+    ["Fare $43 US dollarsX.", ["currency:0:$", "value:0:43", "unit:0:US"]],
+    ["Fare $43 us dollars.", ["currency:0:$", "value:0:43"]],
+  ];
+  for (const [q, want] of cases) {
+    const r = await run(q, d, [cl(q, { d0: "43" }, "43")]);
+    assert.deepEqual(marks(r.full.evidence[0]), want, q);
+  }
+});
