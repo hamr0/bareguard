@@ -1673,20 +1673,22 @@ export function numbersInQuote(claim, quote) {
  * The two gaps that render as a plain sentence instead of a JSON row (fwdloop's strike detection keys on these
  * exact strings). null = not one of them, or a field is missing / the wrong type / unreadable: use the JSON row.
  */
-function renderSentence(g) {
+function renderSentence(g, more = 0) {
   try {
+    const tail = more > 0 ? ` and ${more} more` : "";
     const kind = g.kind;
     if (kind === "section-words") {
       const { section, words, asked, lo, hi } = g;
       if (typeof section !== "string" || [words, asked, lo, hi].some((n) => typeof n !== "number")) return null;
-      return `${section}: ${words} words, about ${asked} asked (${lo}-${hi})`;
+      return `${section}: ${words} words, about ${asked} asked (${lo}-${hi})${tail}`;
     }
     if (kind === "extra-keys") {
       const { keys, allowed } = g;
       if (!Array.isArray(keys) || !Array.isArray(allowed) || allowed.length === 0) return null;
-      const q = (a) => a.map((k) => `"${String(k)}"`).join(", ");
+      const q = (a) => a.map((k) => JSON.stringify(String(k))).join(", ");
       const al = q(allowed);
-      return `artifact has key(s) ${q(keys)} besides ${al}; the check reads ${al} only, so put the whole answer in ${al}`;
+      const n = typeof g.itemsTotal === "number" ? g.itemsTotal - keys.length : 0;
+      return `artifact has key(s) ${q(keys)}${n > 0 ? ` and ${n} more` : ""} besides ${al}; the check reads ${al} only, so put the whole answer in ${al}`;
     }
   } catch {
     return null;
@@ -1701,7 +1703,9 @@ function renderSentence(g) {
  * "; " in the order given (the minted order is signed check order). The two gaps
  * `sectionWords` (kind `section-words`) and `allowedKeys` (kind `extra-keys`) render as a plain
  * sentence instead, exactly: `<section>: <words> words, about <asked> asked (<lo>-<hi>)` and
- * `artifact has key(s) "k1", "k2" besides "text"; the check reads "text" only, so put the whole answer in "text"`.
+ * `artifact has key(s) "k1", "k2" besides "text"; the check reads "text" only, so put the whole answer in "text"`
+ * (each key is JSON-escaped; when `itemsTotal` exceeds the items shown, ` and N more` follows the key list, and on the last
+ * `section-words` sentence).
  * JSON makes the other rows' render injective, so the same failing state always gives the same string and
  * different states give different strings.
  * @param {Gap[]} gaps
@@ -1718,9 +1722,30 @@ function renderSentence(g) {
 export function renderGaps(gaps) {
   if (!Array.isArray(gaps)) return "";
   const parts = [];
-  for (const g of gaps) {
+  // section-words: one gap (sentence) per section, each carrying the check's itemsTotal; the " and N more" tail goes on
+  // the LAST sentence of each signed check (grouped by the gap's `key`, "<checkpoint>:<check id>").
+  const swLast = new Map(); // key -> index of its last section-words gap
+  const swCount = new Map(); // key -> gaps of that key
+  try {
+    gaps.forEach((g, i) => {
+      if (g !== null && typeof g === "object" && g.kind === "section-words") {
+        const k = g.key;
+        swLast.set(k, i);
+        swCount.set(k, (swCount.get(k) ?? 0) + 1);
+      }
+    });
+  } catch {
+    swLast.clear();
+  }
+  for (const [i, g] of gaps.entries()) {
     if (g === null || typeof g !== "object") continue;
-    const sentence = renderSentence(g);
+    let more = 0;
+    try {
+      if (g.kind === "section-words" && swLast.get(g.key) === i && typeof g.itemsTotal === "number") more = g.itemsTotal - swCount.get(g.key);
+    } catch {
+      more = 0;
+    }
+    const sentence = renderSentence(g, more);
     if (sentence !== null) {
       parts.push(sentence);
       continue;

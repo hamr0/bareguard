@@ -279,7 +279,9 @@ keys.
   `Object.keys`), clipped to 120 and bounded to 20 (`itemsTotal` when cut); `allowed` is the signed list,
   never clipped. The caller strips `done`/`blocker` before calling (no `ignoreKeys`). `renderGaps`:
   `artifact has key(s) "lines" besides "text"; the check reads "text" only, so put the whole answer in
-  "text"` (several allowed keys: `"text", "note"` in the three places).
+  "text"` (several allowed keys: `"text", "note"` in the three places). Each key is `JSON.stringify`-escaped
+  (`"a\"b\nc"`); when `itemsTotal` exceeds the keys shown, ` and N more` follows the key list. A `sectionWords`
+  cut at 20 gaps puts ` and N more` (`itemsTotal` minus the sentences shown) on the last section sentence. Typed gaps unchanged.
 - **`mustCarry`**: every phrase in `phrases` is a case-insensitive substring of the field; a red
   gap lists the missing phrases (bounded).
 - **`blockLines`**: group the field's non-empty lines into blocks of `size` lines (joined with a
@@ -1071,7 +1073,7 @@ its own grammar, below, unchanged. If two forms read the same numeric run (`$43 
 Anchored, the anchor is followed by a value in any signed form, with the same strict adjacency. A malformed
 token of any signed form is `value-malformed`. SAME AMOUNT = ONE PRICE (money only): an `op` decide, unanchored,
 whose 2+ tokens ALL have the same canonical amount (`$43` and `43 US dollars`, or `$43` shown twice) reads as that
-one value and the condition runs on it; two different amounts are `value-many` as before. A bind-only (no `op`)
+one value and the condition runs on it (the collapse compares amounts only, not currency or unit: with `currency: ["$","€"]`, "€43 or $43" reads as ONE price, 43; sign one currency per check if a page can mix them); two different amounts are `value-many` as before. A bind-only (no `op`)
 decide is membership over the union of forms, unchanged. Other value kinds are unchanged: a repeated equal
 value is still `value-many`. DOCTRINE: the forms come from the real captured page, never from the model's
 imagination; the consumer (bareloop) drafts the rule from the page it saw. bareguard cannot see where a form

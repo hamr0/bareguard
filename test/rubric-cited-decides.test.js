@@ -109,6 +109,15 @@ test("missing, malformed and unknown claim values", async () => {
   assert.deepEqual(await one({ zz: "1", d0: "45", aa: "2", d1: "9:27 AM" }), ["#0:d0:claim-value-mismatch:45!=59", "#0:zz:claim-value-unknown", "#0:aa:claim-value-unknown"]);
 });
 
+test("a claim whose values is a revoked Proxy is red claim-value-malformed, not stopped", async () => {
+  const revoked = () => { const r = Proxy.revocable({}, {}); r.revoke(); return r.proxy; };
+  for (const decides of [E4, null]) {
+    const r = await runWith(REAL, decides, [{ ...claimOf(REAL, undefined, "x"), values: revoked() }]);
+    assert.equal(r.verdict, "red", decides ? "with decides" : "without decides");
+    assert.deepEqual(items(r), ["#0:values:claim-value-malformed"]);
+  }
+});
+
 test("values on a cited check with NO decides is red (every key unknown); without values it is green as before", async () => {
   const q = "ships in 2 weeks";
   const src = "It **ships in 2 weeks** for sure.";
