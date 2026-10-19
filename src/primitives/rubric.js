@@ -757,6 +757,17 @@ function runCited(ctx, c) {
   const hasDecides = Array.isArray(decides);
   /** @type {EvidenceEntry[]|null} */
   const evidence = hasDecides ? [] : null; // RULED #66 (entries for the first EVIDENCE_CLAIMS claims)
+  // Evidence text is kept only when the normalized quote is <= QUOTE_MAX_CHARS. Normalization only drops "**", "__"
+  // and collapses whitespace, so a raw quote with more than QUOTE_MAX_CHARS characters outside [*_ whitespace] can never
+  // fit: skip normalizing it (undefined = text omitted, the same entry shape). Otherwise normalize via the shared memo.
+  const evNormOf = (raw) => {
+    let kept = 0;
+    for (let k = 0; k < raw.length; k++) {
+      const ch = raw[k];
+      if (ch !== "*" && ch !== "_" && !/\s/.test(ch) && ++kept > QUOTE_MAX_CHARS) return undefined;
+    }
+    return normOf(raw);
+  };
   const evText = (n) => (typeof n === "string" && n.length <= QUOTE_MAX_CHARS ? { text: n } : {});
   const evPush = (i, n, spans, spansTotal) => {
     if (evidence !== null && i < EVIDENCE_CLAIMS) evidence.push({ check: c.id, claim: i, ...evText(n), spans, ...(spansTotal !== undefined ? { spansTotal } : {}) });
@@ -781,7 +792,7 @@ function runCited(ctx, c) {
       note(`#${i}:malformed`);
       if (evidence !== null && i < EVIDENCE_CLAIMS) {
         const rq = ownString(cc, "quote");
-        evPush(i, rq === undefined ? undefined : normOf(rq), []); // memoized: a malformed claim's quote is normalized once per distinct raw quote
+        evPush(i, rq === undefined ? undefined : evNormOf(rq), []);
       }
     } else if (tooBig) {
       note(`#${i}:source-too-large`);
