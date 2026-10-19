@@ -736,13 +736,16 @@ function runCited(ctx, c) {
   // Over the cap = the existing `too-many` gap (measured = distinct quotes, limit = how many
   // this source size allows). Pure function of the inputs, so the verdict is deterministic.
   const normMemo = new Map(); // RAW quote -> normalized (each distinct raw quote is normalized once, not per claim)
+  const normOf = (quote) => {
+    let n = normMemo.get(quote);
+    if (n === undefined) normMemo.set(quote, (n = normalizeForQuote(quote)));
+    return n;
+  };
   const normQuotes = cl.claims.map((cc) => {
     const claim = ownString(cc, "claim");
     const quote = ownString(cc, "quote");
     if (claim === undefined || quote === undefined) return undefined;
-    let n = normMemo.get(quote);
-    if (n === undefined) normMemo.set(quote, (n = normalizeForQuote(quote)));
-    return n;
+    return normOf(quote);
   });
   if (!tooBig) {
     const distinct = new Set();
@@ -778,7 +781,7 @@ function runCited(ctx, c) {
       note(`#${i}:malformed`);
       if (evidence !== null && i < EVIDENCE_CLAIMS) {
         const rq = ownString(cc, "quote");
-        evPush(i, rq === undefined ? undefined : normalizeForQuote(rq), []);
+        evPush(i, rq === undefined ? undefined : normOf(rq), []); // memoized: a malformed claim's quote is normalized once per distinct raw quote
       }
     } else if (tooBig) {
       note(`#${i}:source-too-large`);

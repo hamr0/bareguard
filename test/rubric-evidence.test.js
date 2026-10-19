@@ -261,3 +261,17 @@ test("gate.checkStep returns full.evidence but the audit line and the human ask 
   assert.equal(raw.includes("evidence"), false);
   assert.equal(raw.includes('"spans"'), false);
 });
+
+test("malformed claims with a huge quote: normalized once, evidence unchanged in shape (perf regression)", async () => {
+  const big = "word  **x** ".repeat(400000);
+  const claims = Array.from({ length: 100 }, () => ({ claim: 5, quote: big }));
+  const t0 = Date.now();
+  const r = await run(FLIGHT, [{ valueKind: "number" }], claims);
+  const ms = Date.now() - t0;
+  assert.ok(ms < 2000, `took ${ms} ms`);
+  assert.equal(r.full.evidence.length, 100);
+  for (const e of r.full.evidence) {
+    assert.deepEqual(e.spans, []);
+    assert.equal("text" in e, false);
+  }
+});
