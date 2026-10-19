@@ -18,7 +18,7 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { resolveWithSymlinks, findSymlinkComponent, within, norm } from "./fs.js";
-import { parseBound, compareBounds, decideQuote, parseClaimValue, displayCanon, parseClaimText, textPresent, textAfter } from "./rubric-locate.js";
+import { parseBound, compareBounds, decideQuote, parseClaimValue, displayCanon, parseClaimText, textPresent, textAfter, textSpanPresent, textSpanAfter } from "./rubric-locate.js";
 
 /**
  * @typedef {Object} Gap
@@ -85,6 +85,21 @@ import { parseBound, compareBounds, decideQuote, parseClaimValue, displayCanon, 
  * @property {string} goal
  * @property {Object<string, {gating: boolean, requiresHuman?: true, accept?: ("live"|"later"), checks: Check[]}>} checkpoints
  *
+ * @typedef {Object} EvidenceSpan
+ * @property {number} decide index into the check's WHOLE decides list
+ * @property {"anchor"|"value"|"currency"|"unit"|"until"|"phrase"} role
+ * @property {number} start UTF-16 offset into the entry's `text`, inclusive
+ * @property {number} end exclusive: `text.slice(start, end)` is the highlighted string
+ * @property {string} [canon] bind-only value spans: the canonical value read there
+ * @property {true} [matched] bind-only value spans: this token equals THIS claim's typed value
+ *
+ * @typedef {Object} EvidenceEntry
+ * @property {string} check the check's id, as signed
+ * @property {number} claim index into the caller's claims array
+ * @property {string} [text] the normalized quote the decides ran on (omitted when the claim is malformed, its quote is then not read, or the normalized quote is over 4000 characters)
+ * @property {EvidenceSpan[]} spans sorted by (decide, start); at most 50
+ * @property {number} [spansTotal] present only when spans were cut
+ *
  * @typedef {Object} StepResult
  * @property {"green"|"red"|"stopped"} verdict
  * @property {string} checkpoint
@@ -92,7 +107,7 @@ import { parseBound, compareBounds, decideQuote, parseClaimValue, displayCanon, 
  * @property {string|null} outputSha sha256 (hex) of `opts.outputBytes`, else of a string output's UTF-8 bytes; null for an object output with no `outputBytes`
  * @property {Gap[]} gaps what the worker may see; [] unless red
  * @property {Fault|null} fault the first fault, when stopped
- * @property {{gaps: Gap[], faults: Fault[]}} full everything, for the audit and the human
+ * @property {{gaps: Gap[], faults: Fault[], evidence: EvidenceEntry[], evidenceTotal?: number}} full everything, for the human. `evidence` (RULED #66): where each `cited` check that signs `decides` read, one entry per claim (first 100 claims per check; `evidenceTotal` = all such claims in the call, present only when some were cut). Never in `gaps`, never in the audit line.
  * @property {Object<string, {baseline:number, baselineSource:{anchor:string, route:string}}>} baselines seed baselines this call measured, for the caller/gate to record
  * @property {Object<string, {count:number, sha256:string}>} callerItems caller item lists this call used (count + sha256 of the JSON list), for the audit
  */
@@ -103,6 +118,8 @@ const MAX_NAME_LEN = 128; // ids, checkpoint ids, field names (they land in keys
 const SOURCE_CAP_BYTES = 5 * 1024 * 1024; // PRD §4.2 / ruling 2026-10-06 #7
 const QUOTE_WORK_CAP = 128 * 1024 * 1024; // `cited`: distinct quotes x normalized source length (UTF-16 units) searched per check; over it = red too-many. Deterministic, never a clock (Law 8)
 const MAX_ITEMS = 20; // offender-list bound in a gap
+const EVIDENCE_CLAIMS = 100; // RULED #66: claims per `cited` check that get an evidence entry
+const EVIDENCE_SPANS = 50; // RULED #66: spans per evidence entry
 const QUOTE_MAX_CHARS = 4000; // `cited` with `decides`: a normalized quote over this is `quote-too-long` (bounds the extraction work; §4.6)
 const CLIP = 120; // a caller-MEASURED / output-derived string inside a gap (never a signed one)
 const MAX_SIGNED_LEN = 1000; // a signed name/phrase/value is refused past this at createRubric, so it rides a gap UNCLIPPED
@@ -719,13 +736,16 @@ function runCited(ctx, c) {
   // Over the cap = the existing `too-many` gap (measured = distinct quotes, limit = how many
   // this source size allows). Pure function of the inputs, so the verdict is deterministic.
   const normMemo = new Map(); // RAW quote -> normalized (each distinct raw quote is normalized once, not per claim)
+  const normOf = (quote) => {
+    let n = normMemo.get(quote);
+    if (n === undefined) normMemo.set(quote, (n = normalizeForQuote(quote)));
+    return n;
+  };
   const normQuotes = cl.claims.map((cc) => {
     const claim = ownString(cc, "claim");
     const quote = ownString(cc, "quote");
     if (claim === undefined || quote === undefined) return undefined;
-    let n = normMemo.get(quote);
-    if (n === undefined) normMemo.set(quote, (n = normalizeForQuote(quote)));
-    return n;
+    return normOf(quote);
   });
   if (!tooBig) {
     const distinct = new Set();
@@ -735,6 +755,12 @@ function runCited(ctx, c) {
   }
   const decides = c.decides;
   const hasDecides = Array.isArray(decides);
+  /** @type {EvidenceEntry[]|null} */
+  const evidence = hasDecides ? [] : null; // RULED #66 (entries for the first EVIDENCE_CLAIMS claims)
+  const evText = (n) => (typeof n === "string" && n.length <= QUOTE_MAX_CHARS ? { text: n } : {});
+  const evPush = (i, n, spans, spansTotal) => {
+    if (evidence !== null && i < EVIDENCE_CLAIMS) evidence.push({ check: c.id, claim: i, ...evText(n), spans, ...(spansTotal !== undefined ? { spansTotal } : {}) });
+  };
   const found = new Map(); // normalized quote -> found in src (identical quotes searched once; same verdict)
   const numSets = new Map(); // RAW quote -> its number-token Set (scanned once per distinct raw quote, not per claim)
   const decided = new Map(); // normalized quote -> decideQuote result (the decides run once per distinct quote; claim values are compared per claim)
@@ -751,15 +777,25 @@ function runCited(ctx, c) {
   cl.claims.forEach((cc, i) => {
     const before = total;
     const q = normQuotes[i];
-    if (q === undefined) note(`#${i}:malformed`);
-    else if (tooBig) note(`#${i}:source-too-large`);
-    else if (q === "") note(`#${i}:empty-quote`);
-    else {
+    if (q === undefined) {
+      note(`#${i}:malformed`);
+      evPush(i, undefined, []); // RULED #66 am.3: a malformed claim's entry has spans [] and NO text; its raw quote is never read for evidence
+    } else if (tooBig) {
+      note(`#${i}:source-too-large`);
+      evPush(i, q, []);
+    } else if (q === "") {
+      note(`#${i}:empty-quote`);
+      evPush(i, q, []);
+    } else {
       let hit = found.get(q);
       if (hit === undefined) found.set(q, (hit = src.includes(q)));
-      if (!hit) note(`#${i}:quote-not-found`);
-      else if (hasDecides && q.length > QUOTE_MAX_CHARS) note(`#${i}:quote-too-long`);
-      else citedProven(cc, i, q);
+      if (!hit) {
+        note(`#${i}:quote-not-found`);
+        evPush(i, q, []);
+      } else if (hasDecides && q.length > QUOTE_MAX_CHARS) {
+        note(`#${i}:quote-too-long`);
+        evPush(i, q, []); // text omitted: over the bound
+      } else citedProven(cc, i, q);
     }
     if (total > before) failed++;
   });
@@ -769,12 +805,17 @@ function runCited(ctx, c) {
     const rawQuote = /** @type {string} */ (ownString(cc, "quote"));
     if (hasDecides) {
       let dq = decided.get(q);
-      if (dq === undefined) decided.set(q, (dq = decideQuote(rawQuote, decides)));
+      if (dq === undefined) decided.set(q, (dq = decideQuote(rawQuote, decides, true)));
       for (const r of dq.results) {
         if (r.ok) continue;
         note(`#${i}:d${r.index}:${r.kind}${r.kind === "phrase-missing" ? `:${r.measured}` : ""}`); // a signed phrase is never clipped
       }
-      binding(cc, i, dq, q);
+      const cv = []; // the claim's own typed values per decide, for the evidence flags (RULED #66)
+      binding(cc, i, dq, q, cv);
+      if (i < EVIDENCE_CLAIMS) {
+        const sp = evidenceSpans(dq, q, cv);
+        evPush(i, q, sp.length > EVIDENCE_SPANS ? sp.slice(0, EVIDENCE_SPANS) : sp, sp.length > EVIDENCE_SPANS ? sp.length : undefined);
+      }
     } else {
       binding(cc, i, null, q);
     }
@@ -785,7 +826,7 @@ function runCited(ctx, c) {
   }
 
   /** The typed claim binding (§4.6, RULED #49, #56, #58). `dq` is null when the check signs no decides (any `values` is then unknown); `q` is the normalized quote. */
-  function binding(cc, i, dq, q) {
+  function binding(cc, i, dq, q, cv) {
     let values;
     let malformed = false;
     try {
@@ -817,6 +858,7 @@ function runCited(ctx, c) {
           note(`#${i}:${key}:claim-value-malformed`);
           continue;
         }
+        if (cv) cv[j] = t.text;
         if (!res.ok) continue; // the decide's own red (anchor-missing / anchor-ambiguous / until-missing / value-none) already says so
         const folded = t.text.toLowerCase();
         if (res.textField !== undefined) {
@@ -839,6 +881,7 @@ function runCited(ctx, c) {
         note(`#${i}:${key}:claim-value-malformed`);
         continue;
       }
+      if (cv) cv[j] = String(parsed.canon);
       if (res.members !== undefined) {
         // bind-only without an anchor: membership. The claim must equal ONE of the quote's values (all of them are checked;
         // only the displayed list is bounded to MAX_ITEMS).
@@ -861,7 +904,39 @@ function runCited(ctx, c) {
     }
   }
 
-  return total === 0 ? OK : red("unsupported", { measured: failed, limit: cl.claims.length, items, ...(total > MAX_ITEMS ? { itemsTotal: total } : {}) });
+  /** RULED #66: the spans for one proven claim; sorted by (decide, start). `cv[j]` is the claim's own value for decide j when it parsed. */
+  function evidenceSpans(dq, q, cv) {
+    const out = [];
+    for (let j = 0; j < decides.length; j++) {
+      const res = dq.results[j];
+      const d = decides[j];
+      for (const s of res.sp) {
+        const o = { decide: j, role: s.role, start: s.start, end: s.end };
+        if (s.ck !== undefined) {
+          o.canon = s.canon;
+          if (cv[j] === s.ck) o.matched = true;
+        }
+        out.push(o);
+      }
+      if (d.valueKind === "text" && res.ok && cv[j] !== undefined) {
+        const folded = cv[j].toLowerCase();
+        let at = null;
+        if (res.textField !== undefined) {
+          if (folded === res.textField.toLowerCase()) at = { start: res.fieldAt, end: res.fieldAt + res.textField.length };
+        } else if (d.anchor === undefined) {
+          dq.folded ??= q.toLowerCase();
+          at = textSpanPresent(q, dq.folded, folded);
+        } else {
+          at = textSpanAfter(q, res.textFrom, folded);
+        }
+        if (at !== null) out.push({ decide: j, role: "value", start: at.start, end: at.end });
+      }
+    }
+    return out.sort((a, b) => a.decide - b.decide || a.start - b.start);
+  }
+
+  const ev = evidence === null ? {} : { evidence: { entries: evidence, total: cl.claims.length } };
+  return total === 0 ? { ...OK, ...ev } : { ...red("unsupported", { measured: failed, limit: cl.claims.length, items, ...(total > MAX_ITEMS ? { itemsTotal: total } : {}) }), ...ev };
 }
 
 function runComplete(ctx, c) {
@@ -1705,13 +1780,14 @@ function mintGap(checkpoint, c, partial) {
  * when given, for any output type; else of the UTF-8 bytes of a string output; else
  * null for an object (bareguard never serializes one: such an advance cannot be bound
  * to its bytes). Precedence: stopped > red > green (a stopped verdict keeps its reds
- * in `full` only). Async so judge support can be added without an API break.
+ * in `full` only). `full.evidence` (cited checks with `decides` only; ruling #66) says where in each
+ * claim's quote the check read the anchor/value/unit/currency/until/phrase. Async so judge support can be added without an API break.
  * @param {Rubric} rubric
  * @param {string} checkpoint
  * @param {any} output
  * @param {object} [opts]
  * @returns {Promise<StepResult>}
- * @when Reach for this each time an agent hands over output at a checkpoint: it grades the output against the signed rubric and returns the verdict, the structured gap to feed the retry, or the fault for the runner. Take any command/count measurements yourself first and pass them in — bareguard compares, it never runs a tool.
+ * @when Reach for this each time an agent hands over output at a checkpoint: it grades the output against the signed rubric and returns the verdict, the structured gap to feed the retry, or the fault for the runner. Take any command/count measurements yourself first and pass them in — bareguard compares, it never runs a tool. For cited checks with `decides`, `full.evidence` says where in each claim's quote the check read the anchor/value/unit (ruling #66).
  * @category rubric
  * @signature checkStep(rubric: Rubric, checkpoint: string, output: string|object, opts?: { measurements?: object, items?: object, inputs?: object, priorBaselines?: object, outputBytes?: string|Uint8Array }) => Promise<StepResult>
  * @fails Rejects with a TypeError only for CALLER misuse: a rubric not made by `createRubric`, an unknown checkpoint, a non-object `opts`, or a `judge` option (the judge path is not available yet — refused, not ignored). Never rejects because of the output: any shape, a throwing getter or a Proxy yields red (`happened`/field checks) and a throwing measurement yields stopped. An output that is not a string or a non-array object is red.
@@ -1790,6 +1866,9 @@ export async function checkStep(rubric, checkpoint, output, opts) {
   const ctx = { rubric: spec, fields, opts: optsRead, baselines: Object.create(null), callerItems: Object.create(null) };
   const reds = [];
   const faults = [];
+  /** @type {EvidenceEntry[]} */
+  const evidence = []; // RULED #66
+  let evidenceTotal = 0;
 
   if (shapeGap !== null) {
     reds.push(mintGap(checkpoint, { id: "happened", rule: "happened" }, shapeGap));
@@ -1800,6 +1879,10 @@ export async function checkStep(rubric, checkpoint, output, opts) {
         res = RULES[c.rule].run(ctx, c);
       } catch (e) {
         res = stop("exception", errorDetail(e));
+      }
+      if (res.evidence) {
+        evidence.push(...res.evidence.entries);
+        evidenceTotal += res.evidence.total;
       }
       if (res.gap) reds.push(mintGap(checkpoint, c, res.gap));
       else if (res.gaps) for (const g of res.gaps) reds.push(mintGap(checkpoint, c, g)); // sectionWords: one gap per section
@@ -1815,7 +1898,7 @@ export async function checkStep(rubric, checkpoint, output, opts) {
     outputSha,
     gaps: verdict === "red" ? reds : [],
     fault: faults[0] ?? null,
-    full: { gaps: reds, faults },
+    full: { gaps: reds, faults, evidence, ...(evidenceTotal > evidence.length ? { evidenceTotal } : {}) },
     baselines: { ...ctx.baselines }, // plain object out; own "__proto__" etc. survive the spread
     callerItems: { ...ctx.callerItems },
   });
