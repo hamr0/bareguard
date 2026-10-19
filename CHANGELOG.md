@@ -3,11 +3,11 @@
 All notable changes to bareguard are documented here. Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [SemVer](https://semver.org/).
 
 
-## [Unreleased]
+## [0.25.0] - 2026-10-19
 
 ### Added
 
-- **Evidence spans (ruling #66).** `checkStep` / `gate.checkStep` return `full.evidence`: for every claim of every `cited` check that signs `decides`, `{ check, claim, text, spans, spansTotal? }` where each span `{ decide, role, start, end, canon?, matched? }` marks (UTF-16 offsets into the normalized quote `text`) the anchor, value, currency, unit, `until` or phrase the check actually read, green or red. Bind-only membership tokens carry `canon` and `matched` (true on the token equal to that claim's own typed value). Bounded: 100 claims per check (`full.evidenceTotal` when cut), 50 spans per entry (`spansTotal`). A malformed claim's entry is `{ check, claim, spans: [] }` with no `text` (its raw quote is never read for evidence). Not in `gaps`, the audit line or the human ask event; no verdict or existing field changes.
+- **Evidence spans (ruling #66).** `checkStep` / `gate.checkStep` return `full.evidence`: for every claim of every `cited` check that signs `decides`, `{ check, claim, text?, spans, spansTotal? }` (`text` is the normalized quote the spans index; it is omitted for a malformed claim, always, and when the quote is over 4000 characters) where each span `{ decide, role, start, end, canon?, matched? }` marks (UTF-16 offsets into the normalized quote `text`) the anchor, value, currency, unit, `until` or phrase the check actually read, green or red. Bind-only membership tokens carry `canon` and `matched` (true on the token equal to that claim's own typed value). A span of a case-folded match (presence phrase, `text` value) is mapped back to the quote even across `İ` (U+0130); only an edge inside one `İ`'s two-unit lower-casing has no span. The money reader owns the unit span after a symbol-form number. Bounded: 100 claims per check (`full.evidenceTotal` when cut), 50 spans per entry (`spansTotal`). A malformed claim's entry is `{ check, claim, spans: [] }` with no `text` (its raw quote is never read for evidence). Not in `gaps`, the audit line or the human ask event; no verdict or existing field changes.
 
 ## [0.24.0] - 2026-10-14
 
