@@ -1876,6 +1876,7 @@ function mintGap(checkpoint, c, partial) {
  * `opts.inputs[name]` (text of a signed input), `opts.priorBaselines[checkId]`
  * (a seed baseline already recorded for this run; a different passed baseline is `baseline-conflict`).
  * `opts.inputs[name]` must hash to the signed `sha256` or the check is `stopped`.
+ * `opts.tables[name]` (typed rows for `cells`/`table`/`diff`) is locked the same way by `tableSha`; a diff's AFTER table is not signed.
  * `outputSha` = sha256 of exactly `opts.outputBytes` (a string, or a Buffer/Uint8Array)
  * when given, for any output type; else of the UTF-8 bytes of a string output; else
  * null for an object (bareguard never serializes one: such an advance cannot be bound
@@ -1887,9 +1888,9 @@ function mintGap(checkpoint, c, partial) {
  * @param {any} output
  * @param {object} [opts]
  * @returns {Promise<StepResult>}
- * @when Reach for this each time an agent hands over output at a checkpoint: it grades the output against the signed rubric and returns the verdict, the structured gap to feed the retry, or the fault for the runner. Take any command/count measurements yourself first and pass them in — bareguard compares, it never runs a tool. For cited checks with `decides`, `full.evidence` says where in each claim's quote the check read the anchor/value/unit (ruling #66).
+ * @when Reach for this each time an agent hands over output at a checkpoint: it grades the output against the signed rubric and returns the verdict, the structured gap to feed the retry, or the fault for the runner. Take any command/count measurements yourself first and pass them in — bareguard compares, it never runs a tool. For `cells`/`table`/`diff` checks also pass the typed rows in `opts.tables[name]`; a table named in `spec.inputs` must hash to its signed sha256 (`tableSha`) or the check is `stopped`. For cited checks with `decides`, `full.evidence` says where in each claim's quote the check read the anchor/value/unit (ruling #66).
  * @category rubric
- * @signature checkStep(rubric: Rubric, checkpoint: string, output: string|object, opts?: { measurements?: object, items?: object, inputs?: object, priorBaselines?: object, outputBytes?: string|Uint8Array }) => Promise<StepResult>
+ * @signature checkStep(rubric: Rubric, checkpoint: string, output: string|object, opts?: { measurements?: object, items?: object, inputs?: object, tables?: object, priorBaselines?: object, outputBytes?: string|Uint8Array }) => Promise<StepResult>
  * @fails Rejects with a TypeError only for CALLER misuse: a rubric not made by `createRubric`, an unknown checkpoint, a non-object `opts`, or a `judge` option (the judge path is not available yet — refused, not ignored). Never rejects because of the output: any shape, a throwing getter or a Proxy yields red (`happened`/field checks) and a throwing measurement yields stopped. An output that is not a string or a non-array object is red.
  * @example
  * import { createRubric, checkStep } from "bareguard";
