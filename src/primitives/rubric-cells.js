@@ -207,7 +207,7 @@ export const FIELD_DOCS = {
   columns: { type: "string-list", required: false, description: `0-${MAX_KEYS} column headers allowed to change (an empty list = nothing may change)` },
   exceptKeys: { type: "string-list", required: false, description: `0-${MAX_KEYS} key values (of keyColumn) whose rows may differ` },
 };
-// One worked example per op: the signed check and (cells) a matching claim, against EXAMPLE_TABLES. Every one runs green
+// One worked example per op: the signed check and (cells) the matching step `output` ({ answer: <claim> }), against EXAMPLE_TABLES. Every one runs green
 // (test/rubric-cells-gate.test.js), so the vocabulary cannot drift from the code. Key typing to copy: `rows` are integers,
 // `value` is a JS number (never "17"), `days` / `bands` are objects with digit-string row keys and number / string values.
 const ISO_DUE = [{ column: "Due", format: "YYYY-MM-DD" }];
@@ -220,9 +220,9 @@ const EXAMPLES = {
     countEmpty: { check: { column: "Tax" }, claim: { value: 1 } },
     countIf: { check: { where: [{ column: "Amount", cmp: "gt", value: 100 }] }, claim: { value: 2 } },
     sum: { check: { column: "Amount" }, claim: { value: 950 } },
-    sumIf: { check: { column: "Amount", where: [{ column: "Cat", cmp: "equals", value: "food" }] }, claim: { value: 650 } },
+    sumIf: { check: { column: "Amount", where: [{ column: "Amount", cmp: "gt", value: 100 }] }, claim: { value: 900 } },
     average: { check: { column: "Amount" }, claim: { value: 316.67 } },
-    averageIf: { check: { column: "Amount", where: [{ column: "Cat", cmp: "equals", value: "food" }] }, claim: { value: 325 } },
+    averageIf: { check: { column: "Amount", where: [{ column: "Amount", cmp: "gt", value: 100 }] }, claim: { value: 450 } },
     median: { check: { column: "Amount" }, claim: { value: 300 } },
     min: { check: { column: "Amount" }, claim: { value: 50 } },
     max: { check: { column: "Amount" }, claim: { value: 600 } },
@@ -233,7 +233,7 @@ const EXAMPLES = {
     uniqueCount: { check: { column: "Cat" }, claim: { value: 2 } },
     duplicates: { check: { column: "Cat" }, claim: { values: ["food"] } },
     groupTotals: { check: { column: "Amount", groupColumn: "Cat" }, claim: { totals: [{ group: "food", total: 650 }, { group: "rent", total: 300 }] } },
-    percentOfTotal: { check: { column: "Amount", where: [{ column: "Cat", cmp: "equals", value: "food" }] }, claim: { value: 68.42 } },
+    percentOfTotal: { check: { column: "Amount", where: [{ column: "Amount", cmp: "gt", value: 100 }] }, claim: { value: 94.74 } },
     band: { check: { column: "Due", asOf: "2026-10-31", dateFormats: ISO_DUE, bands: BANDS_EX }, claim: { bands: { 2: "1-30", 3: "1-30", 4: "Current" } } },
     daysBetween: { check: { from: { column: "Due", row: 2 }, to: { column: "Due", row: 3 }, dateFormats: ISO_DUE }, claim: { value: 19 } },
     daysSince: { check: { column: "Due", asOf: "2026-10-31", dateFormats: ISO_DUE }, claim: { days: { 2: 30, 3: 11, 4: 0 } } },
@@ -273,7 +273,8 @@ export const EXAMPLE_TABLES = {
 function example(rule, op) {
   const e = EXAMPLES[rule][op];
   const base = rule === "cells" ? { table: "t", claim: "answer" } : rule === "table" ? { table: "t" } : { before: "t", after: "a", keyColumn: "Id" };
-  return { check: { id: `ex-${op}`, rule, ...base, op, ...e.check }, ...(e.claim ? { claim: e.claim } : {}) };
+  // `output` is the FULL step output a cells check reads: the claim sits under the signed `claim` field name ("answer")
+  return { check: { id: `ex-${op}`, rule, ...base, op, ...e.check }, ...(e.claim ? { output: { answer: e.claim } } : {}) };
 }
 
 export const VOCAB_OPS = Object.fromEntries(

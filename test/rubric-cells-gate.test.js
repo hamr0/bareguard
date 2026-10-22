@@ -498,8 +498,10 @@ test("vocabulary: every op has a worked example (signed check + claim) and every
       assert.ok(d.example && d.example.check, `${rule}.${op} has an example`);
       assert.equal(d.example.check.rule, rule);
       assert.equal(d.example.check.op, op);
-      assert.equal(rule === "cells", d.example.claim !== undefined, `${rule}.${op}: a claim exactly for cells`);
-      const r = await checkStep(rubricFor({ ...d.example.check }), "cp", { answer: d.example.claim ?? { unused: 1 } }, { tables: T });
+      assert.equal(rule === "cells", d.example.output !== undefined, `${rule}.${op}: an output exactly for cells`);
+      assert.equal(d.example.claim, undefined, "one form: output");
+      if (rule === "cells") assert.deepEqual(Object.keys(d.example.output), [d.example.check.claim], "the claim sits under the signed claim field");
+      const r = await checkStep(rubricFor({ ...d.example.check }), "cp", d.example.output ?? { unused: 1 }, { tables: T });
       assert.equal(r.verdict, "green", `${rule}.${op}: ${JSON.stringify(r.gaps)} ${JSON.stringify(r.fault)}`);
       n++;
     }
@@ -517,7 +519,7 @@ test("vocabulary examples are mutation-sensitive: a wrong claim on each cells ex
       if (Array.isArray(v)) return [...v, typeof v[0] === "number" ? 99 : typeof v[0] === "string" ? "zz" : { group: "zz", total: 1 }];
       return Object.fromEntries(Object.entries(v).map(([a, b]) => [a, mutate(b)]));
     };
-    const wrong = JSON.parse(JSON.stringify(d.example.claim));
+    const wrong = JSON.parse(JSON.stringify(d.example.output.answer));
     const k = Object.keys(wrong)[0];
     wrong[k] = mutate(wrong[k]);
     const rubric = createRubric({ schema: 1, goal: "g", inputs: [{ name: "t", sha256: tableSha(T.t) }], checkpoints: { cp: { gating: true, checks: [d.example.check] } } });
@@ -528,11 +530,19 @@ test("vocabulary examples are mutation-sensitive: a wrong claim on each cells ex
 
 test("vocabulary examples: the key typing a drafter should copy", () => {
   const ex = rubricVocabulary.rules.cells.ops;
-  assert.ok(ex.rows.example.claim.rows.every(Number.isInteger));
-  assert.equal(typeof ex.count.example.claim.value, "number");
-  assert.deepEqual(Object.keys(ex.daysSince.example.claim.days), ["2", "3", "4"], "digit-string row keys");
-  assert.ok(Object.values(ex.daysSince.example.claim.days).every((v) => typeof v === "number"));
-  assert.ok(Object.values(ex.band.example.claim.bands).every((v) => typeof v === "string"));
-  assert.equal(typeof ex.earliest.example.claim.value, "string");
-  assert.ok(Object.isFrozen(ex.count.example.claim));
+  assert.ok(ex.rows.example.output.answer.rows.every(Number.isInteger));
+  assert.equal(typeof ex.count.example.output.answer.value, "number");
+  assert.deepEqual(Object.keys(ex.daysSince.example.output.answer.days), ["2", "3", "4"], "digit-string row keys");
+  assert.ok(Object.values(ex.daysSince.example.output.answer.days).every((v) => typeof v === "number"));
+  assert.ok(Object.values(ex.band.example.output.answer.bands).every((v) => typeof v === "string"));
+  assert.equal(typeof ex.earliest.example.output.answer.value, "string");
+  assert.ok(Object.isFrozen(ex.count.example.output.answer));
+});
+
+test("vocabulary examples: the *If ops use a NUMERIC condition and the output wrapper is the full step output", () => {
+  const ex = rubricVocabulary.rules.cells.ops;
+  for (const op of ["countIf", "sumIf", "averageIf", "percentOfTotal"]) {
+    assert.deepEqual(ex[op].example.check.where, [{ column: "Amount", cmp: "gt", value: 100 }], op);
+  }
+  assert.deepEqual(ex.count.example.output, { answer: { value: 3 } });
 });
