@@ -210,11 +210,13 @@ value; the expected answer is in `full.expected` only. `items` are row numbers (
 `rows-added-count` = rows of the after table, `rows-deleted-count` = rows of the before table), `row:Column` cells, column names, or what the agent
 itself claimed (`values-extra`, `values-duplicated`, `keys-extra`, `groups-extra`, `groups-duplicated`, `group-total-mismatch`); never table cell text.
 `duplicates` `values` is a list, so a value claimed twice is red `values-duplicated` (like `rows-duplicated` / `groups-duplicated`). `renderGaps` JSON-escapes
-any item that is not a plain token (so a newline or quote in a claimed value never lands raw in a prompt). Faults: `table-invalid`, `check-invalid`, `exception`.
+any item that is not a plain token (so a newline or quote in a claimed value never lands raw in a prompt). Overflow (fix after /branch-review): a computed value that is not a finite number (cells are finite, but a sum, a product or a quotient can pass the largest double) is never compared: red `value-overflow`, a table data gap listed first like `unreadable-cell` (items: row numbers for row math, the first row of the group for `groupTotals`, none for a scalar op). It is red and not stopped because the table, not the instrument, produced it, like an unreadable cell; `average` reports it when the SUM overflows even if the mean would fit (the median halves first, so it does not). The comparison helper also refuses a non-finite side as a backstop.
+
+Faults: `table-invalid`, `check-invalid`, `exception`.
 
 Size caps (measured 2026-10-22 on the dev machine, load < 1; ms, median of 3): at 500,000 cells (50,000 rows x 10) snapshot 34, sum 48,
 median 51, countIf 48, rows 61, duplicates 60, groupTotals 67, topN 86, per-row daysSince 93, band with a 100k-key claim 75-160, rowMath 59,
-diff of one changed cell 161 (two tables); worst adversarial: diff with EVERY cell changed 330-430 ms. Measured earlier under load, over the cap
+diff of one changed cell 161 (two tables); worst adversarial (10 columns x 50,000 rows): diff with EVERY cell changed 330-430 ms. Wide and tall shapes at the cap, re-timed after the header-alignment fix (diff, every cell changed, reversed header): 500,000 columns x 1 row 0.8-1.1 s, 250,000 x 2 about 0.35-0.5 s, 1 column x 500,000 rows about 1.0 s; the other ops stay under about 0.45 s in every shape (before the fix, 50,000 columns took 8.6 s and 500,000 would take minutes: the AFTER header is agent-controlled). Measured earlier under load, over the cap
 (not kept): that every-cell diff at 1,000,000 cells took 739 ms and a one-cell diff at 2,000,000 cells 656 ms, so the cap is 500,000 cells and 16 MiB of characters (a single 32 MiB cell scans in about 170 ms). Over a table cap = red `table-too-large`
 (like `cited`'s source-too-large, not stopped: the cap is deterministic and the verdict is a pure function of the inputs); claim lists and maps over
 100,000 entries are red `claim-too-large`.
