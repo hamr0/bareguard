@@ -73,8 +73,9 @@ fwdloop asked for a rubric check computed over table cells.
   multiset, needs a signed `keyColumn`) is the fallback.
 - Verdict split: a bad or missing claim is red; a broken check or table (unknown op/column/cmp, a
   non-string cell, a ragged row, a duplicate header, a bad tolerance or `asOf`) is `stopped`; any
-  unexpected internal exception is `stopped`, never green. Gaps show claimed values and row numbers; the
-  expected answer stays in `full`, not in gaps.
+  unexpected internal exception is `stopped`, never green. Gaps show row numbers, counts and values the
+  agent itself claimed, NEVER table cell text; the expected answer stays in `full.expected`, not in gaps
+  (hamr 2026-10-22: a gap reaches the worker and the audit file).
 - DATES are FLEXIBLE: the signer picks a date format PER COLUMN from a closed list (fixed at build:
   `YYYY-MM-DD`, `DD/MM/YYYY`, `MM/DD/YYYY`, `D MMM YYYY`; details in §10). bareguard reads
   exactly that format with real-calendar validation and never guesses ("03/04" is never auto-read). fwd
@@ -204,7 +205,11 @@ Claims strictly typed (hamr 2026-10-22: strict for spreadsheets): a claimed numb
 (`ops.<op>.example`: the check plus, for `cells`, the full step `output`), run green in a test against `rubricVocabulary.cells.exampleTables`.
 
 Gaps: own kinds (listed in `CELLS_GAP_KINDS`), `items` as strings (20 max, `itemsTotal` when cut), `measured`/`limit` for counts and the claimed
-value; the expected answer is in `full.expected` only. Faults: `table-invalid`, `check-invalid`, `exception`.
+value; the expected answer is in `full.expected` only. `items` are row numbers (`values-missing`, `groups-missing` = the first row of each omitted group,
+`rows-added-count` = rows of the after table, `rows-deleted-count` = rows of the before table), `row:Column` cells, column names, or what the agent
+itself claimed (`values-extra`, `values-duplicated`, `keys-extra`, `groups-extra`, `groups-duplicated`, `group-total-mismatch`); never table cell text.
+`duplicates` `values` is a list, so a value claimed twice is red `values-duplicated` (like `rows-duplicated` / `groups-duplicated`). `renderGaps` JSON-escapes
+any item that is not a plain token (so a newline or quote in a claimed value never lands raw in a prompt). Faults: `table-invalid`, `check-invalid`, `exception`.
 
 Size caps (measured 2026-10-22 on the dev machine, load < 1; ms, median of 3): at 500,000 cells (50,000 rows x 10) snapshot 34, sum 48,
 median 51, countIf 48, rows 61, duplicates 60, groupTotals 67, topN 86, per-row daysSince 93, band with a 100k-key claim 75-160, rowMath 59,
