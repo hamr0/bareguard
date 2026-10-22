@@ -549,7 +549,7 @@ const own = (o, k) => (o !== null && typeof o === "object" && Object.hasOwn(o, k
 // --- run context -------------------------------------------------------------
 
 function mkCtx() {
-  return { gaps: [], unreadable: new Set(), expected: null };
+  return { gaps: /** @type {any[]} */ ([]), unreadable: new Set(), expected: null };
 }
 const UNREAD_KEEP = 100_000; // unreadable cells remembered per check (the gap shows 20; past this itemsTotal is a floor)
 function unread(ctx, cell) {
