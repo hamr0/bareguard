@@ -12,9 +12,9 @@
 // --- constants ---------------------------------------------------------------
 
 /** Cells (rows x columns) one table may hold. Over it = red `table-too-large` (like cited's work cap: deterministic, never a clock). */
-export const TABLE_MAX_CELLS = 2_000_000;
+export const TABLE_MAX_CELLS = 500_000;
 /** UTF-16 units over every cell and header of one table. */
-export const TABLE_MAX_CHARS = 32 * 1024 * 1024;
+export const TABLE_MAX_CHARS = 16 * 1024 * 1024;
 /** Entries of a claim list or map we will walk. */
 export const CLAIM_MAX = 100_000;
 export const ITEMS = 20; // bound of an `items` list in a gap (= the rubric's MAX_ITEMS)
@@ -163,6 +163,8 @@ const OPS = {
     newColumnRule: { req: ["fn", "a", "b", "result"], opt: ["where", "tolerance", "allowEmpty"], float: true, summary: "the after table's result column is new or changed and obeys the row-math rule on every (matching) row" },
   },
 };
+// every op that takes a `where` may use a date condition, which needs the column's signed format
+for (const ops of Object.values(OPS)) for (const d of Object.values(ops)) if ([...d.req, ...d.opt].includes("where") && ![...d.req, ...d.opt].includes("dateFormats")) d.opt.push("dateFormats");
 const COMMON = { cells: ["table", "claim", "op"], table: ["table", "op"], diff: ["before", "after", "keyColumn", "op"] };
 const CMP_NUM = ["gt", "gte", "lt", "lte", "eq", "between"];
 const CMP_DATE = ["before", "after", "dateBetween", "dateOn"];
@@ -476,7 +478,11 @@ const own = (o, k) => (o !== null && typeof o === "object" && Object.hasOwn(o, k
 // --- run context -------------------------------------------------------------
 
 function mkCtx() {
-  return { gaps: [], unreadable: [], expected: null };
+  return { gaps: [], unreadable: new Set(), expected: null };
+}
+const UNREAD_KEEP = 100_000; // unreadable cells remembered per check (the gap shows 20; past this itemsTotal is a floor)
+function unread(ctx, cell) {
+  if (ctx.unreadable.size < UNREAD_KEEP) ctx.unreadable.add(cell);
 }
 function gap(ctx, kind, items, more = {}) {
   /** @type {any} */
@@ -523,11 +529,11 @@ function matchRow(row, conds, ctx) {
     else if (isBlank(s)) ok = false; // a blank never satisfies a number or date condition
     else if (CMP_NUM.includes(c.cmp)) {
       const n = readNumber(s);
-      if (n === null) { ctx.unreadable.push(`${row.rowNumber}:${c.col}`); ok = false; }
+      if (n === null) { unread(ctx, `${row.rowNumber}:${c.col}`); ok = false; }
       else ok = c.cmp === "gt" ? n > c.value : c.cmp === "gte" ? n >= c.value : c.cmp === "lt" ? n < c.value : c.cmp === "lte" ? n <= c.value : c.cmp === "eq" ? n === c.value : n >= c.lo && n <= c.hi;
     } else {
       const d = readDate(s, c.fmt);
-      if (d === null) { ctx.unreadable.push(`${row.rowNumber}:${c.col}`); ok = false; }
+      if (d === null) { unread(ctx, `${row.rowNumber}:${c.col}`); ok = false; }
       else ok = c.cmp === "before" ? d < c.value : c.cmp === "after" ? d > c.value : c.cmp === "dateOn" ? d === c.value : d >= c.lo && d <= c.hi;
     }
     if (!ok) return false;
@@ -545,7 +551,7 @@ function numbers(rows, i, col, ctx) {
     const s = r.cells[i];
     if (isBlank(s)) continue;
     const v = readNumber(s);
-    if (v === null) ctx.unreadable.push(`${r.rowNumber}:${col}`);
+    if (v === null) unread(ctx, `${r.rowNumber}:${col}`);
     else out.push({ row: r.rowNumber, v });
   }
   return out;
@@ -760,7 +766,7 @@ function runCells(plan, env, ctx) {
       for (const r of trueRows) {
         const s = r.cells[kcol];
         const key = number ? readNumber(s) : s;
-        if (key === null) { ctx.unreadable.push(`${r.rowNumber}:${plan.keyColumn}`); continue; }
+        if (key === null) { unread(ctx, `${r.rowNumber}:${plan.keyColumn}`); continue; }
         pool.set(key, (pool.get(key) ?? 0) + 1);
         (poolRows.get(key) ?? poolRows.set(key, []).get(key)).push(r.rowNumber);
       }
@@ -773,7 +779,11 @@ function runCells(plan, env, ctx) {
         else extra.push(clip(String(key)));
       }
       const missing = [];
-      for (const [key, n] of pool) if (n > 0) missing.push(...poolRows.get(key).slice(poolRows.get(key).length - n));
+      for (const [key, n] of pool) {
+        if (n <= 0) continue;
+        const rs = poolRows.get(key);
+        for (let j = rs.length - n; j < rs.length; j++) missing.push(rs[j]);
+      }
       missing.sort((a, b) => a - b);
       if (missing.length) gap(ctx, "rows-missing", missing);
       if (extra.length) gap(ctx, "keys-extra", extra);
@@ -806,7 +816,15 @@ function runCells(plan, env, ctx) {
       const S = new Set(cr);
       const B = new Set(better);
       const T = new Set(tied);
-      if (S.size !== cr.length) gap(ctx, "rows-duplicated", cr.filter((r, j) => cr.indexOf(r) !== j));
+      if (S.size !== cr.length) {
+        const seenRows = new Set();
+        const dupRows = [];
+        for (const r of cr) {
+          if (seenRows.has(r)) dupRows.push(r);
+          seenRows.add(r);
+        }
+        gap(ctx, "rows-duplicated", dupRows);
+      }
       const miss = better.filter((r) => !S.has(r));
       const other = [...S].filter((r) => !B.has(r) && !T.has(r));
       const tiedIn = tied.filter((r) => S.has(r));
@@ -829,7 +847,7 @@ function runCells(plan, env, ctx) {
         if (isBlank(s)) continue;
         if (number) {
           const n = readNumber(s);
-          if (n === null) ctx.unreadable.push(`${r.rowNumber}:${plan.column}`);
+          if (n === null) unread(ctx, `${r.rowNumber}:${plan.column}`);
           else set.add(n);
         } else set.add(s);
       }
@@ -875,7 +893,7 @@ function runCells(plan, env, ctx) {
         const s = r.cells[i];
         if (isBlank(s)) continue;
         const n = readNumber(s);
-        if (n === null) { ctx.unreadable.push(`${r.rowNumber}:${plan.column}`); continue; }
+        if (n === null) { unread(ctx, `${r.rowNumber}:${plan.column}`); continue; }
         const key = r.cells[g];
         tot.set(key, (tot.get(key) ?? 0) + n);
       }
@@ -917,7 +935,7 @@ function runCells(plan, env, ctx) {
         if (!r) throw new Stop("check-invalid", `row ${a.row} is not in the table`);
         const s = r.cells[colIdx(t, a.column)];
         const d = readDate(s, fmtOf(plan, a.column));
-        if (d === null) ctx.unreadable.push(`${a.row}:${a.column}`);
+        if (d === null) unread(ctx, `${a.row}:${a.column}`);
         return d;
       };
       const a = addr(plan.from);
@@ -936,7 +954,7 @@ function runCells(plan, env, ctx) {
         const s = r.cells[i];
         if (isBlank(s)) continue;
         const d = readDate(s, fmt);
-        if (d === null) { ctx.unreadable.push(`${r.rowNumber}:${plan.column}`); continue; }
+        if (d === null) { unread(ctx, `${r.rowNumber}:${plan.column}`); continue; }
         if (best === null || (op === "earliest" ? d < best : d > best)) best = d;
       }
       if (best === null) return gap(ctx, "no-values");
@@ -958,7 +976,7 @@ function runDaysSinceCell(plan, env, ctx, t) {
   const s = r.cells[colIdx(t, plan.cell.column)];
   const claim = readClaim(env.claim(), ["value"], plan.claim);
   const d = readDate(s, fmtOf(plan, plan.cell.column));
-  if (d === null) { ctx.unreadable.push(`${plan.cell.row}:${plan.cell.column}`); return; }
+  if (d === null) { unread(ctx, `${plan.cell.row}:${plan.cell.column}`); return; }
   compareScalar(ctx, claimNumber(need(claim, "value")), /** @type {number} */ (readIso(plan.asOf)) - d, 0, false);
 }
 
@@ -982,7 +1000,7 @@ function runPerRow(plan, env, ctx, t, rows) {
       const d = readDate(s, fmt);
       v = d === null ? null : /** @type {number} */ (asOf) - d;
     } else v = readNumber(s);
-    if (v === null) ctx.unreadable.push(`${r.rowNumber}:${plan.column}`);
+    if (v === null) unread(ctx, `${r.rowNumber}:${plan.column}`);
     else expectedAt.set(r.rowNumber, v);
   }
   if (empties.length) gap(ctx, "empty-operand", empties);
@@ -1037,7 +1055,7 @@ function rowMath(ctx, t, plan, rows) {
       return null;
     }
     const n = readNumber(s);
-    if (n === null) ctx.unreadable.push(`${r.rowNumber}:${name}`);
+    if (n === null) unread(ctx, `${r.rowNumber}:${name}`);
     return n;
   };
   for (const r of rows) {
@@ -1057,7 +1075,7 @@ function rowMath(ctx, t, plan, rows) {
     const rs = r.cells[ir];
     if (isBlank(rs)) { noResult.push(r.rowNumber); continue; }
     const got = readNumber(rs);
-    if (got === null) { ctx.unreadable.push(`${r.rowNumber}:${plan.result}`); continue; }
+    if (got === null) { unread(ctx, `${r.rowNumber}:${plan.result}`); continue; }
     if (!close(got, exp, tol, true)) bad.push(r.rowNumber);
   }
   if (checked === 0) gap(ctx, "no-rows-checked");
@@ -1240,9 +1258,8 @@ export function evaluate(rule, check, env) {
     else stopped = { kind: "exception", detail: clip(e instanceof Error ? e.message : "unexpected error", 200) };
   }
   if (stopped) return { stopped, gaps: [], expected: null };
-  if (ctx.unreadable.length) {
-    const u = [...new Set(ctx.unreadable)];
-    gap(ctx, "unreadable-cell", u);
+  if (ctx.unreadable.size) {
+    gap(ctx, "unreadable-cell", [...ctx.unreadable]);
   }
   return { stopped: null, gaps: ctx.gaps, expected: ctx.expected };
 }
