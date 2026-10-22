@@ -203,6 +203,8 @@ own module; the Axis A floor never imports judge code.
 All checks are bareguard's own code. Each reads a declared field of the output or a value the
 caller passes; none parses prose in general.
 
+*PROPOSED, not built: a `cells` check computed over caller-given table rows has its own page, [cells-prd.md](cells-prd.md) (ruling #67).*
+
 ### 4.1 Shape and value rules (read the output)
 
 Text is split into lines on `/\r?\n/`.
@@ -1916,3 +1918,7 @@ Status of #30-#47: kept as history. Live and shared with `cited`: #32 (exactly o
 6. Mismatch evaluated when the decide is red on its OP but extracted a value (spec default: yes, so the worker sees both). Alternative: skip binding for a red decide. RESOLVED (bareloop confirmed 2026-10-12): spec default.
 7. Whether a signed opt-out of `numbersInQuote` is wanted later for claim text that is prose; RULED #52 keeps it always on today.
 8. How superlatives (step 3) and mid-run sources (step 2) extend the claim: `source` naming a registered label (step 2), and a claim naming the aggregate it answers (step 3). Not designed.
+
+**2026-10-22 (fwdloop ask; PROPOSED, not built)**
+
+67. RULED (hamr, 2026-10-22), spec in [cells-prd.md](cells-prd.md): ONE generic check `cells` with an `op` from a closed list in `rubricVocabulary` (not one rubric shape per check). The whole op list ships on day 1, write-side ops included. The vocabulary is the pre-read menu: the drafter reads it before committing to a job, and a need that maps to no op is red at drafting. Flow: the agent suggests checks from the vocabulary at draft time, the person signs, the step gives VALUES only, `checkStep` recomputes and judges; the step never authors its own formula. The caller owns file parsing and hands typed rows (cells as strings, `rowNumber` 2-based). POC before build. OPEN, not ruled (after the POC): Law 11 fit (bareguard recomputes aggregates over caller-given rows), Law 5 fit (closed operator set, believed to fit), empty cells in average/min/max, number reading beyond `$` and `,`, default tolerance for averages, `topN` ties, the `groupTotals` claim shape, write side in `cells` or its own kind. No version picked.
