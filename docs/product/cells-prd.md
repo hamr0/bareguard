@@ -53,7 +53,7 @@ fwdloop asked for a rubric check computed over table cells.
   `Infinity`, accounting "(500)". Symbol placement follows #65 (symbol glued directly before the digits,
   no space, a code before the number stays out). Sign-vs-symbol order is a build detail, not stated by
   #65.
-- Blank = whitespace-only. Aggregates (sum, average, median, min, max, groupTotals) skip blanks. A blank
+- Surrounding whitespace is ignored when a cell (or a claimed date) is read as a number or a date (`" 5 "`, `"2026-10-01\n"` read); blank = whitespace-only. Aggregates (sum, average, median, min, max, groupTotals) skip blanks. A blank
   never satisfies a number or date condition. A non-empty, non-number cell in a number column is red
   `unreadable-cell`.
 - Row math: a blank operand is red `empty-operand` unless the check signs `allowEmpty: true` (CHANGED
@@ -197,6 +197,7 @@ Ops: `daysSince` with `cell` claims `{value}`; with `column` it is the per-row m
 `bands: [{name, gt|gte, lt|lte}]` and claims `{bands: {"<row>": "<name>"}}`; with `asOf` the column is a date column and the banded number is the
 days since. `diff.untouchedIdentical` takes `exceptKeys` (keys, not row numbers: a delete may renumber). `rowsAdded`/`rowsDeleted` require `n`.
 `rows` by keys: `{keys: [...]}` compared as text (`valueKind: "number"` reads numbers); `lookup` requires `valueKind` (text, number, date).
+`onlyColumnsChanged` and `untouchedIdentical` compare ALIGNED keys only and do NOT notice added or deleted rows; the signer pairs them with `rowsAdded` / `rowsDeleted`.
 A removed column is always red in `diff`; a new column is red unless listed (`onlyColumnsChanged`) or unless the op is `newColumnRule`.
 
 Claims strictly typed (hamr 2026-10-22: strict for spreadsheets): a claimed number is a finite JS number, never a numeric string (`{value:"17"}` is red
