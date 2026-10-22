@@ -9,6 +9,8 @@
 // One module owns: the readers (number and date forms are SemVer surface), the op table (drives validation at
 // createRubric, the runtime, and `rubricVocabulary`), and the evaluators. Pure; never throws.
 
+import { createHash } from "node:crypto";
+
 // --- constants ---------------------------------------------------------------
 
 /** Cells (rows x columns) one table may hold. Over it = red `table-too-large` (like cited's work cap: deterministic, never a clock). */
@@ -1194,11 +1196,25 @@ function runDiff(plan, env, ctx) {
 
 // --- entry ---------------------------------------------------------------------------------------
 
+/** sha256 (hex) over the canonical form of a table snapshot: the header, then each row's rowNumber and cells (JSON, so it is injective). */
+export function canonTableSha(t) {
+  const canon = JSON.stringify([t.header, t.rows.map((r) => [r.rowNumber, r.cells])]);
+  return createHash("sha256").update(canon, "utf8").digest("hex");
+}
+/** The sha256 of a typed table, or null when it is not a valid typed table (malformed, hostile, or over the size caps). Never throws. */
+export function tableShaOf(raw) {
+  try {
+    return canonTableSha(snapshotTable(raw, "table"));
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Build the environment `evaluate` reads: tables come from `getTables()` (the caller's `opts.tables`), snapshotted ONCE per
  * name into `cache` (so every check of a checkpoint sees the same copy); the claim from `readClaimField()`.
  */
-export function makeEnv(cache, getTables, readClaimField) {
+export function makeEnv(cache, getTables, readClaimField, signedSha) {
   return {
     table(name) {
       let hit = cache.get(name);
@@ -1217,6 +1233,9 @@ export function makeEnv(cache, getTables, readClaimField) {
             throw new Stop("table-invalid", `table ${clip(name)} is unreadable`);
           }
           hit = { t: snapshotTable(raw, name) };
+          const want = signedSha ? signedSha(name) : undefined;
+          // a table the spec signed (spec.inputs) must hash to its sha256, like a cited source: else the instrument cannot trust it
+          if (want !== undefined && canonTableSha(hit.t) !== want) throw new Stop("missing-measurement", `table ${clip(name)} does not match its signed sha256`);
         } catch (e) {
           hit = { e };
         }

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { Gate, createRubric, checkStep, renderGaps, rubricVocabulary, rubricSha } from "../src/index.js";
+import { Gate, createRubric, checkStep, renderGaps, rubricVocabulary, rubricSha, tableSha } from "../src/index.js";
 import { describeRule } from "../src/primitives/rubric.js";
 import { readNumber, TABLE_MAX_CELLS, TABLE_MAX_CHARS, CLAIM_MAX } from "../src/primitives/rubric-cells.js";
 import { runCheck, mk } from "./_cells-helpers.js";
@@ -10,8 +10,10 @@ import { makeTmpDir, cleanup, uniquePaths } from "./_helpers.js";
 // cells / table / diff at the rubric surface: the number reader, tolerance and cap boundaries, createRubric refusals,
 // the vocabulary <-> implementation proof per op, rendering, hostile opts.tables, and the Gate.
 
-const rubricOf = (checks) => createRubric({ schema: 1, goal: "g", checkpoints: { cp: { gating: true, checks } } });
-const step = (checks, tables, output) => checkStep(rubricOf(checks), "cp", output ?? { a: 1 }, { tables });
+// every table a check reads is a signed input (sha256 over tableSha); a diff's AFTER table is not
+const inputsOf = (checks, tables) => [...new Set(checks.map((c) => (c.rule === "diff" ? c.before : c.table)).filter((n) => typeof n === "string"))].map((name) => ({ name, sha256: (tables && tableSha(tables[name])) || "a".repeat(64) }));
+const rubricOf = (checks, tables) => createRubric({ schema: 1, goal: "g", inputs: inputsOf(checks, tables), checkpoints: { cp: { gating: true, checks } } });
+const step = (checks, tables, output) => checkStep(rubricOf(checks, tables), "cp", output ?? { a: 1 }, { tables });
 const bad = (check, re) => assert.throws(() => rubricOf([check]), re);
 const T1 = mk(["Id", "Amt"], [["a", "10"], ["b", "20"]]);
 const sumCheck = (extra = {}) => ({ id: "s", rule: "cells", table: "t", claim: "c", op: "sum", column: "Amt", ...extra });
@@ -205,7 +207,7 @@ test("createRubric refuses: row math operands and the diff lists", () => {
 });
 
 test("the signed check is part of the signature: changing a tolerance, a format or a band changes rubricSha", () => {
-  const sha = (checks) => rubricSha({ schema: 1, goal: "g", checkpoints: { cp: { gating: true, checks } } });
+  const sha = (checks) => rubricSha({ schema: 1, goal: "g", inputs: inputsOf(checks), checkpoints: { cp: { gating: true, checks } } });
   assert.notEqual(sha([sumCheck()]), sha([sumCheck({ tolerance: 0.01 })]));
   const e = (format) => ({ id: "x", rule: "cells", table: "t", claim: "c", op: "earliest", column: "D", dateFormats: [{ column: "D", format }] });
   assert.notEqual(sha([e("DD/MM/YYYY")]), sha([e("MM/DD/YYYY")]));
@@ -276,7 +278,7 @@ test("vocabulary: cells, table and diff list their ops with requires, allows and
 
 test("checkStep: no opts.tables, a missing table, a malformed table -> stopped (table-invalid), never green, never a crash", async () => {
   const chk = sumCheck();
-  const r1 = await checkStep(rubricOf([chk]), "cp", { c: { value: 30 } });
+  const r1 = await checkStep(rubricOf([chk], { t: T1 }), "cp", { c: { value: 30 } });
   assert.equal(r1.verdict, "stopped");
   assert.equal(r1.fault.kind, "table-invalid");
   assert.deepEqual(r1.gaps, []);
@@ -289,7 +291,7 @@ test("checkStep: no opts.tables, a missing table, a malformed table -> stopped (
 });
 
 test("checkStep: a throwing opts.tables getter and a Proxy tables object are stopped, not a throw", async () => {
-  const rubric = rubricOf([sumCheck()]);
+  const rubric = rubricOf([sumCheck()], { t: T1 });
   const getter = await checkStep(rubric, "cp", { c: { value: 1 } }, { get tables() { throw new Error("boom"); } });
   assert.equal(getter.verdict, "stopped");
   const px = new Proxy({}, { get() { throw new Error("t"); }, has() { throw new Error("t"); }, getOwnPropertyDescriptor() { throw new Error("t"); }, ownKeys() { throw new Error("t"); } });
@@ -316,7 +318,7 @@ test("checkStep: the claim field is read from the output: missing, wrong type, a
 
 test("checkStep: a table shared by several checks is read once per step (a later mutation does not change the verdict)", async () => {
   const t = mk(["Amt"], [["10"], ["20"]]);
-  const rubric = rubricOf([sumCheck({ id: "one" }), sumCheck({ id: "two", op: "average" })]);
+  const rubric = rubricOf([sumCheck({ id: "one" }), sumCheck({ id: "two", op: "average" })], { t });
   let reads = 0;
   const tables = { get t() { reads++; return t; } };
   const r = await checkStep(rubric, "cp", { c: { value: 30 } }, { tables });
@@ -373,7 +375,7 @@ test("Gate: gate.checkStep passes opts.tables through; red and stopped are audit
   const dir = await makeTmpDir();
   t.after(async () => cleanup(dir));
   const { auditPath, runId } = uniquePaths(dir);
-  const spec = { schema: 1, goal: "g", checkpoints: { sums: { gating: true, checks: [sumCheck()] } } };
+  const spec = { schema: 1, goal: "g", inputs: [{ name: "t", sha256: tableSha(T1) }], checkpoints: { sums: { gating: true, checks: [sumCheck()] } } };
   const gate = new Gate({ audit: { path: auditPath }, rubric: { spec, sha256: rubricSha(spec), advanceOn: ["done"] }, runId });
   await gate.init();
   const red = await gate.checkStep("sums", { c: { value: 31 } }, { tables: { t: T1 } });
@@ -386,4 +388,101 @@ test("Gate: gate.checkStep passes opts.tables through; red and stopped are audit
   assert.deepEqual(lines.map((l) => l.verdict), ["red", "green", "stopped"]);
   assert.equal(lines[0].gaps[0].kind, "value-mismatch");
   assert.ok(!JSON.stringify(lines[0]).includes('"expected"'), "the expected answer is not in the audit line");
+});
+
+// --- tables are LOCKED by a signed sha256 (hamr 2026-10-22), like a cited source ----------------------------------------------
+
+const LOCK = mk(["Id", "Amt"], [["a", "10"], ["b", "20"], ["c", "30"]]);
+const lockRubric = (extra = {}) => createRubric({ schema: 1, goal: "g", inputs: [{ name: "t", sha256: tableSha(LOCK) }], checkpoints: { cp: { gating: true, checks: [{ id: "n", rule: "cells", table: "t", claim: "c", op: "count", column: "Amt", ...extra }] } } });
+const lockRun = (tables, claim = 3) => checkStep(lockRubric(), "cp", { c: { value: claim } }, { tables });
+const clone = (t) => JSON.parse(JSON.stringify(t));
+
+test("lock: a table that hashes to its signed sha256 is read (green and red as before)", async () => {
+  assert.equal((await lockRun({ t: LOCK })).verdict, "green");
+  assert.equal((await lockRun({ t: clone(LOCK) })).verdict, "green", "a fresh copy of the same rows");
+  assert.equal((await lockRun({ t: LOCK }, 4)).verdict, "red");
+  assert.match(tableSha(LOCK), /^[0-9a-f]{64}$/);
+  assert.equal(tableSha(clone(LOCK)), tableSha(LOCK));
+});
+
+test("lock: the swapped-table probe: a signed count over t, a different 1-row table passed in -> stopped, not green", async () => {
+  const other = mk(["Id", "Amt"], [["z", "1"]]);
+  const r = await lockRun({ t: other }, 1);
+  assert.equal(r.verdict, "stopped");
+  assert.equal(r.fault.kind, "missing-measurement", "same fault kind as a cited input that does not match its sha256");
+  assert.match(r.fault.detail, /table t does not match its signed sha256/);
+  assert.deepEqual(r.gaps, []);
+});
+
+test("lock: ONE changed cell, a changed rowNumber, a reordered row, a changed header, an added or dropped row each -> stopped", async () => {
+  const cell = clone(LOCK); cell.rows[1].cells[1] = "21";
+  const rn = clone(LOCK); rn.rows[2].rowNumber = 5;
+  const order = clone(LOCK); [order.rows[0], order.rows[1]] = [order.rows[1], order.rows[0]]; // rowNumbers now out of order too
+  const orderOnly = clone(LOCK); orderOnly.rows[0].cells = LOCK.rows[1].cells.slice(); orderOnly.rows[1].cells = LOCK.rows[0].cells.slice(); // same rowNumbers, rows swapped
+  const head = clone(LOCK); head.header[1] = "Amount";
+  const added = clone(LOCK); added.rows.push({ rowNumber: 5, cells: ["d", "40"] });
+  const dropped = clone(LOCK); dropped.rows.pop();
+  const ws = clone(LOCK); ws.rows[0].cells[0] = "a ";
+  for (const [name, t] of Object.entries({ cell, rn, order, orderOnly, head, added, dropped, ws })) {
+    const r = await lockRun({ t });
+    assert.equal(r.verdict, "stopped", name);
+    assert.notEqual(tableSha(t), tableSha(LOCK), name);
+  }
+  assert.equal((await lockRun({ t: clone(LOCK) })).verdict, "green");
+});
+
+test("lock: the sha is injective over the canonical form (a cell holding a delimiter-looking string does not collide)", () => {
+  const a = mk(["A", "B"], [["x", "y"]]);
+  const b = mk(["A", "B"], [['x","y', ""]]);
+  const c = mk(["A,B"], [["x"]]);
+  assert.equal(new Set([tableSha(a), tableSha(b), tableSha(c), tableSha(mk(["A", "B"], []))]).size, 4);
+});
+
+test("lock: tableSha never throws; a malformed or hostile table returns null, which createRubric refuses as an input sha256", () => {
+  const px = new Proxy({}, { get() { throw new Error("t"); }, has() { throw new Error("t"); }, getOwnPropertyDescriptor() { throw new Error("t"); }, ownKeys() { throw new Error("t"); } });
+  const hostile = [undefined, null, 5, "t", [], {}, { header: [], rows: [] }, { header: ["A"] }, { header: ["A", "A"], rows: [] }, { header: ["A"], rows: [{ rowNumber: 2, cells: [5] }] },
+    { header: ["A"], rows: [{ rowNumber: 2, cells: ["1", "2"] }] }, { header: ["A"], rows: [{ rowNumber: 1, cells: ["1"] }] }, { header: ["A"], rows: [{ rowNumber: 3, cells: ["1"] }, { rowNumber: 3, cells: ["1"] }] },
+    { get header() { throw new Error("x"); }, rows: [] }, { header: ["A"], rows: new Proxy([], { get() { throw new Error("t"); } }) }, px, JSON.parse('{"__proto__": {"x": 1}, "header": ["A"], "rows": []}')];
+  for (const h of hostile.slice(0, -1)) assert.equal(tableSha(h), null);
+  assert.equal(typeof tableSha(hostile.at(-1)), "string", "a __proto__ own key on the table object is ignored, not followed");
+  assert.equal(tableSha({ header: ["A"], rows: Array.from({ length: TABLE_MAX_CELLS + 1 }, (_, i) => ({ rowNumber: i + 2, cells: ["1"] })) }), null, "over the size cap cannot be signed");
+  assert.throws(() => createRubric({ schema: 1, goal: "g", inputs: [{ name: "t", sha256: tableSha(null) }], checkpoints: { cp: { gating: true, checks: [sumCheck()] } } }), /sha256/);
+});
+
+test("lock: createRubric refuses a table that is not a signed input (cells, table, and a diff's BEFORE)", () => {
+  const cp = (checks, inputs) => ({ schema: 1, goal: "g", ...(inputs ? { inputs } : {}), checkpoints: { cp: { gating: true, checks } } });
+  const sig = (name) => ({ name, sha256: "a".repeat(64) });
+  assert.throws(() => createRubric(cp([sumCheck()])), /checks\[0\]\.table names table "t", which is not in spec.inputs/);
+  assert.throws(() => createRubric(cp([sumCheck()], [sig("other")])), /not in spec.inputs/);
+  assert.throws(() => createRubric(cp([{ id: "x", rule: "table", table: "t", op: "rowCount", n: 1 }])), /not in spec.inputs/);
+  const d = { id: "x", rule: "diff", before: "b", after: "a", keyColumn: "K", op: "rowsAdded", n: 0 };
+  assert.throws(() => createRubric(cp([d], [sig("a")])), /\.before names table "b", which is not in spec.inputs/, "signing only the AFTER table is not enough");
+  assert.doesNotThrow(() => createRubric(cp([sumCheck()], [sig("t")])));
+  assert.doesNotThrow(() => createRubric(cp([d], [sig("b")])), "only the BEFORE table is signed; the AFTER table is the artifact being checked");
+});
+
+test("lock: a diff's BEFORE table is locked, its AFTER table is not (it comes via opts.tables, unsigned)", async () => {
+  const before = mk(["K", "V"], [["k1", "1"], ["k2", "2"]]);
+  const after = mk(["K", "V"], [["k1", "1"], ["k2", "9"]]);
+  const rubric = createRubric({ schema: 1, goal: "g", inputs: [{ name: "b", sha256: tableSha(before) }], checkpoints: { cp: { gating: true, checks: [{ id: "d", rule: "diff", before: "b", after: "a", keyColumn: "K", op: "onlyColumnsChanged", columns: ["V"] }] } } });
+  assert.equal((await checkStep(rubric, "cp", { a: 1 }, { tables: { b: before, a: after } })).verdict, "green");
+  const fake = mk(["K", "V"], [["k1", "5"], ["k2", "9"]]); // the agent hands in an edited BEFORE: caught
+  const r = await checkStep(rubric, "cp", { a: 1 }, { tables: { b: fake, a: after } });
+  assert.equal(r.verdict, "stopped");
+  assert.match(r.fault.detail, /table b does not match/);
+  const changedAfter = mk(["K", "V"], [["k1", "7"], ["k2", "9"]]);
+  assert.equal((await checkStep(rubric, "cp", { a: 1 }, { tables: { b: before, a: changedAfter } })).verdict, "green", "any AFTER is read; the check judges it");
+});
+
+test("lock: a missing table is still stopped table-invalid (not a sha mismatch)", async () => {
+  const r = await lockRun({});
+  assert.equal(r.verdict, "stopped");
+  assert.equal(r.fault.kind, "table-invalid");
+});
+
+test("lock: the signed sha is part of rubricSha, and a hostile table never crashes the lock", async () => {
+  const sha = (t) => rubricSha({ schema: 1, goal: "g", inputs: [{ name: "t", sha256: tableSha(t) }], checkpoints: { cp: { gating: true, checks: [sumCheck()] } } });
+  assert.notEqual(sha(LOCK), sha(mk(["Id", "Amt"], [["a", "11"]])));
+  const px = new Proxy({}, { get() { throw new Error("t"); }, has() { throw new Error("t"); }, getOwnPropertyDescriptor() { throw new Error("t"); }, ownKeys() { throw new Error("t"); } });
+  for (const t of [px, null, { header: ["Id", "Amt"], rows: [{ rowNumber: 2, cells: [1, 2] }] }]) assert.equal((await lockRun({ t })).verdict, "stopped");
 });

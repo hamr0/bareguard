@@ -18,7 +18,7 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { resolveWithSymlinks, findSymlinkComponent, within, norm } from "./fs.js";
-import { evaluate, makeEnv, signedProblem, ruleFieldNames, CELLS_RULES, CELLS_GAP_KINDS, FIELD_DOCS, VOCAB_OPS, DATE_FORMATS, TABLE_MAX_CELLS, TABLE_MAX_CHARS, CLAIM_MAX } from "./rubric-cells.js";
+import { evaluate, makeEnv, tableShaOf, signedProblem, ruleFieldNames, CELLS_RULES, CELLS_GAP_KINDS, FIELD_DOCS, VOCAB_OPS, DATE_FORMATS, TABLE_MAX_CELLS, TABLE_MAX_CHARS, CLAIM_MAX } from "./rubric-cells.js";
 import { parseBound, compareBounds, decideQuote, parseClaimValue, displayCanon, parseClaimText, textPresent, textAfter, textSpanPresent, textSpanAfter } from "./rubric-locate.js";
 
 /**
@@ -1178,7 +1178,8 @@ function cellsFields(rule) {
 }
 function runCellsFamily(ctx, c) {
   const cache = (ctx.tableCache ??= new Map());
-  const env = makeEnv(cache, () => getOpt(ctx, "tables"), () => readField(ctx, c.claim));
+  const signedSha = (name) => (ctx.rubric.inputs ?? []).find((i) => i.name === name)?.sha256;
+  const env = makeEnv(cache, () => getOpt(ctx, "tables"), () => readField(ctx, c.claim), signedSha);
   const r = evaluate(/** @type {"cells"|"table"|"diff"} */ (c.rule), c, env);
   if (r.stopped) return stop(r.stopped.kind, r.stopped.detail);
   const out = r.gaps.length === 0 ? { gaps: [] } : { gaps: r.gaps };
@@ -1430,6 +1431,10 @@ function validateCheck(c, where, inputNames) {
   if (def.signed) {
     const p = signedProblem(/** @type {"cells"|"table"|"diff"} */ (rule), c);
     if (p) throw fail(p.path ? `${where}.${p.path}` : where, p.message);
+    // a table a check reads is a signed input (sha256 over tableSha); a diff's AFTER table is the artifact being checked, so it is not
+    for (const k of rule === "diff" ? ["before"] : ["table"]) {
+      if (!inputNames.has(c[k])) throw fail(`${where}.${k}`, `names table ${JSON.stringify(clip(c[k]))}, which is not in spec.inputs (sign its tableSha)`);
+    }
     return;
   }
   for (const [name, d] of Object.entries(def.fields)) {
@@ -1552,6 +1557,23 @@ export function createRubric(spec, opts) {
 
 function canonSha(copy) {
   return sha256Hex(canon(copy));
+}
+
+/**
+ * The sha256 (hex) of a typed table, over a canonical form of its header and each row's rowNumber and cells. Sign it in `spec.inputs`
+ * (`{ name, sha256: tableSha(table) }`): a `cells` / `table` / `diff` check reads only a table that hashes to its signed sha256.
+ * @param {{header: string[], rows: {rowNumber: number, cells: string[]}[]}} table
+ * @returns {string|null}
+ * @when Reach for this when a rubric check (`cells`, `table`, or the BEFORE table of a `diff`) reads a table: compute the sha of the typed rows you will pass in `opts.tables[name]`, put it in `spec.inputs`, and the human signs it with the rubric. Do not reimplement the canonical form. The AFTER table of a `diff` is the artifact being checked and is not signed.
+ * @category rubric
+ * @signature tableSha(table: {header: string[], rows: {rowNumber: number, cells: string[]}[]}) => string | null
+ * @fails Never throws. Returns null when the value is not a valid typed table: a non-object, a missing or non-array header or rows, a non-string header or cell, a ragged row, a duplicate header, a rowNumber that is not an integer >= 2 and strictly increasing, a table over the size caps (500,000 cells / 16 MiB), a throwing getter or a Proxy. null is not a sha: createRubric refuses it as an input sha256, so a table that cannot be signed cannot be read. The sha covers the typed rows, not the raw file: the same file parsed differently is a different table.
+ * @example
+ * import { tableSha } from "bareguard";
+ * tableSha({ header: ["Id"], rows: [{ rowNumber: 2, cells: ["a"] }] }); // 64 hex chars, stable
+ */
+export function tableSha(table) {
+  return tableShaOf(table);
 }
 
 // --- quoteIn / numbersInQuote -----------------------------------------------

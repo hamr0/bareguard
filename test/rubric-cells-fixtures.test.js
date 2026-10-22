@@ -1,13 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createRubric, checkStep, renderGaps } from "../src/index.js";
+import { createRubric, checkStep, renderGaps, tableSha } from "../src/index.js";
 import { mk } from "./_cells-helpers.js";
 
 // Two fixtures shaped like fwdloop's real jobs, with INVENTED values: an expenses table (Tax blank in half the rows) and an
 // AR aging table (Days overdue and bucket columns blank, waiting to be filled). Driven through createRubric + checkStep.
 
-const rubricOf = (checks) => createRubric({ schema: 1, goal: "g", checkpoints: { cp: { gating: true, checks } } });
-const run = (checks, tables, output) => checkStep(rubricOf(checks), "cp", output ?? { a: 1 }, { tables });
+// every table a check reads is a signed input (sha256 over tableSha); a diff's AFTER table is not
+const inputsOf = (checks, tables) => [...new Set(checks.map((c) => (c.rule === "diff" ? c.before : c.table)).filter((n) => typeof n === "string"))].map((name) => ({ name, sha256: (tables && tableSha(tables[name])) || "a".repeat(64) }));
+const rubricOf = (checks, tables) => createRubric({ schema: 1, goal: "g", inputs: inputsOf(checks, tables), checkpoints: { cp: { gating: true, checks } } });
+const run = (checks, tables, output) => checkStep(rubricOf(checks, tables), "cp", output ?? { a: 1 }, { tables });
 const kinds = (r) => r.gaps.map((g) => g.kind);
 
 // --- expenses ---------------------------------------------------------------------------------------------
