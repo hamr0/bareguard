@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { Gate, createRubric, checkStep, renderGaps, rubricVocabulary, rubricSha, tableSha } from "../src/index.js";
 import { describeRule } from "../src/primitives/rubric.js";
-import { readNumber, TABLE_MAX_CELLS, TABLE_MAX_CHARS, CLAIM_MAX } from "../src/primitives/rubric-cells.js";
+import { readCellNumber, TABLE_MAX_CELLS, TABLE_MAX_CHARS, CLAIM_MAX } from "../src/primitives/rubric-cells.js";
 import { runCheck, mk } from "./_cells-helpers.js";
 import { makeTmpDir, cleanup, uniquePaths } from "./_helpers.js";
 
@@ -20,14 +20,14 @@ const sumCheck = (extra = {}) => ({ id: "s", rule: "cells", table: "t", claim: "
 
 // --- the number reader (SemVer surface) ---------------------------------------------------------------------
 
-test("readNumber: sign, one glued currency symbol, proper thousands groups, decimals", () => {
+test("readCellNumber: sign, one glued currency symbol, proper thousands groups, decimals", () => {
   const ok = [["$1,200.50", 1200.5], ["€5", 5], ["£7.25", 7.25], ["1200", 1200], [" 5 ", 5], ["-$5", -5], ["+$5", 5], ["-5", -5], ["+5", 5], ["0.5", 0.5], ["-0", -0], ["1,234,567.89", 1234567.89], ["007", 7], ["-€1,000", -1000]];
-  for (const [s, want] of ok) assert.equal(readNumber(s), want, JSON.stringify(s));
+  for (const [s, want] of ok) assert.equal(readCellNumber(s), want, JSON.stringify(s));
   const no = ["1,20", "1,2,3", "12,34", "1e3", "12%", ".5", "5.", "0x10", "Infinity", "NaN", "(500)", "--5", "$-5", "€-5", "$ 5", "USD 5", "5 USD", "US$5", "$$5", "", "  ", "abc", "1 000", "١٢٣", "1,000,", ",100", "$", "-", "5-", "1.2.3", "−5"];
-  for (const s of no) assert.equal(readNumber(s), null, JSON.stringify(s));
-  assert.equal(readNumber(5), null);
-  assert.equal(readNumber(null), null);
-  assert.equal(readNumber("9".repeat(400)), null, "not finite = unreadable");
+  for (const s of no) assert.equal(readCellNumber(s), null, JSON.stringify(s));
+  assert.equal(readCellNumber(5), null);
+  assert.equal(readCellNumber(null), null);
+  assert.equal(readCellNumber("9".repeat(400)), null, "not finite = unreadable");
 });
 
 test("sign and symbol order: '-$5' is read, '$-5' is NOT (the symbol is glued directly before the digits)", async () => {

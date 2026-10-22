@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readNumber, readDate } from "../src/primitives/rubric-cells.js";
+import { readCellNumber, readCellDate } from "../src/primitives/rubric-cells.js";
 import { MISSING, runCheck, mk } from "./_cells-helpers.js";
 
 // cells / table / diff (docs/product/cells-prd.md, ruling #67): every op, condition, date format, shape check and diff check,
@@ -197,26 +197,26 @@ const FMT = {
   "D MMM YYYY": { ok: ["22 Oct 2026", "5 Jan 2026", "05 Jan 2026", "29 Feb 2024", "22 OCT 2026", "22 oct 2026"], no: ["22 October 2026", "22 Sept 2026", "22 Sep. 2026", "30 Feb 2026", "29 Feb 2025", "22  Oct 2026", "Oct 22 2026", "22-Oct-2026", "22 Foo 2026", "100 Jan 2026"] },
 };
 for (const [fmt, { ok, no }] of Object.entries(FMT)) {
-  test(`readDate ${fmt}: reads exactly this form, with real-calendar validation`, () => {
-    for (const s of ok) assert.notEqual(readDate(s, fmt), null, `${fmt} ${JSON.stringify(s)}`);
-    for (const s of no) assert.equal(readDate(s, fmt), null, `${fmt} ${JSON.stringify(s)}`);
+  test(`readCellDate ${fmt}: reads exactly this form, with real-calendar validation`, () => {
+    for (const s of ok) assert.notEqual(readCellDate(s, fmt), null, `${fmt} ${JSON.stringify(s)}`);
+    for (const s of no) assert.equal(readCellDate(s, fmt), null, `${fmt} ${JSON.stringify(s)}`);
   });
 }
-test("readDate: the same day in every format has the same day number; 1970-01-01 is 0", () => {
-  const d = readDate("2026-10-22", "YYYY-MM-DD");
-  assert.equal(readDate("22/10/2026", "DD/MM/YYYY"), d);
-  assert.equal(readDate("10/22/2026", "MM/DD/YYYY"), d);
-  assert.equal(readDate("22 Oct 2026", "D MMM YYYY"), d);
-  assert.equal(readDate("1970-01-01", "YYYY-MM-DD"), 0);
-  assert.equal(readDate("1969-12-31", "YYYY-MM-DD"), -1);
-  assert.equal(readDate("2000-03-01", "YYYY-MM-DD") - readDate("2000-02-28", "YYYY-MM-DD"), 2, "2000 is a leap year");
-  assert.equal(readDate("1900-03-01", "YYYY-MM-DD") - readDate("1900-02-28", "YYYY-MM-DD"), 1, "1900 is not");
+test("readCellDate: the same day in every format has the same day number; 1970-01-01 is 0", () => {
+  const d = readCellDate("2026-10-22", "YYYY-MM-DD");
+  assert.equal(readCellDate("22/10/2026", "DD/MM/YYYY"), d);
+  assert.equal(readCellDate("10/22/2026", "MM/DD/YYYY"), d);
+  assert.equal(readCellDate("22 Oct 2026", "D MMM YYYY"), d);
+  assert.equal(readCellDate("1970-01-01", "YYYY-MM-DD"), 0);
+  assert.equal(readCellDate("1969-12-31", "YYYY-MM-DD"), -1);
+  assert.equal(readCellDate("2000-03-01", "YYYY-MM-DD") - readCellDate("2000-02-28", "YYYY-MM-DD"), 2, "2000 is a leap year");
+  assert.equal(readCellDate("1900-03-01", "YYYY-MM-DD") - readCellDate("1900-02-28", "YYYY-MM-DD"), 1, "1900 is not");
 });
-test("readDate: 03/04/2026 is never auto-read: it means 3 April in DD/MM and 4 March in MM/DD, so the signed format decides", () => {
-  assert.equal(readDate("03/04/2026", "YYYY-MM-DD"), null);
-  assert.equal(readDate("03/04/2026", "DD/MM/YYYY") - readDate("03/04/2026", "MM/DD/YYYY"), 30);
-  assert.equal(readDate("2026-10-22", "dd/mm/yyyy"), null, "an unknown format name reads nothing");
-  assert.equal(readDate(20261022, "YYYY-MM-DD"), null);
+test("readCellDate: 03/04/2026 is never auto-read: it means 3 April in DD/MM and 4 March in MM/DD, so the signed format decides", () => {
+  assert.equal(readCellDate("03/04/2026", "YYYY-MM-DD"), null);
+  assert.equal(readCellDate("03/04/2026", "DD/MM/YYYY") - readCellDate("03/04/2026", "MM/DD/YYYY"), 30);
+  assert.equal(readCellDate("2026-10-22", "dd/mm/yyyy"), null, "an unknown format name reads nothing");
+  assert.equal(readCellDate(20261022, "YYYY-MM-DD"), null);
 });
 for (const [fmt, sample, other] of [["DD/MM/YYYY", "22/10/2026", "2026-10-22"], ["MM/DD/YYYY", "10/22/2026", "22/10/2026"], ["D MMM YYYY", "22 Oct 2026", "2026-10-22"]]) {
   const T2 = { t: mk(["Id", "D"], [["a", sample], ["b", other]]) };

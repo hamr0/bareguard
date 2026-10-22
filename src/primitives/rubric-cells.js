@@ -40,7 +40,7 @@ const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "
 const NUM_RE = /^[+-]?[$€£]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?$/;
 
 /** @param {any} s @returns {number|null} */
-export function readNumber(s) {
+export function readCellNumber(s) {
   if (typeof s !== "string") return null;
   const t = s.trim();
   if (!NUM_RE.test(t)) return null;
@@ -77,7 +77,7 @@ const RE_DMY = /^(\d{1,2}) ([A-Za-z]{3}) (\d{4})$/;
  * 1- or 2-digit day and the English 3-letter month in any letter case (`22 Oct 2026`, `22 OCT 2026`; "Sept" is not read).
  * @param {any} s @param {string} format
  */
-export function readDate(s, format) {
+export function readCellDate(s, format) {
   if (typeof s !== "string") return null;
   const t = s.trim();
   let m;
@@ -97,7 +97,7 @@ export function readDate(s, format) {
       return null;
   }
 }
-const readIso = (s) => readDate(s, "YYYY-MM-DD");
+const readIso = (s) => readCellDate(s, "YYYY-MM-DD");
 function dayToIso(n) {
   return new Date(n * 86400000).toISOString().slice(0, 10);
 }
@@ -440,7 +440,7 @@ export function validateSigned(rule, c) {
   if (c.text !== undefined && typeof c.text !== "string") throw new Invalid("text", "must be a string (the signer's explanation)");
 
   // op-specific conditions
-  if (op === "found" && c.valueKind === "number" && readNumber(c.needle) === null) throw new Invalid("needle", "must read as a number when valueKind is number");
+  if (op === "found" && c.valueKind === "number" && readCellNumber(c.needle) === null) throw new Invalid("needle", "must read as a number when valueKind is number");
   if (op === "rows" && c.valueKind !== undefined && c.keyColumn === undefined) throw new Invalid("valueKind", "applies to the keys form: sign a keyColumn");
   if (op === "daysSince") {
     if ((c.cell === undefined) === (c.column === undefined)) throw new Invalid("cell", "daysSince needs exactly one of cell, column");
@@ -600,11 +600,11 @@ function matchRow(row, conds, ctx) {
     else if (c.cmp === "equals") ok = s === c.value; // exact: no trim, no case folding, no wildcards
     else if (isBlank(s)) ok = false; // a blank never satisfies a number or date condition
     else if (CMP_NUM.includes(c.cmp)) {
-      const n = readNumber(s);
+      const n = readCellNumber(s);
       if (n === null) { unread(ctx, `${row.rowNumber}:${c.col}`); ok = false; }
       else ok = c.cmp === "gt" ? n > c.value : c.cmp === "gte" ? n >= c.value : c.cmp === "lt" ? n < c.value : c.cmp === "lte" ? n <= c.value : c.cmp === "eq" ? n === c.value : n >= c.lo && n <= c.hi;
     } else {
-      const d = readDate(s, c.fmt);
+      const d = readCellDate(s, c.fmt);
       if (d === null) { unread(ctx, `${row.rowNumber}:${c.col}`); ok = false; }
       else ok = c.cmp === "before" ? d < c.value : c.cmp === "after" ? d > c.value : c.cmp === "dateOn" ? d === c.value : d >= c.lo && d <= c.hi;
     }
@@ -622,7 +622,7 @@ function numbers(rows, i, col, ctx) {
   for (const r of rows) {
     const s = r.cells[i];
     if (isBlank(s)) continue;
-    const v = readNumber(s);
+    const v = readCellNumber(s);
     if (v === null) unread(ctx, `${r.rowNumber}:${col}`);
     else out.push({ row: r.rowNumber, v });
   }
@@ -780,11 +780,11 @@ function runCells(plan, env, ctx) {
       const i = col();
       const claim = claimOf(["value"]);
       const kind = plan.valueKind ?? "text";
-      const want = kind === "number" ? readNumber(plan.needle) : null;
+      const want = kind === "number" ? readCellNumber(plan.needle) : null;
       let hit = false;
       for (const r of rows) {
         const s = r.cells[i];
-        if (kind === "number" ? readNumber(s) === want : s === plan.needle) { hit = true; break; }
+        if (kind === "number" ? readCellNumber(s) === want : s === plan.needle) { hit = true; break; }
       }
       const c = need(claim, "value");
       if (typeof c !== "boolean") throw new Bad("claim-malformed", "value");
@@ -803,14 +803,14 @@ function runCells(plan, env, ctx) {
       const cell = hits[0].cells[i];
       const c = need(claim, "value");
       if (kind === "number") {
-        const n = readNumber(cell);
+        const n = readCellNumber(cell);
         if (n === null) return gap(ctx, "lookup-unreadable", [hits[0].rowNumber]);
         return compareScalar(ctx, claimNumber(c), n, tol, true);
       }
       if (kind === "date") {
-        const d = readDate(cell, fmt);
+        const d = readCellDate(cell, fmt);
         if (d === null) return gap(ctx, "lookup-unreadable", [hits[0].rowNumber]);
-        const cd = readDate(c, fmt);
+        const cd = readCellDate(c, fmt);
         if (cd === null) throw new Bad("claim-malformed", "date");
         expect(ctx, "value", cell);
         if (cd !== d) gap(ctx, "value-mismatch", undefined, { measured: clip(String(c)) });
@@ -836,7 +836,7 @@ function runCells(plan, env, ctx) {
       const poolRows = new Map();
       for (const r of trueRows) {
         const s = r.cells[kcol];
-        const key = number ? readNumber(s) : s;
+        const key = number ? readCellNumber(s) : s;
         if (key === null) { unread(ctx, `${r.rowNumber}:${plan.keyColumn}`); continue; }
         pool.set(key, (pool.get(key) ?? 0) + 1);
         (poolRows.get(key) ?? poolRows.set(key, []).get(key)).push(r.rowNumber);
@@ -917,7 +917,7 @@ function runCells(plan, env, ctx) {
         const s = r.cells[i];
         if (isBlank(s)) continue;
         if (number) {
-          const n = readNumber(s);
+          const n = readCellNumber(s);
           if (n === null) unread(ctx, `${r.rowNumber}:${plan.column}`);
           else set.add(n);
         } else set.add(s);
@@ -963,7 +963,7 @@ function runCells(plan, env, ctx) {
       for (const r of base) {
         const s = r.cells[i];
         if (isBlank(s)) continue;
-        const n = readNumber(s);
+        const n = readCellNumber(s);
         if (n === null) { unread(ctx, `${r.rowNumber}:${plan.column}`); continue; }
         const key = r.cells[g];
         tot.set(key, (tot.get(key) ?? 0) + n);
@@ -1005,7 +1005,7 @@ function runCells(plan, env, ctx) {
         const r = t.byRow.get(a.row);
         if (!r) throw new Stop("check-invalid", `row ${a.row} is not in the table`);
         const s = r.cells[colIdx(t, a.column)];
-        const d = readDate(s, fmtOf(plan, a.column));
+        const d = readCellDate(s, fmtOf(plan, a.column));
         if (d === null) unread(ctx, `${a.row}:${a.column}`);
         return d;
       };
@@ -1024,13 +1024,13 @@ function runCells(plan, env, ctx) {
       for (const r of rows) {
         const s = r.cells[i];
         if (isBlank(s)) continue;
-        const d = readDate(s, fmt);
+        const d = readCellDate(s, fmt);
         if (d === null) { unread(ctx, `${r.rowNumber}:${plan.column}`); continue; }
         if (best === null || (op === "earliest" ? d < best : d > best)) best = d;
       }
       if (best === null) return gap(ctx, "no-values");
       const c = need(claim, "value");
-      const cd = readDate(c, fmt);
+      const cd = readCellDate(c, fmt);
       if (cd === null) throw new Bad("claim-malformed", "date");
       expect(ctx, "value", dayToIso(best));
       if (cd !== best) gap(ctx, "value-mismatch", undefined, { measured: clip(String(c)) });
@@ -1046,7 +1046,7 @@ function runDaysSinceCell(plan, env, ctx, t) {
   if (!r) throw new Stop("check-invalid", `row ${plan.cell.row} is not in the table`);
   const s = r.cells[colIdx(t, plan.cell.column)];
   const claim = readClaim(env.claim(), ["value"], plan.claim);
-  const d = readDate(s, fmtOf(plan, plan.cell.column));
+  const d = readCellDate(s, fmtOf(plan, plan.cell.column));
   if (d === null) { unread(ctx, `${plan.cell.row}:${plan.cell.column}`); return; }
   compareScalar(ctx, claimNumber(need(claim, "value")), /** @type {number} */ (readIso(plan.asOf)) - d, 0, false);
 }
@@ -1071,9 +1071,9 @@ function runPerRow(plan, env, ctx, t, rows) {
     if (isBlank(s)) { if (plan.allowEmpty !== true) empties.push(`${r.rowNumber}:${plan.column}`); continue; }
     let v;
     if (fmt !== null) {
-      const d = readDate(s, fmt);
+      const d = readCellDate(s, fmt);
       v = d === null ? null : /** @type {number} */ (asOf) - d;
-    } else v = readNumber(s);
+    } else v = readCellNumber(s);
     if (v === null) unread(ctx, `${r.rowNumber}:${plan.column}`);
     else expectedAt.set(r.rowNumber, v);
   }
@@ -1096,7 +1096,7 @@ function runPerRow(plan, env, ctx, t, rows) {
     exp.push([row, want]);
     if (!claimed.has(row)) continue;
     const c = claimed.get(row);
-    if (isBand ? c !== want : c !== want) wrong.push(row);
+    if (c !== want) wrong.push(row);
   }
   expect(ctx, isBand ? "bands" : "days", exp.slice(0, EXPECTED_ROWS).map(([row, v]) => ({ row, [isBand ? "band" : "days"]: v })));
   if (exp.length > EXPECTED_ROWS) expect(ctx, isBand ? "bandsTotal" : "daysTotal", exp.length);
@@ -1128,7 +1128,7 @@ function rowMath(ctx, t, plan, rows) {
       empties.push(`${r.rowNumber}:${name}`);
       return null;
     }
-    const n = readNumber(s);
+    const n = readCellNumber(s);
     if (n === null) unread(ctx, `${r.rowNumber}:${name}`);
     return n;
   };
@@ -1148,7 +1148,7 @@ function rowMath(ctx, t, plan, rows) {
     }
     const rs = r.cells[ir];
     if (isBlank(rs)) { noResult.push(r.rowNumber); continue; }
-    const got = readNumber(rs);
+    const got = readCellNumber(rs);
     if (got === null) { unread(ctx, `${r.rowNumber}:${plan.result}`); continue; }
     if (!close(got, exp, tol, true)) bad.push(r.rowNumber);
   }
@@ -1190,7 +1190,7 @@ function runTable(plan, env, ctx) {
     for (const r of rows) {
       const s = r.cells[i];
       if (isBlank(s)) { if (!allow) bad.push(r.rowNumber); continue; }
-      if ((fmt === null ? readNumber(s) : readDate(s, fmt)) === null) bad.push(r.rowNumber);
+      if ((fmt === null ? readCellNumber(s) : readCellDate(s, fmt)) === null) bad.push(r.rowNumber);
     }
     if (bad.length) gap(ctx, op === "allNumbers" ? "not-number" : "not-date", bad);
   }
@@ -1331,17 +1331,15 @@ export function evaluate(rule, check, env) {
   const ctx = mkCtx();
   let stopped = null;
   try {
-    let plan = check;
     try {
       validateSigned(rule, check);
     } catch (e) {
       if (e instanceof Invalid) throw new Stop("check-invalid", `${e.path || "check"} ${e.message}`);
       throw e;
     }
-    plan = check;
-    if (rule === "cells") runCells(plan, env, ctx);
-    else if (rule === "table") runTable(plan, env, ctx);
-    else runDiff(plan, env, ctx);
+    if (rule === "cells") runCells(check, env, ctx);
+    else if (rule === "table") runTable(check, env, ctx);
+    else runDiff(check, env, ctx);
   } catch (e) {
     if (e instanceof Bad) gap(ctx, e.kind, [clip(String(e.detail))]);
     else if (e instanceof Big) gap(ctx, "table-too-large", [e.what], { measured: e.measured, limit: e.limit });
