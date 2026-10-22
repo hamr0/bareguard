@@ -53,6 +53,7 @@ export { globToRegex, matchAny } from "./glob.js";
 export {
   createRubric,
   rubricSha,
+  tableSha,
   checkStep,
   renderGaps,
   quoteIn,

@@ -18,12 +18,15 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { resolveWithSymlinks, findSymlinkComponent, within, norm } from "./fs.js";
+import { evaluate, makeEnv, tableShaOf, signedProblem, ruleFieldNames, CELLS_RULES, CELLS_GAP_KINDS, FIELD_DOCS, VOCAB_OPS, EXAMPLE_TABLES, DATE_FORMATS, TABLE_MAX_CELLS, TABLE_MAX_CHARS, CLAIM_MAX } from "./rubric-cells.js";
 import { parseBound, compareBounds, decideQuote, parseClaimValue, displayCanon, parseClaimText, textPresent, textAfter, textSpanPresent, textSpanAfter } from "./rubric-locate.js";
 
 /**
  * @typedef {Object} Gap
  * A red check, as data for the worker's retry. `key` is `${checkpoint}:${checkId}`
- * and is stable across retries; ordered rules carry `direction`. Lists are bounded.
+ * and is stable across retries; ordered rules carry `direction`. Lists are bounded. The `cells`/`table`/`diff` rules
+ * (docs/product/cells-prd.md) mint gaps with their own `kind`s, `items` (row numbers, `row:Column` cells, column names, or a value the agent itself claimed; as strings;
+ * never table cell text), and `measured`/`limit` for a count or a claimed value; the expected answer is never in a gap (it is in `full.expected`).
  * @property {string} key
  * @property {string} checkpoint
  * @property {string} check the rule name
@@ -70,7 +73,7 @@ import { parseBound, compareBounds, decideQuote, parseClaimValue, displayCanon, 
  * @property {string} key
  * @property {string} checkpoint
  * @property {string} id
- * @property {"exception"|"liveness"|"missing-measurement"|"unknown-pattern"|"baseline-conflict"} kind
+ * @property {"exception"|"liveness"|"missing-measurement"|"unknown-pattern"|"baseline-conflict"|"table-invalid"|"check-invalid"} kind `table-invalid`/`check-invalid`: a `cells`/`table`/`diff` check could not measure (missing or malformed table; unknown column or row, a signed field that cannot apply)
  * @property {string} detail bounded
  *
  * @typedef {Object} Check
@@ -107,7 +110,7 @@ import { parseBound, compareBounds, decideQuote, parseClaimValue, displayCanon, 
  * @property {string|null} outputSha sha256 (hex) of `opts.outputBytes`, else of a string output's UTF-8 bytes; null for an object output with no `outputBytes`
  * @property {Gap[]} gaps what the worker may see; [] unless red
  * @property {Fault|null} fault the first fault, when stopped
- * @property {{gaps: Gap[], faults: Fault[], evidence: EvidenceEntry[], evidenceTotal?: number}} full everything, for the human. `evidence` (RULED #66): where each `cited` check that signs `decides` read, one entry per claim (first 100 claims per check; `evidenceTotal` = all such claims in the call, present only when some were cut). Never in `gaps`, never in the audit line.
+ * @property {{gaps: Gap[], faults: Fault[], evidence: EvidenceEntry[], evidenceTotal?: number, expected?: Object<string, any>[]}} full everything, for the human. `expected` (present only when a `cells`/`table`/`diff` check computed one): one entry `{ check, ...}` per such check with the answer bareguard computed (`value`, `rows`, `totals`, ...; row lists capped at 200 with a `...Total`). Never in `gaps`. `evidence` (RULED #66): where each `cited` check that signs `decides` read, one entry per claim (first 100 claims per check; `evidenceTotal` = all such claims in the call, present only when some were cut). Never in `gaps`, never in the audit line.
  * @property {Object<string, {baseline:number, baselineSource:{anchor:string, route:string}}>} baselines seed baselines this call measured, for the caller/gate to record
  * @property {Object<string, {count:number, sha256:string}>} callerItems caller item lists this call used (count + sha256 of the JSON list), for the audit
  */
@@ -1162,6 +1165,29 @@ const RULES = {
   },
 };
 
+// cells / table / diff (docs/product/cells-prd.md): the signed fields and op table live in rubric-cells.js; `signed` = that module validates the check.
+function cellsFields(rule) {
+  const fields = {};
+  for (const name of ruleFieldNames(rule)) {
+    fields[name] = { ...FIELD_DOCS[name] };
+    if (name === "op") fields[name].enum = Object.keys(VOCAB_OPS[rule]);
+    if (rule === "diff" && name === "keyColumn") fields[name].required = true;
+    if (name !== "table" && name !== "claim" && name !== "before" && name !== "after" && name !== "op" && !(rule === "diff" && name === "keyColumn")) fields[name].required = false;
+  }
+  return fields;
+}
+function runCellsFamily(ctx, c) {
+  const cache = (ctx.tableCache ??= new Map());
+  const signedSha = (name) => (ctx.rubric.inputs ?? []).find((i) => i.name === name)?.sha256;
+  const env = makeEnv(cache, () => getOpt(ctx, "tables"), () => readField(ctx, c.claim), signedSha);
+  const r = evaluate(/** @type {"cells"|"table"|"diff"} */ (c.rule), c, env);
+  if (r.stopped) return stop(r.stopped.kind, r.stopped.detail);
+  const out = r.gaps.length === 0 ? { gaps: [] } : { gaps: r.gaps };
+  if (r.expected) out.expected = r.expected;
+  return out;
+}
+for (const rule of CELLS_RULES) RULES[rule] = { fields: cellsFields(rule), ops: VOCAB_OPS[rule], signed: true, run: runCellsFamily };
+
 for (const r of Object.values(RULES)) r.fields.text = EXPLAIN;
 
 // --- rubricVocabulary --------------------------------------------------------
@@ -1199,7 +1225,10 @@ export function describeRule(rule) {
   const r = RULES[rule];
   const fields = Object.keys(r.fields).map((n) => describeField(n, r.fields[n]));
   const one = r.exactlyOne ? `; exactly one of ${r.exactlyOne.join(", ")}` : "";
-  return `${rule}({ id, ${fields.join(", ")} })${one}`;
+  const ops = r.ops
+    ? `; op is one of: ${Object.entries(r.ops).map(([op, d]) => `${op} (needs ${d.requires.join(", ") || "nothing more"}${d.allows.length ? `; may add ${d.allows.join(", ")}` : ""}${d.claim ? `; claim ${d.claim}` : ""}: ${d.summary})`).join("; ")}`
+    : "";
+  return `${rule}({ id, ${fields.join(", ")} })${one}${ops}`;
 }
 
 /**
@@ -1230,6 +1259,15 @@ export const rubricVocabulary = deepFreeze({
     quoteWorkMax: QUOTE_WORK_CAP,
     quoteMaxChars: QUOTE_MAX_CHARS, // applies to a `cited` claim's normalized quote only when the check signs `decides`; over it = red `quote-too-long`
   },
+  // `cells` / `table` / `diff` (docs/product/cells-prd.md): tables ride in `opts.tables[name]`, typed rows
+  cells: {
+    exampleTables: JSON.parse(JSON.stringify(EXAMPLE_TABLES)), // the tiny tables every `rules.<rule>.ops.<op>.example` runs green against: `t` is signed in spec.inputs (tableSha), `a` is a diff's unsigned after table
+    tableShape: "{ header: string[], rows: [{ rowNumber: integer >= 2, strictly increasing, cells: string[] (one string per header) }] } passed as opts.tables[name]; a missing or malformed table makes the check stopped",
+    tableMaxCells: TABLE_MAX_CELLS, // rows x columns of one table; over it = red `table-too-large`
+    tableMaxChars: TABLE_MAX_CHARS, // UTF-16 units over the cells and header of one table; over it = red `table-too-large`
+    claimMaxEntries: CLAIM_MAX, // entries of one claim list or map; over it = red `claim-too-large`
+    dateFormats: [...DATE_FORMATS], // the closed list a `dateFormats` entry may name
+  },
   checkpoint: {
     gating: { type: "boolean", required: true },
     requiresHuman: { type: "boolean", required: false, enum: [true], requires: "gating" },
@@ -1245,6 +1283,7 @@ export const rubricVocabulary = deepFreeze({
         description: describeRule(rule),
         fields: JSON.parse(JSON.stringify(RULES[rule].fields)),
         ...(RULES[rule].exactlyOne ? { exactlyOne: [...RULES[rule].exactlyOne] } : {}),
+        ...(RULES[rule].ops ? { ops: JSON.parse(JSON.stringify(RULES[rule].ops)) } : {}),
       },
     ]),
   ),
@@ -1330,6 +1369,8 @@ function checkFormList(d, v, where) {
   if (v.length < 1 || v.length > d.list.max) throw fail(where, `must hold 1 to ${d.list.max} items when a list`);
   v.forEach((e, i) => checkValue({ ...d, list: undefined }, e, `${where}[${i}]`));
   if (new Set(v).size !== v.length) throw fail(where, "must not contain duplicates");
+  // a string list (unit) is matched against quote text normalized by normalizeForQuote: entries equal after it are one entry (the second is dead)
+  if (d.type === "string" && new Set(v.map((e) => normalizeForQuote(e))).size !== v.length) throw fail(where, "must not contain duplicates (entries equal after whitespace normalization)");
 }
 
 function checkValue(d, v, where) {
@@ -1390,6 +1431,15 @@ function validateCheck(c, where, inputNames) {
   checkName(c.id, `${where}.id`);
   if (c.id.includes(":") || FOUNDATIONAL_IDS.has(c.id)) throw fail(`${where}.id`, 'must not contain ":" or be a reserved foundational name');
   if (c.id.includes("\0")) throw fail(`${where}.id`, "must not contain a NUL character (it joins the gate's baseline keys)");
+  if (def.signed) {
+    const p = signedProblem(/** @type {"cells"|"table"|"diff"} */ (rule), c);
+    if (p) throw fail(p.path ? `${where}.${p.path}` : where, p.message);
+    // a table a check reads is a signed input (sha256 over tableSha); a diff's AFTER table is the artifact being checked, so it is not
+    for (const k of rule === "diff" ? ["before"] : ["table"]) {
+      if (!inputNames.has(c[k])) throw fail(`${where}.${k}`, `names table ${JSON.stringify(clip(c[k]))}, which is not in spec.inputs (sign its tableSha)`);
+    }
+    return;
+  }
   for (const [name, d] of Object.entries(def.fields)) {
     const v = c[name];
     if (v === undefined) {
@@ -1510,6 +1560,23 @@ export function createRubric(spec, opts) {
 
 function canonSha(copy) {
   return sha256Hex(canon(copy));
+}
+
+/**
+ * The sha256 (hex) of a typed table, over a canonical form of its header and each row's rowNumber and cells. Sign it in `spec.inputs`
+ * (`{ name, sha256: tableSha(table) }`): a `cells` / `table` / `diff` check reads only a table that hashes to its signed sha256.
+ * @param {{header: string[], rows: {rowNumber: number, cells: string[]}[]}} table
+ * @returns {string|null}
+ * @when Reach for this when a rubric check (`cells`, `table`, or the BEFORE table of a `diff`) reads a table: compute the sha of the typed rows you will pass in `opts.tables[name]`, put it in `spec.inputs`, and the human signs it with the rubric. Do not reimplement the canonical form. The AFTER table of a `diff` is the artifact being checked and is not signed.
+ * @category rubric
+ * @signature tableSha(table: {header: string[], rows: {rowNumber: number, cells: string[]}[]}) => string | null
+ * @fails Never throws. Returns null when the value is not a valid typed table: a non-object, a missing or non-array header or rows, a non-string header or cell, a ragged row, a duplicate header, a rowNumber that is not an integer >= 2 and strictly increasing, a table over the size caps (500,000 cells / 16 MiB), a throwing getter or a Proxy. null is not a sha: createRubric refuses it as an input sha256, so a table that cannot be signed cannot be read. The sha covers the typed rows, not the raw file: the same file parsed differently is a different table.
+ * @example
+ * import { tableSha } from "bareguard";
+ * tableSha({ header: ["Id"], rows: [{ rowNumber: 2, cells: ["a"] }] }); // 64 hex chars, stable
+ */
+export function tableSha(table) {
+  return tableShaOf(table);
 }
 
 // --- quoteIn / numbersInQuote -----------------------------------------------
@@ -1670,6 +1737,17 @@ export function numbersInQuote(claim, quote) {
 // --- renderGaps --------------------------------------------------------------
 
 /**
+ * One list of strings for a rendered sentence, each JSON-escaped (a quote, backslash, newline or other control character never
+ * lands raw). `bare` leaves a plain token (row numbers, `row:Column`, `Column`) unquoted so `rows-missing: 2, 7` stays readable.
+ */
+function quoteList(a, bare = false) {
+  return a.map((k) => {
+    const s = String(k);
+    return bare && /^[\w:.,-]+$/.test(s) ? s : JSON.stringify(s);
+  }).join(", ");
+}
+
+/**
  * The two gaps that render as a plain sentence instead of a JSON row (fwdloop's strike detection keys on these
  * exact strings). null = not one of them, or a field is missing / the wrong type / unreadable: use the JSON row.
  */
@@ -1682,10 +1760,21 @@ function renderSentence(g, more = 0) {
       if (typeof section !== "string" || [words, asked, lo, hi].some((n) => typeof n !== "number")) return null;
       return `${section}: ${words} words, about ${asked} asked (${lo}-${hi})${tail}`;
     }
+    if (typeof kind === "string" && Object.hasOwn(CELLS_GAP_KINDS, kind)) {
+      // cells/table/diff gaps: `<check id>: <what>[ (<measured> vs <limit>)][: item, item][ and N more]`
+      if (typeof g.id !== "string") return null;
+      const items = Array.isArray(g.items) ? g.items.map((x) => String(x)) : [];
+      const n = typeof g.itemsTotal === "number" ? g.itemsTotal - items.length : 0;
+      const m = g.measured;
+      const l = g.limit;
+      const num = (v) => typeof v === "number" || typeof v === "string";
+      const meas = num(m) && num(l) ? ` (${m} vs ${l})` : num(m) ? ` (${m})` : "";
+      return `${g.id}: ${CELLS_GAP_KINDS[kind]}${meas}${items.length ? `: ${quoteList(items, true)}` : ""}${n > 0 ? ` and ${n} more` : ""}`;
+    }
     if (kind === "extra-keys") {
       const { keys, allowed } = g;
       if (!Array.isArray(keys) || !Array.isArray(allowed) || allowed.length === 0) return null;
-      const q = (a) => a.map((k) => JSON.stringify(String(k))).join(", ");
+      const q = quoteList;
       const al = q(allowed);
       const n = typeof g.itemsTotal === "number" ? g.itemsTotal - keys.length : 0;
       return `artifact has key(s) ${q(keys)}${n > 0 ? ` and ${n} more` : ""} besides ${al}; the check reads ${al} only, so put the whole answer in ${al}`;
@@ -1777,7 +1866,7 @@ function errorDetail(e) {
 
 function mintGap(checkpoint, c, partial) {
   const g = { key: `${checkpoint}:${c.id}`, checkpoint, check: c.rule, id: c.id };
-  const field = c.field ?? c.claims;
+  const field = c.field ?? c.claims ?? c.claim;
   if (field !== undefined) g.field = field;
   for (const k of ["kind", "measured", "limit", "direction", "items", "itemsTotal", "section", "words", "asked", "lo", "hi", "keys", "allowed"]) {
     let v = partial[k];
@@ -1801,6 +1890,7 @@ function mintGap(checkpoint, c, partial) {
  * `opts.inputs[name]` (text of a signed input), `opts.priorBaselines[checkId]`
  * (a seed baseline already recorded for this run; a different passed baseline is `baseline-conflict`).
  * `opts.inputs[name]` must hash to the signed `sha256` or the check is `stopped`.
+ * `opts.tables[name]` (typed rows for `cells`/`table`/`diff`) is locked the same way by `tableSha`; a diff's AFTER table is not signed.
  * `outputSha` = sha256 of exactly `opts.outputBytes` (a string, or a Buffer/Uint8Array)
  * when given, for any output type; else of the UTF-8 bytes of a string output; else
  * null for an object (bareguard never serializes one: such an advance cannot be bound
@@ -1812,9 +1902,9 @@ function mintGap(checkpoint, c, partial) {
  * @param {any} output
  * @param {object} [opts]
  * @returns {Promise<StepResult>}
- * @when Reach for this each time an agent hands over output at a checkpoint: it grades the output against the signed rubric and returns the verdict, the structured gap to feed the retry, or the fault for the runner. Take any command/count measurements yourself first and pass them in — bareguard compares, it never runs a tool. For cited checks with `decides`, `full.evidence` says where in each claim's quote the check read the anchor/value/unit (ruling #66).
+ * @when Reach for this each time an agent hands over output at a checkpoint: it grades the output against the signed rubric and returns the verdict, the structured gap to feed the retry, or the fault for the runner. Take any command/count measurements yourself first and pass them in — bareguard compares, it never runs a tool. For `cells`/`table`/`diff` checks also pass the typed rows in `opts.tables[name]`; a table named in `spec.inputs` must hash to its signed sha256 (`tableSha`) or the check is `stopped`. For cited checks with `decides`, `full.evidence` says where in each claim's quote the check read the anchor/value/unit (ruling #66).
  * @category rubric
- * @signature checkStep(rubric: Rubric, checkpoint: string, output: string|object, opts?: { measurements?: object, items?: object, inputs?: object, priorBaselines?: object, outputBytes?: string|Uint8Array }) => Promise<StepResult>
+ * @signature checkStep(rubric: Rubric, checkpoint: string, output: string|object, opts?: { measurements?: object, items?: object, inputs?: object, tables?: object, priorBaselines?: object, outputBytes?: string|Uint8Array }) => Promise<StepResult>
  * @fails Rejects with a TypeError only for CALLER misuse: a rubric not made by `createRubric`, an unknown checkpoint, a non-object `opts`, or a `judge` option (the judge path is not available yet — refused, not ignored). Never rejects because of the output: any shape, a throwing getter or a Proxy yields red (`happened`/field checks) and a throwing measurement yields stopped. An output that is not a string or a non-array object is red.
  * @example
  * import { createRubric, checkStep } from "bareguard";
@@ -1847,7 +1937,7 @@ export async function checkStep(rubric, checkpoint, output, opts) {
 
   // Snapshot the caller's option maps once (a throwing getter is deferred to the check that reads it).
   const optsRead = Object.create(null);
-  for (const k of ["measurements", "items", "inputs", "priorBaselines"]) {
+  for (const k of ["measurements", "items", "inputs", "priorBaselines", "tables"]) {
     try {
       optsRead[k] = { v: o[k] };
     } catch (e) {
@@ -1894,6 +1984,7 @@ export async function checkStep(rubric, checkpoint, output, opts) {
   /** @type {EvidenceEntry[]} */
   const evidence = []; // RULED #66
   let evidenceTotal = 0;
+  const expected = []; // cells/table/diff: the answer bareguard computed (full.expected)
 
   if (shapeGap !== null) {
     reds.push(mintGap(checkpoint, { id: "happened", rule: "happened" }, shapeGap));
@@ -1909,6 +2000,7 @@ export async function checkStep(rubric, checkpoint, output, opts) {
         evidence.push(...res.evidence.entries);
         evidenceTotal += res.evidence.total;
       }
+      if (res.expected) expected.push({ check: c.id, ...res.expected });
       if (res.gap) reds.push(mintGap(checkpoint, c, res.gap));
       else if (res.gaps) for (const g of res.gaps) reds.push(mintGap(checkpoint, c, g)); // sectionWords: one gap per section
       else if (res.fault) faults.push({ key: `${checkpoint}:${c.id}`, checkpoint, id: c.id, kind: res.fault.kind, detail: res.fault.detail });
@@ -1923,7 +2015,7 @@ export async function checkStep(rubric, checkpoint, output, opts) {
     outputSha,
     gaps: verdict === "red" ? reds : [],
     fault: faults[0] ?? null,
-    full: { gaps: reds, faults, evidence, ...(evidenceTotal > evidence.length ? { evidenceTotal } : {}) },
+    full: { gaps: reds, faults, evidence, ...(evidenceTotal > evidence.length ? { evidenceTotal } : {}), ...(expected.length ? { expected } : {}) },
     baselines: { ...ctx.baselines }, // plain object out; own "__proto__" etc. survive the spread
     callerItems: { ...ctx.callerItems },
   });

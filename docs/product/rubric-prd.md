@@ -203,6 +203,8 @@ own module; the Axis A floor never imports judge code.
 All checks are bareguard's own code. Each reads a declared field of the output or a value the
 caller passes; none parses prose in general.
 
+*Built on feat/cells, unreleased: the `cells` / `table` / `diff` rules, computed over caller-given table rows, have their own page, [cells-prd.md](cells-prd.md) (ruling #67).*
+
 ### 4.1 Shape and value rules (read the output)
 
 Text is split into lines on `/\r?\n/`.
@@ -1916,3 +1918,7 @@ Status of #30-#47: kept as history. Live and shared with `cited`: #32 (exactly o
 6. Mismatch evaluated when the decide is red on its OP but extracted a value (spec default: yes, so the worker sees both). Alternative: skip binding for a red decide. RESOLVED (bareloop confirmed 2026-10-12): spec default.
 7. Whether a signed opt-out of `numbersInQuote` is wanted later for claim text that is prose; RULED #52 keeps it always on today.
 8. How superlatives (step 3) and mid-run sources (step 2) extend the claim: `source` naming a registered label (step 2), and a claim naming the aggregate it answers (step 3). Not designed.
+
+**2026-10-22 (fwdloop ask; RULED; built on feat/cells, unreleased)**
+
+67. RULED (hamr, 2026-10-22), spec in [cells-prd.md](cells-prd.md) (the page carries the detail; built on feat/cells, unreleased, no version picked): a closed-`op` family of generic checks with ONE menu in `rubricVocabulary`, selected by `rule: "cells" | "table" | "diff"` (read with a claim / shape and row math / before-vs-after with a signed key). The whole op list ships on day 1, write-side included. Flow: the agent suggests checks from the vocabulary at draft time, the person signs, the step gives VALUES only, `checkStep` recomputes. LAW 11 ALLOWED for these rules (bareguard computes over caller-given typed rows; the caller owns file parsing), so number, date and blank parsing rules become SemVer surface. Defaults ruled: strict number grammar (sign, optional `$`/`€`/`£`, proper thousands groups; `1e3`, `12%`, `.5`, `0x10`, accounting parentheses red), blank = whitespace-only and skipped by aggregates, row-math blank operand red `empty-operand` unless `allowEmpty: true`, absolute 0.005 default tolerance for float ops (counts, row sets, days exact; signed `tolerance` overrides), `topN` `ties: "any"` default, exact text equals, `rows` claimed by 2-based row number, bad claim red vs broken check or table `stopped`. DATES: the signer picks a format per column from a closed list (never guessed). Added: per-row date mode and a `band` op (fwd's AR aging). POC done (226 synthetic pass; 8 of 9 of fwd's real claiming tries had the right values and failed only on fwdloop's own cite grammar). bareloop will also use it. OPEN: bareloop's "doc checks", the closed date-format list, the table size cap, the `groupTotals` claim shape.

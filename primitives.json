@@ -13,9 +13,9 @@
     {
       "name": "checkStep",
       "category": "rubric",
-      "when": "Reach for this each time an agent hands over output at a checkpoint: it grades the output against the signed rubric and returns the verdict, the structured gap to feed the retry, or the fault for the runner. Take any command/count measurements yourself first and pass them in — bareguard compares, it never runs a tool. For cited checks with `decides`, `full.evidence` says where in each claim's quote the check read the anchor/value/unit (ruling #66).",
+      "when": "Reach for this each time an agent hands over output at a checkpoint: it grades the output against the signed rubric and returns the verdict, the structured gap to feed the retry, or the fault for the runner. Take any command/count measurements yourself first and pass them in — bareguard compares, it never runs a tool. For `cells`/`table`/`diff` checks also pass the typed rows in `opts.tables[name]`; a table named in `spec.inputs` must hash to its signed sha256 (`tableSha`) or the check is `stopped`. For cited checks with `decides`, `full.evidence` says where in each claim's quote the check read the anchor/value/unit (ruling #66).",
       "import": "import { checkStep } from 'bareguard'",
-      "signature": "checkStep(rubric: Rubric, checkpoint: string, output: string|object, opts?: { measurements?: object, items?: object, inputs?: object, priorBaselines?: object, outputBytes?: string|Uint8Array }) => Promise<StepResult>",
+      "signature": "checkStep(rubric: Rubric, checkpoint: string, output: string|object, opts?: { measurements?: object, items?: object, inputs?: object, tables?: object, priorBaselines?: object, outputBytes?: string|Uint8Array }) => Promise<StepResult>",
       "fails": "Rejects with a TypeError only for CALLER misuse: a rubric not made by `createRubric`, an unknown checkpoint, a non-object `opts`, or a `judge` option (the judge path is not available yet — refused, not ignored). Never rejects because of the output: any shape, a throwing getter or a Proxy yields red (`happened`/field checks) and a throwing measurement yields stopped. An output that is not a string or a non-array object is red.",
       "example": "import { createRubric, checkStep } from \"bareguard\";\nconst rubric = createRubric({ schema: 1, goal: \"g\", checkpoints: { resume: { gating: true,\n  checks: [{ id: \"words-cap\", rule: \"maxWords\", field: \"text\", value: 600 }] } } });\nconst r = await checkStep(rubric, \"resume\", \"word \".repeat(633));\n// r.verdict === \"red\"; r.gaps[0] -> { key: \"resume:words-cap\", measured: 633, limit: 600, direction: \"at-most\", ... }"
     },
@@ -78,7 +78,7 @@
       "category": "rubric",
       "when": "Reach for this instead of the exported `checkStep` whenever a Gate holds the rubric: it is the only call that makes a verdict real to `gate.check`. Call it each time the agent hands over output at a checkpoint, then let the advance action through `gate.check` carrying `{ type, checkpoint, outputSha }`.",
       "import": "import { Gate } from 'bareguard'",
-      "signature": "gate.checkStep(checkpoint: string, output: string|object, opts?: { measurements?: object, items?: object, inputs?: object, outputBytes?: string|Uint8Array }) => Promise<StepResult>",
+      "signature": "gate.checkStep(checkpoint: string, output: string|object, opts?: { measurements?: object, items?: object, inputs?: object, tables?: object, outputBytes?: string|Uint8Array }) => Promise<StepResult>",
       "fails": "Rejects with a TypeError when the gate has no `rubric` config, the checkpoint is unknown, `opts` is not an object, or `opts.priorBaselines` is passed; rejects when the rubric config was swapped after construct (`rubric.invalid`). Never rejects because of the output. An audit write failure propagates.",
       "example": "const gate = new Gate({ rubric: { spec, sha256: rubricSha(spec), advanceOn: [\"done\"] } });\nconst r = await gate.checkStep(\"resume\", text);            // r.verdict, r.gaps, r.outputSha\nawait gate.check({ type: \"done\", checkpoint: \"resume\", outputSha: r.outputSha });"
     },
@@ -243,6 +243,15 @@
       "signature": "SUPER_DESTRUCTIVE_PATTERNS: { common: RegExp[], linux: RegExp[], darwin: RegExp[], win32: RegExp[] }",
       "fails": "Plain data; reading never throws. Not frozen — treat it as read-only, since mutating it changes tiering for every Gate in the process.",
       "example": "import { SUPER_DESTRUCTIVE_PATTERNS } from \"bareguard\";\nSUPER_DESTRUCTIVE_PATTERNS.common.some((re) => re.test(cmd)); // is this irrecoverable?"
+    },
+    {
+      "name": "tableSha",
+      "category": "rubric",
+      "when": "Reach for this when a rubric check (`cells`, `table`, or the BEFORE table of a `diff`) reads a table: compute the sha of the typed rows you will pass in `opts.tables[name]`, put it in `spec.inputs`, and the human signs it with the rubric. Do not reimplement the canonical form. The AFTER table of a `diff` is the artifact being checked and is not signed.",
+      "import": "import { tableSha } from 'bareguard'",
+      "signature": "tableSha(table: {header: string[], rows: {rowNumber: number, cells: string[]}[]}) => string | null",
+      "fails": "Never throws. Returns null when the value is not a valid typed table: a non-object, a missing or non-array header or rows, a non-string header or cell, a ragged row, a duplicate header, a rowNumber that is not an integer >= 2 and strictly increasing, a table over the size caps (500,000 cells / 16 MiB), a throwing getter or a Proxy. null is not a sha: createRubric refuses it as an input sha256, so a table that cannot be signed cannot be read. The sha covers the typed rows, not the raw file: the same file parsed differently is a different table.",
+      "example": "import { tableSha } from \"bareguard\";\ntableSha({ header: [\"Id\"], rows: [{ rowNumber: 2, cells: [\"a\"] }] }); // 64 hex chars, stable"
     }
   ]
 }

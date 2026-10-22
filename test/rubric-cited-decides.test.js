@@ -422,7 +422,7 @@ test("rubricVocabulary lists decides on cited with its shapes and conditions; th
 
 test("rubricVocabulary: every EXISTING rule, the common/bounds/checkpoint blocks and the rest of cited are byte-identical to before", () => {
   const h = (x) => sha(JSON.stringify(x));
-  const { cited, ...others } = rubricVocabulary.rules;
+  const { cited, cells: _c, table: _t, diff: _df, ...others } = rubricVocabulary.rules; // cells/table/diff are new (cells-prd.md)
   assert.equal(h(others), "1643c3f202e7a6a7cfa06be705536e96194bdd9c2ddb832063ae41b77400909a");
   const { decides: _d, ...citedFields } = cited.fields;
   assert.equal(h(cited.fields.claims), h({ type: "name", required: true, nonBlank: true, maxLength: 128 }));
@@ -435,10 +435,11 @@ test("rubricVocabulary: every EXISTING rule, the common/bounds/checkpoint blocks
   // quoteMaxChars is the one additive bounds entry (hamr-approved); every earlier bound stays byte-identical
   const { quoteMaxChars, ...bounds } = allBounds;
   assert.equal(quoteMaxChars, 4000, "bounds.quoteMaxChars is the 4000-char quote cap (red quote-too-long with decides: see the quote-too-long test)");
-  assert.equal(h({ schema, common, bounds, checkpoint, foundational }), "cd655eb327c6180d593843ca2f309cf950243e66ad0b62c66b2fbd0466576fca");
+  // common.rule.enum gained "cells", "table", "diff" (cells-prd.md, additive); nothing else in these blocks changed
+  assert.equal(h({ schema, common, bounds, checkpoint, foundational }), "1b8b6b0cb9924bb53c47a6784007d463a47ac4589c708ca128e1fdad418354c9");
   assert.ok(cited.description.startsWith("cited({ id, claims: non-blank string, max 128 chars, source: non-blank string, max 128 chars, decides?: "));
   assert.ok(cited.description.endsWith(", text?: string (the signer's explanation; never decides) })"));
-  assert.deepEqual(Object.keys(rubricVocabulary.rules), "nonEmpty,maxWords,minWords,maxLines,sections,sectionOrder,sectionWords,allowedKeys,mustCarry,blockLines,in,notIn,atMost,max,min,cited,complete,commandExit,notWorse,patternAbsent,filesChanged".split(","));
+  assert.deepEqual(Object.keys(rubricVocabulary.rules), "nonEmpty,maxWords,minWords,maxLines,sections,sectionOrder,sectionWords,allowedKeys,mustCarry,blockLines,in,notIn,atMost,max,min,cited,complete,commandExit,notWorse,patternAbsent,filesChanged,cells,table,diff".split(","));
 });
 
 // --- parseClaimValue (the pure parser) ---------------------------------------------------------------
