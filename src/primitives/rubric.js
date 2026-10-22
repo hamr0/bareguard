@@ -18,12 +18,15 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { resolveWithSymlinks, findSymlinkComponent, within, norm } from "./fs.js";
+import { evaluate, makeEnv, signedProblem, ruleFieldNames, CELLS_RULES, CELLS_GAP_KINDS, FIELD_DOCS, VOCAB_OPS, DATE_FORMATS, TABLE_MAX_CELLS, TABLE_MAX_CHARS, CLAIM_MAX } from "./rubric-cells.js";
 import { parseBound, compareBounds, decideQuote, parseClaimValue, displayCanon, parseClaimText, textPresent, textAfter, textSpanPresent, textSpanAfter } from "./rubric-locate.js";
 
 /**
  * @typedef {Object} Gap
  * A red check, as data for the worker's retry. `key` is `${checkpoint}:${checkId}`
- * and is stable across retries; ordered rules carry `direction`. Lists are bounded.
+ * and is stable across retries; ordered rules carry `direction`. Lists are bounded. The `cells`/`table`/`diff` rules
+ * (docs/product/cells-prd.md) mint gaps with their own `kind`s, `items` (row numbers, `row:column` cells or keys, as strings),
+ * and `measured`/`limit` for a count or a claimed value; the expected answer is never in a gap (it is in `full.expected`).
  * @property {string} key
  * @property {string} checkpoint
  * @property {string} check the rule name
@@ -70,7 +73,7 @@ import { parseBound, compareBounds, decideQuote, parseClaimValue, displayCanon, 
  * @property {string} key
  * @property {string} checkpoint
  * @property {string} id
- * @property {"exception"|"liveness"|"missing-measurement"|"unknown-pattern"|"baseline-conflict"} kind
+ * @property {"exception"|"liveness"|"missing-measurement"|"unknown-pattern"|"baseline-conflict"|"table-invalid"|"check-invalid"} kind `table-invalid`/`check-invalid`: a `cells`/`table`/`diff` check could not measure (missing or malformed table; unknown column or row, a signed field that cannot apply)
  * @property {string} detail bounded
  *
  * @typedef {Object} Check
@@ -107,7 +110,7 @@ import { parseBound, compareBounds, decideQuote, parseClaimValue, displayCanon, 
  * @property {string|null} outputSha sha256 (hex) of `opts.outputBytes`, else of a string output's UTF-8 bytes; null for an object output with no `outputBytes`
  * @property {Gap[]} gaps what the worker may see; [] unless red
  * @property {Fault|null} fault the first fault, when stopped
- * @property {{gaps: Gap[], faults: Fault[], evidence: EvidenceEntry[], evidenceTotal?: number}} full everything, for the human. `evidence` (RULED #66): where each `cited` check that signs `decides` read, one entry per claim (first 100 claims per check; `evidenceTotal` = all such claims in the call, present only when some were cut). Never in `gaps`, never in the audit line.
+ * @property {{gaps: Gap[], faults: Fault[], evidence: EvidenceEntry[], evidenceTotal?: number, expected?: Object<string, any>[]}} full everything, for the human. `expected` (present only when a `cells`/`table`/`diff` check computed one): one entry `{ check, ...}` per such check with the answer bareguard computed (`value`, `rows`, `totals`, ...; row lists capped at 200 with a `...Total`). Never in `gaps`. `evidence` (RULED #66): where each `cited` check that signs `decides` read, one entry per claim (first 100 claims per check; `evidenceTotal` = all such claims in the call, present only when some were cut). Never in `gaps`, never in the audit line.
  * @property {Object<string, {baseline:number, baselineSource:{anchor:string, route:string}}>} baselines seed baselines this call measured, for the caller/gate to record
  * @property {Object<string, {count:number, sha256:string}>} callerItems caller item lists this call used (count + sha256 of the JSON list), for the audit
  */
@@ -1162,6 +1165,28 @@ const RULES = {
   },
 };
 
+// cells / table / diff (docs/product/cells-prd.md): the signed fields and op table live in rubric-cells.js; `signed` = that module validates the check.
+function cellsFields(rule) {
+  const fields = {};
+  for (const name of ruleFieldNames(rule)) {
+    fields[name] = { ...FIELD_DOCS[name] };
+    if (name === "op") fields[name].enum = Object.keys(VOCAB_OPS[rule]);
+    if (rule === "diff" && name === "keyColumn") fields[name].required = true;
+    if (name !== "table" && name !== "claim" && name !== "before" && name !== "after" && name !== "op" && !(rule === "diff" && name === "keyColumn")) fields[name].required = false;
+  }
+  return fields;
+}
+function runCellsFamily(ctx, c) {
+  const cache = (ctx.tableCache ??= new Map());
+  const env = makeEnv(cache, () => getOpt(ctx, "tables"), () => readField(ctx, c.claim));
+  const r = evaluate(/** @type {"cells"|"table"|"diff"} */ (c.rule), c, env);
+  if (r.stopped) return stop(r.stopped.kind, r.stopped.detail);
+  const out = r.gaps.length === 0 ? { gaps: [] } : { gaps: r.gaps };
+  if (r.expected) out.expected = r.expected;
+  return out;
+}
+for (const rule of CELLS_RULES) RULES[rule] = { fields: cellsFields(rule), ops: VOCAB_OPS[rule], signed: true, run: runCellsFamily };
+
 for (const r of Object.values(RULES)) r.fields.text = EXPLAIN;
 
 // --- rubricVocabulary --------------------------------------------------------
@@ -1199,7 +1224,10 @@ export function describeRule(rule) {
   const r = RULES[rule];
   const fields = Object.keys(r.fields).map((n) => describeField(n, r.fields[n]));
   const one = r.exactlyOne ? `; exactly one of ${r.exactlyOne.join(", ")}` : "";
-  return `${rule}({ id, ${fields.join(", ")} })${one}`;
+  const ops = r.ops
+    ? `; op is one of: ${Object.entries(r.ops).map(([op, d]) => `${op} (needs ${d.requires.join(", ") || "nothing more"}${d.allows.length ? `; may add ${d.allows.join(", ")}` : ""}${d.claim ? `; claim ${d.claim}` : ""}: ${d.summary})`).join("; ")}`
+    : "";
+  return `${rule}({ id, ${fields.join(", ")} })${one}${ops}`;
 }
 
 /**
@@ -1230,6 +1258,14 @@ export const rubricVocabulary = deepFreeze({
     quoteWorkMax: QUOTE_WORK_CAP,
     quoteMaxChars: QUOTE_MAX_CHARS, // applies to a `cited` claim's normalized quote only when the check signs `decides`; over it = red `quote-too-long`
   },
+  // `cells` / `table` / `diff` (docs/product/cells-prd.md): tables ride in `opts.tables[name]`, typed rows
+  cells: {
+    tableShape: "{ header: string[], rows: [{ rowNumber: integer >= 2, strictly increasing, cells: string[] (one string per header) }] } passed as opts.tables[name]; a missing or malformed table makes the check stopped",
+    tableMaxCells: TABLE_MAX_CELLS, // rows x columns of one table; over it = red `table-too-large`
+    tableMaxChars: TABLE_MAX_CHARS, // UTF-16 units over the cells and header of one table; over it = red `table-too-large`
+    claimMaxEntries: CLAIM_MAX, // entries of one claim list or map; over it = red `claim-too-large`
+    dateFormats: [...DATE_FORMATS], // the closed list a `dateFormats` entry may name
+  },
   checkpoint: {
     gating: { type: "boolean", required: true },
     requiresHuman: { type: "boolean", required: false, enum: [true], requires: "gating" },
@@ -1245,6 +1281,7 @@ export const rubricVocabulary = deepFreeze({
         description: describeRule(rule),
         fields: JSON.parse(JSON.stringify(RULES[rule].fields)),
         ...(RULES[rule].exactlyOne ? { exactlyOne: [...RULES[rule].exactlyOne] } : {}),
+        ...(RULES[rule].ops ? { ops: JSON.parse(JSON.stringify(RULES[rule].ops)) } : {}),
       },
     ]),
   ),
@@ -1390,6 +1427,11 @@ function validateCheck(c, where, inputNames) {
   checkName(c.id, `${where}.id`);
   if (c.id.includes(":") || FOUNDATIONAL_IDS.has(c.id)) throw fail(`${where}.id`, 'must not contain ":" or be a reserved foundational name');
   if (c.id.includes("\0")) throw fail(`${where}.id`, "must not contain a NUL character (it joins the gate's baseline keys)");
+  if (def.signed) {
+    const p = signedProblem(/** @type {"cells"|"table"|"diff"} */ (rule), c);
+    if (p) throw fail(p.path ? `${where}.${p.path}` : where, p.message);
+    return;
+  }
   for (const [name, d] of Object.entries(def.fields)) {
     const v = c[name];
     if (v === undefined) {
@@ -1682,6 +1724,17 @@ function renderSentence(g, more = 0) {
       if (typeof section !== "string" || [words, asked, lo, hi].some((n) => typeof n !== "number")) return null;
       return `${section}: ${words} words, about ${asked} asked (${lo}-${hi})${tail}`;
     }
+    if (typeof kind === "string" && Object.hasOwn(CELLS_GAP_KINDS, kind)) {
+      // cells/table/diff gaps: `<check id>: <what>[ (<measured> vs <limit>)][: item, item][ and N more]`
+      if (typeof g.id !== "string") return null;
+      const items = Array.isArray(g.items) ? g.items.map((x) => String(x)) : [];
+      const n = typeof g.itemsTotal === "number" ? g.itemsTotal - items.length : 0;
+      const m = g.measured;
+      const l = g.limit;
+      const num = (v) => typeof v === "number" || typeof v === "string";
+      const meas = num(m) && num(l) ? ` (${m} vs ${l})` : num(m) ? ` (${m})` : "";
+      return `${g.id}: ${CELLS_GAP_KINDS[kind]}${meas}${items.length ? `: ${items.join(", ")}` : ""}${n > 0 ? ` and ${n} more` : ""}`;
+    }
     if (kind === "extra-keys") {
       const { keys, allowed } = g;
       if (!Array.isArray(keys) || !Array.isArray(allowed) || allowed.length === 0) return null;
@@ -1777,7 +1830,7 @@ function errorDetail(e) {
 
 function mintGap(checkpoint, c, partial) {
   const g = { key: `${checkpoint}:${c.id}`, checkpoint, check: c.rule, id: c.id };
-  const field = c.field ?? c.claims;
+  const field = c.field ?? c.claims ?? c.claim;
   if (field !== undefined) g.field = field;
   for (const k of ["kind", "measured", "limit", "direction", "items", "itemsTotal", "section", "words", "asked", "lo", "hi", "keys", "allowed"]) {
     let v = partial[k];
@@ -1847,7 +1900,7 @@ export async function checkStep(rubric, checkpoint, output, opts) {
 
   // Snapshot the caller's option maps once (a throwing getter is deferred to the check that reads it).
   const optsRead = Object.create(null);
-  for (const k of ["measurements", "items", "inputs", "priorBaselines"]) {
+  for (const k of ["measurements", "items", "inputs", "priorBaselines", "tables"]) {
     try {
       optsRead[k] = { v: o[k] };
     } catch (e) {
@@ -1894,6 +1947,7 @@ export async function checkStep(rubric, checkpoint, output, opts) {
   /** @type {EvidenceEntry[]} */
   const evidence = []; // RULED #66
   let evidenceTotal = 0;
+  const expected = []; // cells/table/diff: the answer bareguard computed (full.expected)
 
   if (shapeGap !== null) {
     reds.push(mintGap(checkpoint, { id: "happened", rule: "happened" }, shapeGap));
@@ -1909,6 +1963,7 @@ export async function checkStep(rubric, checkpoint, output, opts) {
         evidence.push(...res.evidence.entries);
         evidenceTotal += res.evidence.total;
       }
+      if (res.expected) expected.push({ check: c.id, ...res.expected });
       if (res.gap) reds.push(mintGap(checkpoint, c, res.gap));
       else if (res.gaps) for (const g of res.gaps) reds.push(mintGap(checkpoint, c, g)); // sectionWords: one gap per section
       else if (res.fault) faults.push({ key: `${checkpoint}:${c.id}`, checkpoint, id: c.id, kind: res.fault.kind, detail: res.fault.detail });
@@ -1923,7 +1978,7 @@ export async function checkStep(rubric, checkpoint, output, opts) {
     outputSha,
     gaps: verdict === "red" ? reds : [],
     fault: faults[0] ?? null,
-    full: { gaps: reds, faults, evidence, ...(evidenceTotal > evidence.length ? { evidenceTotal } : {}) },
+    full: { gaps: reds, faults, evidence, ...(evidenceTotal > evidence.length ? { evidenceTotal } : {}), ...(expected.length ? { expected } : {}) },
     baselines: { ...ctx.baselines }, // plain object out; own "__proto__" etc. survive the spread
     callerItems: { ...ctx.callerItems },
   });

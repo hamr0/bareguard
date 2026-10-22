@@ -192,8 +192,8 @@ test("rubricSha: refuses non-JSON data instead of hashing a lossy form (NaN woul
 // --- rubricVocabulary ---------------------------------------------------------
 
 const DAY1_RULES = [
-  "allowedKeys", "atMost", "blockLines", "cited", "commandExit", "complete", "filesChanged", "in", "max", "maxLines", "maxWords",
-  "min", "minWords", "mustCarry", "nonEmpty", "notIn", "notWorse", "patternAbsent", "sectionOrder", "sectionWords", "sections",
+  "allowedKeys", "atMost", "blockLines", "cells", "cited", "commandExit", "complete", "diff", "filesChanged", "in", "max", "maxLines", "maxWords",
+  "min", "minWords", "mustCarry", "nonEmpty", "notIn", "notWorse", "patternAbsent", "sectionOrder", "sectionWords", "sections", "table",
 ];
 
 const sampleValue = (name, d) => {
@@ -242,7 +242,8 @@ test("rubricVocabulary: documents bounds and defaults (count >= 1 no max, strict
   assert.equal(rubricVocabulary.bounds.quoteSourceMaxBytes, 5 * 1024 * 1024);
 });
 
-for (const rule of DAY1_RULES) {
+// cells / table / diff are op-driven (required fields depend on the op); test/rubric-cells-vocab.test.js proves the same both directions per op
+for (const rule of DAY1_RULES.filter((r) => !["cells", "table", "diff"].includes(r))) {
   test(`rubricVocabulary <-> implementation, both directions: ${rule}`, async () => {
     const def = rubricVocabulary.rules[rule];
     const build = (c) => withInputs([c]);
