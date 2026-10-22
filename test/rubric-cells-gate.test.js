@@ -486,3 +486,53 @@ test("lock: the signed sha is part of rubricSha, and a hostile table never crash
   const px = new Proxy({}, { get() { throw new Error("t"); }, has() { throw new Error("t"); }, getOwnPropertyDescriptor() { throw new Error("t"); }, ownKeys() { throw new Error("t"); } });
   for (const t of [px, null, { header: ["Id", "Amt"], rows: [{ rowNumber: 2, cells: [1, 2] }] }]) assert.equal((await lockRun({ t })).verdict, "stopped");
 });
+
+// --- vocabulary examples stay honest ----------------------------------------------------------------------------------------------
+
+test("vocabulary: every op has a worked example (signed check + claim) and every one runs GREEN through checkStep", async () => {
+  const T = rubricVocabulary.cells.exampleTables;
+  const rubricFor = (check) => createRubric({ schema: 1, goal: "g", inputs: [{ name: "t", sha256: tableSha(T.t) }], checkpoints: { cp: { gating: true, checks: [check] } } });
+  let n = 0;
+  for (const rule of ["cells", "table", "diff"]) {
+    for (const [op, d] of Object.entries(rubricVocabulary.rules[rule].ops)) {
+      assert.ok(d.example && d.example.check, `${rule}.${op} has an example`);
+      assert.equal(d.example.check.rule, rule);
+      assert.equal(d.example.check.op, op);
+      assert.equal(rule === "cells", d.example.claim !== undefined, `${rule}.${op}: a claim exactly for cells`);
+      const r = await checkStep(rubricFor({ ...d.example.check }), "cp", { answer: d.example.claim ?? { unused: 1 } }, { tables: T });
+      assert.equal(r.verdict, "green", `${rule}.${op}: ${JSON.stringify(r.gaps)} ${JSON.stringify(r.fault)}`);
+      n++;
+    }
+  }
+  assert.equal(n, 34);
+});
+
+test("vocabulary examples are mutation-sensitive: a wrong claim on each cells example is red, not green", async () => {
+  const T = rubricVocabulary.cells.exampleTables;
+  for (const [op, d] of Object.entries(rubricVocabulary.rules.cells.ops)) {
+    const mutate = (v) => {
+      if (typeof v === "number") return v + 1000;
+      if (typeof v === "boolean") return !v;
+      if (typeof v === "string") return /^\d{4}-/.test(v) ? "1999-01-01" : `${v}!`;
+      if (Array.isArray(v)) return [...v, typeof v[0] === "number" ? 99 : typeof v[0] === "string" ? "zz" : { group: "zz", total: 1 }];
+      return Object.fromEntries(Object.entries(v).map(([a, b]) => [a, mutate(b)]));
+    };
+    const wrong = JSON.parse(JSON.stringify(d.example.claim));
+    const k = Object.keys(wrong)[0];
+    wrong[k] = mutate(wrong[k]);
+    const rubric = createRubric({ schema: 1, goal: "g", inputs: [{ name: "t", sha256: tableSha(T.t) }], checkpoints: { cp: { gating: true, checks: [d.example.check] } } });
+    const r = await checkStep(rubric, "cp", { answer: wrong }, { tables: T });
+    assert.equal(r.verdict, "red", `${op} with a wrong claim`);
+  }
+});
+
+test("vocabulary examples: the key typing a drafter should copy", () => {
+  const ex = rubricVocabulary.rules.cells.ops;
+  assert.ok(ex.rows.example.claim.rows.every(Number.isInteger));
+  assert.equal(typeof ex.count.example.claim.value, "number");
+  assert.deepEqual(Object.keys(ex.daysSince.example.claim.days), ["2", "3", "4"], "digit-string row keys");
+  assert.ok(Object.values(ex.daysSince.example.claim.days).every((v) => typeof v === "number"));
+  assert.ok(Object.values(ex.band.example.claim.bands).every((v) => typeof v === "string"));
+  assert.equal(typeof ex.earliest.example.claim.value, "string");
+  assert.ok(Object.isFrozen(ex.count.example.claim));
+});

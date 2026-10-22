@@ -198,6 +198,11 @@ days since. `diff.untouchedIdentical` takes `exceptKeys` (keys, not row numbers:
 `rows` by keys: `{keys: [...]}` compared as text (`valueKind: "number"` reads numbers); `lookup` requires `valueKind` (text, number, date).
 A removed column is always red in `diff`; a new column is red unless listed (`onlyColumnsChanged`) or unless the op is `newColumnRule`.
 
+Claims strictly typed (hamr 2026-10-22: strict for spreadsheets): a claimed number is a finite JS number, never a numeric string (`{value:"17"}` is red
+`claim-malformed`), for `value`, `topN` `values`, `totals[].total`, `days` values and numeric `keys`; text and date claims are strings, `rows` integers,
+`days`/`bands` map keys digit strings. A table data problem sorts before a claim problem in `gaps`. Every op has a worked example in `rubricVocabulary`
+(`ops.<op>.example`), run green in a test against `rubricVocabulary.cells.exampleTables`.
+
 Gaps: own kinds (listed in `CELLS_GAP_KINDS`), `items` as strings (20 max, `itemsTotal` when cut), `measured`/`limit` for counts and the claimed
 value; the expected answer is in `full.expected` only. Faults: `table-invalid`, `check-invalid`, `exception`.
 

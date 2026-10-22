@@ -86,7 +86,9 @@ test("expenses countIf / sumIf / averageIf over Amount > 500", async () => {
   assert.equal((await runExp("countIf", { where: over500 }, { value: 7 })).verdict, "red");
   assert.equal((await runExp("countIf", { where: over500 }, { value: 5 })).verdict, "red");
   assert.equal((await runExp("sumIf", { column: "Amount", where: over500 }, { value: 5516.64 })).verdict, "green");
-  assert.equal((await runExp("sumIf", { column: "Amount", where: over500 }, { value: "5,516.64" })).verdict, "green", "a claim string reads like a cell");
+  const str = await runExp("sumIf", { column: "Amount", where: over500 }, { value: "5,516.64" });
+  assert.equal(str.verdict, "red", "strict claim types: a numeric string is not a number");
+  assert.deepEqual(kinds(str), ["claim-malformed"]);
   assert.equal((await runExp("sumIf", { column: "Amount", where: over500 }, { value: 5516.66 })).verdict, "red");
   assert.equal((await runExp("averageIf", { column: "Amount", where: over500 }, { value: 919.44 })).verdict, "green");
   assert.equal((await runExp("averageIf", { column: "Amount", where: over500 }, { value: 919.5 })).verdict, "red");

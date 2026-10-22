@@ -207,10 +207,79 @@ export const FIELD_DOCS = {
   columns: { type: "string-list", required: false, description: `0-${MAX_KEYS} column headers allowed to change (an empty list = nothing may change)` },
   exceptKeys: { type: "string-list", required: false, description: `0-${MAX_KEYS} key values (of keyColumn) whose rows may differ` },
 };
+// One worked example per op: the signed check and (cells) a matching claim, against EXAMPLE_TABLES. Every one runs green
+// (test/rubric-cells-gate.test.js), so the vocabulary cannot drift from the code. Key typing to copy: `rows` are integers,
+// `value` is a JS number (never "17"), `days` / `bands` are objects with digit-string row keys and number / string values.
+const ISO_DUE = [{ column: "Due", format: "YYYY-MM-DD" }];
+const BANDS_EX = [{ name: "Current", lte: 0 }, { name: "1-30", gte: 1, lte: 30 }, { name: "31+", gt: 30 }];
+const TAX_ROW = { fn: "add", a: "Amount", b: "Tax", result: "Total" };
+/** @type {Record<string, Record<string, {check: object, claim?: object}>>} */
+const EXAMPLES = {
+  cells: {
+    count: { check: { column: "Amount" }, claim: { value: 3 } },
+    countEmpty: { check: { column: "Tax" }, claim: { value: 1 } },
+    countIf: { check: { where: [{ column: "Amount", cmp: "gt", value: 100 }] }, claim: { value: 2 } },
+    sum: { check: { column: "Amount" }, claim: { value: 950 } },
+    sumIf: { check: { column: "Amount", where: [{ column: "Cat", cmp: "equals", value: "food" }] }, claim: { value: 650 } },
+    average: { check: { column: "Amount" }, claim: { value: 316.67 } },
+    averageIf: { check: { column: "Amount", where: [{ column: "Cat", cmp: "equals", value: "food" }] }, claim: { value: 325 } },
+    median: { check: { column: "Amount" }, claim: { value: 300 } },
+    min: { check: { column: "Amount" }, claim: { value: 50 } },
+    max: { check: { column: "Amount" }, claim: { value: 600 } },
+    found: { check: { column: "Id", needle: "a2" }, claim: { value: true } },
+    lookup: { check: { column: "Amount", keyColumn: "Id", keyValue: "a1", valueKind: "number" }, claim: { value: 600 } },
+    rows: { check: { where: [{ column: "Amount", cmp: "gt", value: 100 }] }, claim: { rows: [2, 3] } },
+    topN: { check: { column: "Amount", n: 1 }, claim: { rows: [2] } },
+    uniqueCount: { check: { column: "Cat" }, claim: { value: 2 } },
+    duplicates: { check: { column: "Cat" }, claim: { values: ["food"] } },
+    groupTotals: { check: { column: "Amount", groupColumn: "Cat" }, claim: { totals: [{ group: "food", total: 650 }, { group: "rent", total: 300 }] } },
+    percentOfTotal: { check: { column: "Amount", where: [{ column: "Cat", cmp: "equals", value: "food" }] }, claim: { value: 68.42 } },
+    band: { check: { column: "Due", asOf: "2026-10-31", dateFormats: ISO_DUE, bands: BANDS_EX }, claim: { bands: { 2: "1-30", 3: "1-30", 4: "Current" } } },
+    daysBetween: { check: { from: { column: "Due", row: 2 }, to: { column: "Due", row: 3 }, dateFormats: ISO_DUE }, claim: { value: 19 } },
+    daysSince: { check: { column: "Due", asOf: "2026-10-31", dateFormats: ISO_DUE }, claim: { days: { 2: 30, 3: 11, 4: 0 } } },
+    earliest: { check: { column: "Due", dateFormats: ISO_DUE }, claim: { value: "2026-10-01" } },
+    latest: { check: { column: "Due", dateFormats: ISO_DUE }, claim: { value: "2026-10-31" } },
+  },
+  table: {
+    allNumbers: { check: { column: "Amount" } },
+    allDates: { check: { column: "Due", dateFormats: ISO_DUE } },
+    noEmpty: { check: { column: "Id" } },
+    noDuplicates: { check: { column: "Id" } },
+    rowCount: { check: { n: 3 } },
+    rowMath: { check: { ...TAX_ROW, allowEmpty: true } },
+  },
+  diff: {
+    onlyColumnsChanged: { check: { columns: ["Tax", "Total"] } },
+    untouchedIdentical: { check: { exceptKeys: ["a2"] } },
+    rowsAdded: { check: { n: 0 } },
+    rowsDeleted: { check: { n: 0 } },
+    newColumnRule: { check: { ...TAX_ROW } },
+  },
+};
+const EX_HEADER = ["Id", "Amount", "Tax", "Due", "Cat", "Total"];
+/** The tiny tables every example runs against: `t` (signed as the table / the diff's before) and `a` (a diff's after, unsigned). */
+export const EXAMPLE_TABLES = {
+  t: { header: EX_HEADER, rows: [
+    { rowNumber: 2, cells: ["a1", "600", "60", "2026-10-01", "food", "660"] },
+    { rowNumber: 3, cells: ["a2", "300", "", "2026-10-20", "rent", "300"] },
+    { rowNumber: 4, cells: ["a3", "50", "5", "2026-10-31", "food", "55"] },
+  ] },
+  a: { header: EX_HEADER, rows: [
+    { rowNumber: 2, cells: ["a1", "600", "60", "2026-10-01", "food", "660"] },
+    { rowNumber: 3, cells: ["a2", "300", "30", "2026-10-20", "rent", "330"] },
+    { rowNumber: 4, cells: ["a3", "50", "5", "2026-10-31", "food", "55"] },
+  ] },
+};
+function example(rule, op) {
+  const e = EXAMPLES[rule][op];
+  const base = rule === "cells" ? { table: "t", claim: "answer" } : rule === "table" ? { table: "t" } : { before: "t", after: "a", keyColumn: "Id" };
+  return { check: { id: `ex-${op}`, rule, ...base, op, ...e.check }, ...(e.claim ? { claim: e.claim } : {}) };
+}
+
 export const VOCAB_OPS = Object.fromEntries(
   Object.entries(OPS).map(([rule, ops]) => [
     rule,
-    Object.fromEntries(Object.entries(ops).map(([op, d]) => [op, { summary: d.summary, requires: d.req, allows: d.opt, ...(d.claim ? { claim: d.claim } : {}) }])),
+    Object.fromEntries(Object.entries(ops).map(([op, d]) => [op, { summary: d.summary, requires: d.req, allows: d.opt, ...(d.claim ? { claim: d.claim } : {}), example: example(rule, op) }])),
   ]),
 );
 /** The field names a rule accepts (for the unknown-field refusal and the rule table). */
@@ -628,12 +697,11 @@ function need(claim, k) {
   if (claim[k] === undefined) throw new Bad("claim-missing", k);
   return claim[k];
 }
+// STRICT claim types (hamr 2026-10-22, strict for spreadsheets): a claimed number is a finite JS number, never a numeric string
+// ({value: "17"} is red claim-malformed). Text claims are strings, date claims are strings in the column's format, row lists are
+// integers, row-keyed map keys are digit strings (JSON object keys) and their values are numbers (days) or strings (bands).
 function claimNumber(v) {
   if (typeof v === "number" && Number.isFinite(v)) return v;
-  if (typeof v === "string") {
-    const n = readNumber(v);
-    if (n !== null) return n;
-  }
   throw new Bad("claim-malformed", "number");
 }
 function claimRowList(list, k) {
@@ -991,6 +1059,9 @@ function runPerRow(plan, env, ctx, t, rows) {
   const asOf = plan.asOf !== undefined ? readIso(plan.asOf) : null;
   const claim = readClaim(env.claim(), [isBand ? "bands" : "days"], plan.claim);
   const claimed = need(claim, isBand ? "bands" : "days");
+  for (const v of claimed.values()) {
+    if (isBand ? typeof v !== "string" : typeof v !== "number" || !Number.isFinite(v)) throw new Bad("claim-malformed", isBand ? "bands" : "days");
+  }
   const inScope = conds.length ? rows.filter((r) => matchRow(r, conds, ctx)) : rows;
   const empties = [];
   const expectedAt = new Map(); // row -> expected number
@@ -1024,7 +1095,7 @@ function runPerRow(plan, env, ctx, t, rows) {
     exp.push([row, want]);
     if (!claimed.has(row)) continue;
     const c = claimed.get(row);
-    if (isBand ? c !== want : !(typeof c === "number" || typeof c === "string") || !close(claimNumber(c), want, 0, false)) wrong.push(row);
+    if (isBand ? c !== want : c !== want) wrong.push(row);
   }
   expect(ctx, isBand ? "bands" : "days", exp.slice(0, EXPECTED_ROWS).map(([row, v]) => ({ row, [isBand ? "band" : "days"]: v })));
   if (exp.length > EXPECTED_ROWS) expect(ctx, isBand ? "bandsTotal" : "daysTotal", exp.length);
@@ -1280,8 +1351,14 @@ export function evaluate(rule, check, env) {
   if (ctx.unreadable.size) {
     gap(ctx, "unreadable-cell", [...ctx.unreadable]);
   }
-  return { stopped: null, gaps: ctx.gaps, expected: ctx.expected };
+  // a data problem in the table is listed BEFORE a claim problem, so gaps[0] shows it (stable within each group)
+  const data = ctx.gaps.filter((g) => DATA_KINDS.has(g.kind));
+  const gaps = data.length && data.length < ctx.gaps.length ? [...data, ...ctx.gaps.filter((g) => !DATA_KINDS.has(g.kind))] : ctx.gaps;
+  return { stopped: null, gaps, expected: ctx.expected };
 }
+
+/** Gap kinds that say the TABLE (not the claim) is the problem; they sort first. */
+const DATA_KINDS = new Set(["unreadable-cell", "empty-operand", "result-empty", "div-zero", "no-values", "no-rows-checked", "no-band", "lookup-unreadable", "lookup-not-unique", "key-not-unique", "fewer-than-n", "table-too-large"]);
 
 /** Gap kinds minted by this module (the renderer's list; each has its own name, Law 12). */
 export const CELLS_GAP_KINDS = Object.freeze({

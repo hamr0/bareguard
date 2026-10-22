@@ -18,7 +18,7 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { resolveWithSymlinks, findSymlinkComponent, within, norm } from "./fs.js";
-import { evaluate, makeEnv, tableShaOf, signedProblem, ruleFieldNames, CELLS_RULES, CELLS_GAP_KINDS, FIELD_DOCS, VOCAB_OPS, DATE_FORMATS, TABLE_MAX_CELLS, TABLE_MAX_CHARS, CLAIM_MAX } from "./rubric-cells.js";
+import { evaluate, makeEnv, tableShaOf, signedProblem, ruleFieldNames, CELLS_RULES, CELLS_GAP_KINDS, FIELD_DOCS, VOCAB_OPS, EXAMPLE_TABLES, DATE_FORMATS, TABLE_MAX_CELLS, TABLE_MAX_CHARS, CLAIM_MAX } from "./rubric-cells.js";
 import { parseBound, compareBounds, decideQuote, parseClaimValue, displayCanon, parseClaimText, textPresent, textAfter, textSpanPresent, textSpanAfter } from "./rubric-locate.js";
 
 /**
@@ -1261,6 +1261,7 @@ export const rubricVocabulary = deepFreeze({
   },
   // `cells` / `table` / `diff` (docs/product/cells-prd.md): tables ride in `opts.tables[name]`, typed rows
   cells: {
+    exampleTables: JSON.parse(JSON.stringify(EXAMPLE_TABLES)), // the tiny tables every `rules.<rule>.ops.<op>.example` runs green against: `t` is signed in spec.inputs (tableSha), `a` is a diff's unsigned after table
     tableShape: "{ header: string[], rows: [{ rowNumber: integer >= 2, strictly increasing, cells: string[] (one string per header) }] } passed as opts.tables[name]; a missing or malformed table makes the check stopped",
     tableMaxCells: TABLE_MAX_CELLS, // rows x columns of one table; over it = red `table-too-large`
     tableMaxChars: TABLE_MAX_CHARS, // UTF-16 units over the cells and header of one table; over it = red `table-too-large`

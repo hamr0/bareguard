@@ -36,7 +36,7 @@ T("countEmpty red", base("countEmpty", { column: "Tax" }), tb, { value: 0 }, "re
 T("countIf green (Amount>500 = 2)", base("countIf", { where: [{ column: "Amount", cmp: "gt", value: 500 }] }), tb, { value: 2 }, "green");
 T("countIf red", base("countIf", { where: [{ column: "Amount", cmp: "gt", value: 500 }] }), tb, { value: 3 }, "red");
 T("sum green $1,200.50 cell read (2850.5)", base("sum", { column: "Amount" }), tb, { value: 2850.5 }, "green");
-T("sum green claim as string \"$2,850.50\"", base("sum", { column: "Amount" }), tb, { value: "$2,850.50" }, "green");
+T("sum: a claim as a numeric string is red claim-malformed (strict types)", base("sum", { column: "Amount" }), tb, { value: "$2,850.50" }, "red", "claim-malformed");
 T("sum red off by 0.01", base("sum", { column: "Amount" }), tb, { value: 2850.49 }, "red");
 T("sumIf green (food = 1800.5)", base("sumIf", { column: "Amount", where: [{ column: "Cat", cmp: "equals", value: "food" }] }), tb, { value: 1800.5 }, "green");
 T("sumIf red", base("sumIf", { column: "Amount", where: [{ column: "Cat", cmp: "equals", value: "food" }] }), tb, { value: 1800 }, "red");
@@ -96,7 +96,7 @@ T("rows red missing", rowsOf([{ column: "Amount", cmp: "gt", value: 500 }]), tb,
 T("rows red extra", rowsOf([{ column: "Amount", cmp: "gt", value: 500 }]), tb, { rows: [2, 7, 3] }, "red", "rows-extra");
 T("rows red duplicate listed twice", rowsOf([{ column: "Amount", cmp: "gt", value: 500 }]), tb, { rows: [2, 7, 7] }, "red", "rows-duplicated");
 T("rows red non-integer row", rowsOf([{ column: "Amount", cmp: "gt", value: 500 }]), tb, { rows: [2, "7"] }, "red", "claim-malformed");
-T("rows by keys green (amounts, valueKind number)", rowsNum([{ column: "Amount", cmp: "gt", value: 500 }]), tb, { keys: [700, "$1,200.50"] }, "green");
+T("rows by keys green (amounts, valueKind number)", rowsNum([{ column: "Amount", cmp: "gt", value: 500 }]), tb, { keys: [700, 1200.5] }, "green");
 T("rows by keys red extra amount", rowsNum([{ column: "Amount", cmp: "gt", value: 500 }]), tb, { keys: [700, 1200.5, 300] }, "red", "keys-extra");
 T("rows no claim fields -> red claim-missing", rowsOf([{ column: "Amount", cmp: "gt", value: 500 }]), tb, {}, "red", "claim-missing");
 T("cond gte (>=300: 2,3,4,7,8)", rowsOf([{ column: "Amount", cmp: "gte", value: 300 }]), tb, { rows: [2, 3, 4, 7, 8] }, "green");
@@ -337,3 +337,57 @@ T("hostile: unknown cmp (like 'matches') -> stopped", rowsOf([{ column: "Cat", c
 T("hostile: cond value as string number -> stopped (signed values are typed)", rowsOf([{ column: "Amount", cmp: "gt", value: "500" }]), tb, { rows: [] }, "stopped", "check-invalid");
 T("hostile: OR is not a thing: a cmp list or 'or' key is refused", rowsOf([{ column: "Cat", cmp: "equals", value: "food", or: [] }]), tb, { rows: [] }, "stopped", "check-invalid");
 T("hostile: a field the op does not take -> stopped", base("count", { column: "Amount", where: [{ column: "Cat", cmp: "equals", value: "food" }] }), tb, { value: 6 }, "stopped", "check-invalid");
+
+// ---- STRICT claim types (hamr 2026-10-22: strict for spreadsheets) ----
+// A claimed number is a finite JS number, never a numeric string; one test per claim shape, each with the TRUE value as a string.
+const STR = "claim-malformed";
+T("strict count: {value:\"6\"} is red claim-malformed", base("count", { column: "Amount" }), tb, { value: "6" }, "red", STR);
+T("strict count: {value:6} is green", base("count", { column: "Amount" }), tb, { value: 6 }, "green");
+T("strict countEmpty", base("countEmpty", { column: "Tax" }), tb, { value: "1" }, "red", STR);
+T("strict countIf", base("countIf", { where: [{ column: "Amount", cmp: "gt", value: 500 }] }), tb, { value: "2" }, "red", STR);
+T("strict sum", base("sum", { column: "Amount" }), tb, { value: "2850.5" }, "red", STR);
+T("strict sumIf", base("sumIf", { column: "Amount", where: [{ column: "Cat", cmp: "equals", value: "food" }] }), tb, { value: "1800.5" }, "red", STR);
+T("strict average", base("average", { column: "Amount" }), tb, { value: "475.08" }, "red", STR);
+T("strict averageIf", base("averageIf", { column: "Amount", where: [{ column: "Cat", cmp: "equals", value: "rent" }] }), tb, { value: "300" }, "red", STR);
+T("strict median", base("median", { column: "Amount" }), tb, { value: "300" }, "red", STR);
+T("strict min", base("min", { column: "Amount" }), tb, { value: "50" }, "red", STR);
+T("strict max", base("max", { column: "Amount" }), tb, { value: "1200.5" }, "red", STR);
+T("strict uniqueCount", base("uniqueCount", { column: "Cat" }), tb, { value: "3" }, "red", STR);
+T("strict percentOfTotal", base("percentOfTotal", { column: "Amount", where: [{ column: "Cat", cmp: "equals", value: "food" }] }), tb, { value: "63.16" }, "red", STR);
+T("strict lookup number", base("lookup", { column: "Amount", keyColumn: "Id", keyValue: "A7", valueKind: "number" }), tb, { value: "300" }, "red", STR);
+T("strict daysBetween", base("daysBetween", { from: { column: "Date", row: 2 }, to: { column: "Date", row: 3 }, dateFormats: ISO }), tb, { value: "5" }, "red", STR);
+T("strict daysSince cell", base("daysSince", { cell: { column: "Date", row: 2 }, asOf: "2026-02-01", dateFormats: ISO }), tb, { value: "27" }, "red", STR);
+T("strict topN values", base("topN", { column: "Amount", n: 2 }), tb, { values: ["1200.5", 700] }, "red", STR);
+T("strict topN values: numbers are green", base("topN", { column: "Amount", n: 2 }), tb, { values: [1200.5, 700] }, "green");
+T("strict rows by number keys", rowsNum([{ column: "Amount", cmp: "gt", value: 500 }]), tb, { keys: ["700", 1200.5] }, "red", STR);
+T("strict groupTotals total", base("groupTotals", { column: "Amount", groupColumn: "Cat" }), tb, { totals: [{ group: "food", total: "1800.5" }, { group: "rent", total: 300 }, { group: "misc", total: 750 }] }, "red", STR);
+T("strict days map values", base("daysSince", { column: "Date", asOf: "2026-02-01", dateFormats: ISO, range: { from: 2, to: 3 } }), tb, { days: { 2: "27", 3: 22 } }, "red", STR);
+T("strict days map values: numbers are green", base("daysSince", { column: "Date", asOf: "2026-02-01", dateFormats: ISO, range: { from: 2, to: 3 } }), tb, { days: { 2: 27, 3: 22 } }, "green");
+T("strict bands map values must be strings", base("band", { column: "Amount", bands: [{ name: "any", gte: 0 }], range: { from: 2, to: 2 } }), tb, { bands: { 2: 1 } }, "red", STR);
+T("strict rows: row numbers as strings are red", rowsOf([{ column: "Amount", cmp: "gt", value: 500 }]), tb, { rows: ["2", "7"] }, "red", STR);
+T("strict found: a boolean, not \"true\"", base("found", { column: "Id", needle: "A3" }), tb, { value: "true" }, "red", STR);
+T("strict lookup text stays a string; a number is malformed", base("lookup", { column: "Cat", keyColumn: "Id", keyValue: "A7", valueKind: "text" }), tb, { value: 5 }, "red", STR);
+T("strict earliest stays a date string; a number is malformed", base("earliest", { column: "Date", dateFormats: ISO }), tb, { value: 20260105 }, "red", STR);
+T("strict: a numeric string with a currency symbol or comma is just as red", base("sum", { column: "Amount" }), tb, { value: "2,850.50" }, "red", STR);
+
+// ---- gap order: a table data problem comes BEFORE a claim mismatch ----
+const bad2 = { t: mk(H, [["A1", "2026-01-01", "x", "10", "", ""], ["A2", "2026-01-02", "x", "abc", "", ""]]) };
+test("gap order: unreadable-cell is gaps[0] even though the claim also mismatches", () => {
+  const r = runCheck(base("sum", { column: "Amount" }), bad2, { value: 999 });
+  assert.deepEqual(r.gaps.map((g) => g.kind), ["unreadable-cell", "value-mismatch"]);
+});
+test("gap order: unreadable-cell also precedes a malformed claim", () => {
+  const r = runCheck(base("sum", { column: "Amount" }), bad2, { value: "10" });
+  assert.deepEqual(r.gaps.map((g) => g.kind), ["unreadable-cell", "claim-malformed"]);
+});
+test("gap order: no-values first, rows-missing/extra after, and the order within a group is the minted order", () => {
+  const r = runCheck(base("average", { column: "Amount" }), { t: mk(H, [["A1", "2026-01-01", "x", "", "", ""]]) }, { value: 5 });
+  assert.deepEqual(r.gaps.map((g) => g.kind), ["no-values"]);
+  const rows = runCheck(rowsOf([{ column: "Amount", cmp: "gt", value: 5 }]), bad2, { rows: [9] });
+  assert.deepEqual(rows.gaps.map((g) => g.kind), ["unreadable-cell", "rows-missing", "rows-extra"]);
+});
+test("gap order: row math empty-operand precedes row-math-mismatch", () => {
+  const t = { t: mk(["A", "B", "R"], [["", "1", "1"], ["2", "2", "9"]]) };
+  const r = runCheck({ id: "m", op: "rowMath", table: "t", fn: "add", a: "A", b: "B", result: "R" }, t);
+  assert.deepEqual(r.gaps.map((g) => g.kind), ["empty-operand", "row-math-mismatch"]);
+});
