@@ -173,16 +173,19 @@ console.log(quoteIn("time", " * lead time", { wholeLines: true }));   // { ok: f
 console.log(numbersInQuote("4 hours", "2 weeks"));                 // { ok: false, missing: ["4"] }
 ```
 
-Numbers in a table: the `cells`, `table` and `diff` rules recompute a signed op (a count, a sum, the rows over 500, days since a due date, an aging band, a before/after diff) over typed rows you pass in `opts.tables`, and compare it with the value the step claims. The signer picks the op, the columns and the date format per column (`YYYY-MM-DD`, `DD/MM/YYYY`, `MM/DD/YYYY` or `D MMM YYYY`); the step supplies values only, so it cannot author its own check. A blank operand, an unreadable cell or a table over the cap (500,000 cells) is red or `stopped`, never a quiet zero.
+Numbers in a table: the `cells`, `table` and `diff` rules recompute a signed op (a count, a sum, the rows over 500, days since a due date, an aging band, a before/after diff) over typed rows you pass in `opts.tables`, and compare it with the value the step claims. A table a check reads is a signed input (`spec.inputs`, `sha256: tableSha(table)`, over the typed rows), like a `cited` source: a different table is `stopped`. The signer picks the op, the columns and the date format per column (`YYYY-MM-DD`, `DD/MM/YYYY`, `MM/DD/YYYY` or `D MMM YYYY`); the step supplies values only, so it cannot author its own check. A blank operand, an unreadable cell or a table over the cap (500,000 cells) is red or `stopped`, never a quiet zero.
 
 ```js
-const spec = { schema: 1, goal: "List every expense over 500", checkpoints: { answer: { gating: true, checks: [
-  { id: "over-500", rule: "cells", table: "expenses", claim: "answer", op: "rows",
-    where: [{ column: "Amount", cmp: "gt", value: 500 }] },
-] } } };
-const rubric = createRubric(spec);
+import { createRubric, checkStep, tableSha } from "bareguard";
 const table = { header: ["Description", "Amount"], rows: [
   { rowNumber: 2, cells: ["Taxi", "36.20"] }, { rowNumber: 3, cells: ["Flight", "731.25"] }] };
+const spec = { schema: 1, goal: "List every expense over 500",
+  inputs: [{ name: "expenses", sha256: tableSha(table) }],   // the table is LOCKED: a different table is stopped
+  checkpoints: { answer: { gating: true, checks: [
+    { id: "over-500", rule: "cells", table: "expenses", claim: "answer", op: "rows",
+      where: [{ column: "Amount", cmp: "gt", value: 500 }] },
+  ] } } };
+const rubric = createRubric(spec);
 const r = await checkStep(rubric, "answer", { answer: { rows: [2, 3] } }, { tables: { expenses: table } });
 // r.verdict === "red"; r.gaps[0] -> { kind: "rows-extra", items: ["2"], ... }; r.full.expected -> [{ check: "over-500", rows: [3] }]
 ```

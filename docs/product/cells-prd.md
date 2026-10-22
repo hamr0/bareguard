@@ -174,9 +174,12 @@ Self-review, branch review, hamr picks the version, then tell fwd and loop the v
 ## 10. Build details (feat/cells, decided at build; each is SemVer surface once released)
 
 How a table reaches `checkStep`: `opts.tables[name]` = `{ header: string[], rows: [{ rowNumber, cells: string[] }] }`, referenced by the
-signed check's `table` (`before` / `after` for `diff`). It is NOT a signed `spec.inputs` entry (no sha): like `measurements` it is a value
-the caller measures (Law 11); the signed part is the op, the columns and the formats. A missing, ragged or non-string table is `stopped`
-(fault `table-invalid`); a signed column, row or field that cannot apply is `stopped` (`check-invalid`). Each table is copied once per
+signed check's `table` (`before` / `after` for `diff`). RULED (hamr 2026-10-22): tables locked by signed sha256. A table a check reads (`table`,
+or a `diff`'s `before`) must be a `spec.inputs` entry `{name, sha256}`, the sha256 being `tableSha(table)` (exported primitive: sha256 over a
+canonical JSON form of the header and each row's `rowNumber` and `cells`; over the typed rows, not the raw file; `null`, never a throw, for a
+malformed, hostile or over-cap table). `createRubric` refuses an unsigned table; a table that does not hash to its signed sha256 is `stopped`
+(`missing-measurement`, like a `cited` input). A `diff`'s `after` table is the artifact being checked and is NOT signed (it comes via
+`opts.tables` unlocked). A missing, ragged or non-string table is `stopped` (fault `table-invalid`); a signed column, row or field that cannot apply is `stopped` (`check-invalid`). Each table is copied once per
 `checkStep`. The claim is read from the output field the check names in `claim` (a plain object; keys per op in `rubricVocabulary`).
 
 Rule shape: `cells` takes `table`, `claim`, `op` + op fields; `table` takes `table`, `op` + op fields; `diff` takes `before`, `after`,
