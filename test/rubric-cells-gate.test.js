@@ -653,3 +653,110 @@ test("cited money unit list: entries equal after whitespace normalization are re
   assert.throws(mk1(["US dollars", "US  dollars"]), /must not contain duplicates/);
   assert.doesNotThrow(mk1(["US dollars", "dollars"]));
 });
+
+// --- overflow: a computed value that is not a finite number is never compared (red value-overflow, a data gap listed first) ---------------
+
+const big = (digits) => "1" + "0".repeat(digits); // 1e<digits>, finite up to 308 digits
+const OV = "value-overflow";
+const kindsOf = (r) => r.gaps.map((g) => g.kind);
+const oneCol = (cells) => mk(["A"], cells.map((c) => [c]));
+const sumRun = (cells, claim, op = "sum") => step([{ id: "s", rule: "cells", table: "t", claim: "c", op, column: "A" }], { t: oneCol(cells) }, { c: { value: claim } });
+
+test("overflow: the old false green - two finite 1e308 cells sum to Infinity, and {value:5} must NOT be green", async () => {
+  const r = await sumRun([big(308), big(308)], 5);
+  assert.equal(r.verdict, "red");
+  assert.deepEqual(kindsOf(r), [OV]);
+  assert.equal(r.full.expected, undefined, "no Infinity is recorded as the expected answer");
+  assert.equal((await sumRun([big(308), big(308)], 1e308)).verdict, "red", "even a claim of the largest-looking value is not compared");
+});
+
+test("overflow sum: AT the largest finite sum an exact claim is green, one more cell is value-overflow", async () => {
+  const h = "8" + "0".repeat(307); // 8e307
+  assert.equal((await sumRun([h, h], 1.6e308)).verdict, "green");
+  assert.equal((await sumRun([h, h], 1.6e308 + 1e300)).verdict, "red", "a wrong finite claim is a plain mismatch");
+  assert.deepEqual(kindsOf(await sumRun([h, h], 1.6e308 + 1e300)), ["value-mismatch"]);
+  assert.deepEqual(kindsOf(await sumRun([h, h, h], 5)), [OV], "2.4e308 overflows");
+});
+
+test("overflow average and sumIf / averageIf: the sum overflowing is value-overflow, never a match", async () => {
+  const h = "8" + "0".repeat(307);
+  assert.equal((await sumRun([h, h], 8e307, "average")).verdict, "green");
+  assert.deepEqual(kindsOf(await sumRun([h, h, h], 8e307, "average")), [OV]);
+  const cond = (op) => ({ id: "s", rule: "cells", table: "t", claim: "c", op, column: "A", where: [{ column: "A", cmp: "gt", value: 1 }] });
+  for (const op of ["sumIf", "averageIf"]) {
+    const t = { t: oneCol([big(308), big(308)]) };
+    assert.deepEqual(kindsOf(await step([cond(op)], t, { c: { value: 5 } })), [OV], op);
+  }
+});
+
+test("overflow median: the mean of the two middle values is computed without overflowing (1e308 and 1e308 -> 1e308)", async () => {
+  assert.equal((await sumRun([big(308), big(308)], 1e308, "median")).verdict, "green");
+  assert.equal((await sumRun([big(308), big(308)], 5, "median")).verdict, "red");
+});
+
+test("overflow percentOfTotal: an overflowing total is value-overflow; AT a finite total it is computed", async () => {
+  const mkc = (cells, claim, extra = {}) => step([{ id: "p", rule: "cells", table: "t", claim: "c", op: "percentOfTotal", column: "A", where: [{ column: "A", cmp: "gt", value: 0 }], ...extra }], { t: oneCol(cells) }, { c: { value: claim } });
+  const h = "8" + "0".repeat(307);
+  assert.equal((await mkc([h, h], 100)).verdict, "green");
+  assert.deepEqual(kindsOf(await mkc([h, h, h], 100)), [OV]);
+  assert.deepEqual(kindsOf(await mkc([big(308), big(308)], 100)), [OV]);
+});
+
+test("overflow groupTotals: an overflowing group is value-overflow (row named), the other groups are still checked", async () => {
+  const t = { t: mk(["G", "A"], [["x", big(308)], ["x", big(308)], ["y", "5"]]) };
+  const chk = { id: "g", rule: "cells", table: "t", claim: "c", op: "groupTotals", column: "A", groupColumn: "G" };
+  const r = await step([chk], t, { c: { totals: [{ group: "x", total: 5 }, { group: "y", total: 5 }] } });
+  assert.equal(r.verdict, "red");
+  assert.deepEqual([r.gaps[0].kind, r.gaps[0].items], [OV, ["2"]]);
+  assert.equal(r.gaps[0].kind, OV, "listed first");
+  assert.ok(!r.gaps.some((g) => g.kind === "group-total-mismatch"));
+  const ok = await step([chk], { t: mk(["G", "A"], [["x", "8" + "0".repeat(307)], ["x", "8" + "0".repeat(307)], ["y", "5"]]) }, { c: { totals: [{ group: "x", total: 1.6e308 }, { group: "y", total: 5 }] } });
+  assert.equal(ok.verdict, "green", "AT the largest finite group total");
+});
+
+test("overflow rowMath (table) and newColumnRule (diff): the row's own arithmetic overflowing is value-overflow, never compared with the result cell", async () => {
+  const a = big(200);
+  const rm = { id: "m", rule: "table", table: "t", op: "rowMath", fn: "mul", a: "A", b: "B", result: "R" };
+  const t = { t: mk(["A", "B", "R"], [[a, a, "5"]]) };
+  const r = await step([rm], t);
+  assert.deepEqual(r.gaps.map((g) => [g.kind, g.items]), [[OV, ["2"]]]);
+  const f = big(150);
+  assert.equal((await step([rm], { t: mk(["A", "B", "R"], [[f, f, big(300)]]) })).verdict, "green", "AT 1e300 the product is compared");
+  assert.deepEqual(kindsOf(await step([rm], { t: mk(["A", "B", "R"], [[f, f, "5"]]) })), ["row-math-mismatch"]);
+  for (const fn of ["add", "sub", "div", "pct"]) {
+    const x = fn === "sub" ? "-" + big(308) : big(308);
+    const y = fn === "div" || fn === "pct" ? "0.00000000001" : big(308);
+    assert.deepEqual(kindsOf(await step([{ ...rm, fn }], { t: mk(["A", "B", "R"], [[x, y, "5"]]) })), [OV], fn);
+  }
+  const before = mk(["K", "A", "B"], [["k", a, a]]);
+  const after = mk(["K", "A", "B", "R"], [["k", a, a, "5"]]);
+  const d = { id: "d", rule: "diff", before: "b", after: "a", keyColumn: "K", op: "newColumnRule", fn: "mul", a: "A", b: "B", result: "R" };
+  const dr = await step([d], { b: before, a: after });
+  assert.ok(kindsOf(dr).includes(OV) && dr.gaps[0].kind === OV, "diff newColumnRule");
+});
+
+// --- wide headers: header alignment is linear (the AFTER table is agent-controlled) -------------------------------------------------------
+
+function wideDiff(cols, rowsN) {
+  const header = ["K", ...Array.from({ length: cols - 1 }, (_, i) => `c${i}`)];
+  const rows = (h) => Array.from({ length: rowsN }, (_, r) => ({ rowNumber: r + 2, cells: h.map((name) => (name === "K" ? `k${r}` : `${name}-${r}`)) }));
+  return { b: { header, rows: rows(header) }, a: { header: header.slice().reverse(), rows: rows(header.slice().reverse()) } };
+}
+for (const [cols, rowsN] of [[TABLE_MAX_CELLS, 1], [TABLE_MAX_CELLS / 2, 2]]) {
+  for (const op of ["onlyColumnsChanged", "untouchedIdentical"]) {
+    test(`wide diff at the cap: ${rowsN} row(s) x ${cols} columns, reversed header, ${op}, finishes within a loose bound`, () => {
+      const { b, a } = wideDiff(cols, rowsN);
+      const t0 = performance.now();
+      const r = runCheck({ id: "d", op, before: "b", after: "a", keyColumn: "K", ...(op === "onlyColumnsChanged" ? { columns: [] } : {}) }, { b, a }, undefined);
+      const ms = performance.now() - t0;
+      assert.equal(r.verdict, "green", "same cells under a reordered header: nothing changed");
+      assert.ok(ms < 5000, `${op} on ${rowsN}x${cols} took ${ms.toFixed(0)} ms (linear should be ~100-300 ms; the indexOf version took minutes)`);
+    });
+  }
+}
+test("wide diff: a changed cell is still found after the Map alignment (column and row named)", () => {
+  const { b, a } = wideDiff(2000, 2);
+  a.rows[1].cells[5] = "changed";
+  const r = runCheck({ id: "d", op: "onlyColumnsChanged", before: "b", after: "a", keyColumn: "K", columns: [] }, { b, a }, undefined);
+  assert.deepEqual(r.gaps.map((g) => g.kind), ["column-changed"]);
+});

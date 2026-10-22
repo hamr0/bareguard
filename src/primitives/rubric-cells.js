@@ -560,9 +560,8 @@ function gap(ctx, kind, items, more = {}) {
   /** @type {any} */
   const g = { kind, ...more };
   if (items !== undefined) {
-    const arr = items.map((x) => (typeof x === "string" ? x : String(x)));
-    g.items = arr.slice(0, ITEMS);
-    if (arr.length > ITEMS) g.itemsTotal = arr.length;
+    g.items = (items.length > ITEMS ? items.slice(0, ITEMS) : items).map((x) => (typeof x === "string" ? x : String(x)));
+    if (items.length > ITEMS) g.itemsTotal = items.length;
   }
   ctx.gaps.push(g);
 }
@@ -637,7 +636,8 @@ const sumOf = (a) => {
 // --- tolerance -----------------------------------------------------------------
 
 const tolOf = (plan, def) => (def.float ? (plan.tolerance ?? MONEY_TOL) : 0);
-const close = (a, b, tol, float) => (float ? Math.abs(a - b) <= tol + FLOAT_SLACK * Math.max(1, Math.abs(a), Math.abs(b)) : a === b);
+// A non-finite side never matches: an Infinity slack term would make ANY claim "close" (backstop; the callers also report `value-overflow`).
+const close = (a, b, tol, float) => Number.isFinite(a) && Number.isFinite(b) && (float ? Math.abs(a - b) <= tol + FLOAT_SLACK * Math.max(1, Math.abs(a), Math.abs(b)) : a === b);
 
 // --- claim reading: ANY throw while touching the claim is red (Law 1) ---------------
 
@@ -713,6 +713,8 @@ function claimRowList(list, k) {
 // --- comparisons that fill gaps ----------------------------------------------------
 
 function compareScalar(ctx, claimed, actual, tol, float) {
+  // finite cells can still sum / multiply past the largest double: a computed value that is not a finite number is never compared
+  if (!Number.isFinite(actual)) return gap(ctx, "value-overflow");
   expect(ctx, "value", actual);
   if (!close(claimed, actual, tol, float)) gap(ctx, "value-mismatch", undefined, { measured: claimed });
 }
@@ -772,7 +774,7 @@ function runCells(plan, env, ctx) {
       else if (op === "max") a = vs.reduce((x, y) => (y > x ? y : x));
       else {
         const s = Float64Array.from(vs).sort();
-        a = s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2;
+        a = s.length % 2 ? s[(s.length - 1) / 2] : s[s.length / 2 - 1] / 2 + s[s.length / 2] / 2; // halve first: the plain sum can overflow when the mean does not
       }
       return compareScalar(ctx, c, a, tol, true);
     }
@@ -977,6 +979,9 @@ function runCells(plan, env, ctx) {
         if (!tot.has(key)) firstRow.set(key, r.rowNumber);
         tot.set(key, (tot.get(key) ?? 0) + n);
       }
+      const overflow = [...tot].filter(([, v]) => !Number.isFinite(v)).map(([k]) => firstRow.get(k)).sort((a, b) => a - b);
+      for (const [k, v] of tot) if (!Number.isFinite(v)) tot.delete(k); // an overflowed group is reported as value-overflow, never compared
+      if (overflow.length) gap(ctx, "value-overflow", overflow);
       expect(ctx, "totals", [...tot].slice(0, EXPECTED_ROWS).map(([group, total]) => ({ group, total })));
       const ct = new Map();
       const dups = [];
@@ -1001,6 +1006,7 @@ function runCells(plan, env, ctx) {
       const claim = claimOf(["value"]);
       const all = sumOf(numbers(rows, i, plan.column, ctx).map((x) => x.v));
       const part = sumOf(numbers(matched(conds), i, plan.column, ctx).map((x) => x.v));
+      if (!Number.isFinite(all) || !Number.isFinite(part)) return gap(ctx, "value-overflow");
       if (all === 0) return gap(ctx, "no-values");
       compareScalar(ctx, scalar(claim), (part / all) * 100, tol, true);
       return;
@@ -1128,7 +1134,7 @@ function rowMath(ctx, t, plan, rows) {
   const conds = compileConds(t, plan);
   const tol = plan.tolerance ?? MONEY_TOL;
   const allow = plan.allowEmpty === true;
-  const bad = [], empties = [], divz = [], noResult = [];
+  const bad = [], empties = [], divz = [], noResult = [], over = [];
   let checked = 0;
   const rd = (r, i, name) => {
     const s = r.cells[i];
@@ -1155,6 +1161,7 @@ function rowMath(ctx, t, plan, rows) {
       if (b === 0) { divz.push(r.rowNumber); continue; }
       exp = plan.fn === "div" ? a / b : (a / b) * 100; // pct: a as a percent of b
     }
+    if (!Number.isFinite(exp)) { over.push(r.rowNumber); continue; } // the row's own arithmetic overflowed: never compared
     const rs = r.cells[ir];
     if (isBlank(rs)) { noResult.push(r.rowNumber); continue; }
     const got = readCellNumber(rs);
@@ -1163,6 +1170,7 @@ function rowMath(ctx, t, plan, rows) {
   }
   if (checked === 0) gap(ctx, "no-rows-checked");
   if (empties.length) gap(ctx, "empty-operand", empties);
+  if (over.length) gap(ctx, "value-overflow", over);
   if (bad.length) gap(ctx, "row-math-mismatch", bad);
   if (noResult.length) gap(ctx, "result-empty", noResult);
   if (divz.length) gap(ctx, "div-zero", divz);
@@ -1239,40 +1247,70 @@ function runDiff(plan, env, ctx) {
     if (got.length !== plan.n) gap(ctx, op === "rowsAdded" ? "rows-added-count" : "rows-deleted-count", got.map((k) => at.get(k).rowNumber), { measured: got.length, limit: plan.n });
     return;
   }
-  const bset = new Set(before.header);
-  const aset = new Set(after.header);
-  const newCols = after.header.filter((h) => !bset.has(h));
-  const goneCols = before.header.filter((h) => !aset.has(h));
-  const afterIdx = before.header.map((h) => after.header.indexOf(h));
-  const changed = new Map(); // column -> [before row numbers]
-  const changedKeys = new Map(); // key -> true
+  // header -> index maps, built once (an indexOf per column is quadratic at width, and the AFTER header is agent-controlled)
+  const afterPos = new Map();
+  for (let i = 0; i < after.header.length; i++) afterPos.set(after.header[i], i);
+  const beforePos = new Map();
+  for (let i = 0; i < before.header.length; i++) beforePos.set(before.header[i], i);
+  const afterIdx = new Int32Array(before.header.length); // before column -> after column, -1 when removed
+  const goneCols = [];
+  for (let i = 0; i < before.header.length; i++) {
+    const j = afterPos.get(before.header[i]);
+    afterIdx[i] = j === undefined ? -1 : j;
+    if (j === undefined) goneCols.push(before.header[i]);
+  }
+  const newCols = after.header.filter((h) => !beforePos.has(h));
+  // Changed cells of the aligned rows. Only counts and the first few entries are kept (a wide or tall table must not allocate per cell).
+  const changed = new Map(); // column -> { n, rows: first 5 before-row numbers }
+  const except = op === "untouchedIdentical" ? new Set(plan.exceptKeys ?? []) : null;
+  const cellItems = []; // untouchedIdentical: the first ITEMS changed cells outside the excepted rows, as "row:Column"
+  let cellTotal = 0;
   for (const [key, rb] of mb) {
     const ra = ma.get(key);
     if (!ra) continue;
-    before.header.forEach((h, i) => {
-      if (afterIdx[i] >= 0 && rb.cells[i] !== ra.cells[afterIdx[i]]) {
-        (changed.get(h) ?? changed.set(h, []).get(h)).push({ row: rb.rowNumber, key });
-        changedKeys.set(key, true);
+    const skip = except !== null && except.has(key);
+    const bc = rb.cells;
+    const ac = ra.cells;
+    for (let i = 0; i < afterIdx.length; i++) {
+      const j = afterIdx[i];
+      if (j < 0 || bc[i] === ac[j]) continue;
+      const h = before.header[i];
+      let c = changed.get(h);
+      if (c === undefined) changed.set(h, (c = { n: 0, rows: [] }));
+      c.n++;
+      if (c.rows.length < 5) c.rows.push(rb.rowNumber);
+      if (except !== null && !skip) {
+        cellTotal++;
+        if (cellItems.length < ITEMS) cellItems.push(`${rb.rowNumber}:${h}`);
       }
-    });
+    }
   }
   if (op === "onlyColumnsChanged") {
     const allowed = new Set(plan.columns);
     if (goneCols.length) gap(ctx, "column-removed", goneCols);
-    const viol = [...changed].filter(([h]) => !allowed.has(h)).map(([h, rs]) => `${h}:${rs.map((x) => x.row).slice(0, 5).join(",")}${rs.length > 5 ? `,... (${rs.length} rows)` : ""}`);
-    if (viol.length) gap(ctx, "column-changed", viol);
+    const viol = [];
+    let violTotal = 0;
+    for (const [h, c] of changed) {
+      if (allowed.has(h)) continue;
+      violTotal++;
+      if (viol.length < ITEMS) viol.push(`${h}:${c.rows.join(",")}${c.n > 5 ? `,... (${c.n} rows)` : ""}`);
+    }
+    if (violTotal) {
+      gap(ctx, "column-changed", viol);
+      if (violTotal > ITEMS) ctx.gaps[ctx.gaps.length - 1].itemsTotal = violTotal;
+    }
     const badNew = newCols.filter((c) => !allowed.has(c));
     if (badNew.length) gap(ctx, "column-added", badNew);
   } else if (op === "untouchedIdentical") {
-    const except = new Set(plan.exceptKeys ?? []);
     if (goneCols.length) gap(ctx, "column-removed", goneCols);
     if (newCols.length) gap(ctx, "column-added", newCols);
-    const cells = [];
-    for (const [h, rs] of changed) for (const x of rs) if (!except.has(x.key)) cells.push(`${x.row}:${h}`);
-    if (cells.length) gap(ctx, "untouched-cell-changed", cells);
+    if (cellTotal) {
+      gap(ctx, "untouched-cell-changed", cellItems);
+      if (cellTotal > ITEMS) ctx.gaps[ctx.gaps.length - 1].itemsTotal = cellTotal;
+    }
   } else if (op === "newColumnRule") {
     const rc = plan.result;
-    if (bset.has(rc) && !changed.has(rc)) gap(ctx, "column-not-new-or-changed", [rc]);
+    if (beforePos.has(rc) && !changed.has(rc)) gap(ctx, "column-not-new-or-changed", [rc]);
     rowMath(ctx, after, plan, after.rows);
   }
 }
@@ -1368,7 +1406,7 @@ export function evaluate(rule, check, env) {
 }
 
 /** Gap kinds that say the TABLE (not the claim) is the problem; they sort first. */
-const DATA_KINDS = new Set(["unreadable-cell", "empty-operand", "result-empty", "div-zero", "no-values", "no-rows-checked", "no-band", "lookup-unreadable", "lookup-not-unique", "key-not-unique", "fewer-than-n", "table-too-large"]);
+const DATA_KINDS = new Set(["unreadable-cell", "empty-operand", "result-empty", "div-zero", "no-values", "no-rows-checked", "no-band", "lookup-unreadable", "lookup-not-unique", "value-overflow", "key-not-unique", "fewer-than-n", "table-too-large"]);
 
 /** Gap kinds minted by this module (the renderer's list; each has its own name, Law 12). */
 export const CELLS_GAP_KINDS = Object.freeze({
@@ -1390,6 +1428,7 @@ export const CELLS_GAP_KINDS = Object.freeze({
   "lookup-not-unique": "lookup key does not match exactly one row",
   "lookup-unreadable": "lookup cell is unreadable",
   "no-values": "no values to compute over",
+  "value-overflow": "computed value is too large to be a number",
   "unreadable-cell": "unreadable cells",
   "empty-operand": "blank operands",
   "result-empty": "blank result cells",
