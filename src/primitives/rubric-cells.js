@@ -140,7 +140,7 @@ const OPS = {
     rows: { req: ["where"], opt: [R, "keyColumn", "valueKind"], claim: "{ rows: integer[] } or { keys: string[] } (keys needs keyColumn; valueKind text|number, default text)", summary: "the claimed row numbers EQUAL the matching rows: none missing, none extra" },
     topN: { req: ["column", "n"], opt: [R, "where", "order", "ties", "tolerance"], float: true, claim: "{ rows: integer[] } or { values: number[] }", summary: "the n largest (order desc) or smallest (asc); ties any (default) or all" },
     uniqueCount: { req: ["column"], opt: [R, "valueKind"], claim: "{ value: integer }", summary: "distinct non-blank values of column" },
-    duplicates: { req: ["column"], opt: [R], claim: "{ values: string[] } and/or { rows: integer[] }", summary: "values (and the rows) that occur more than once in column" },
+    duplicates: { req: ["column"], opt: [R], claim: "{ values: string[] } and/or { rows: integer[] }", summary: "values (and the rows) that occur more than once in column; a value claimed twice is red" },
     groupTotals: { req: ["column", "groupColumn"], opt: [R, "where", "tolerance"], float: true, claim: "{ totals: [{ group: string, total: number }] }", summary: "sum of column per distinct groupColumn value" },
     percentOfTotal: { req: ["column", "where"], opt: [R, "tolerance"], float: true, claim: "{ value: number }", summary: "sum over rows matching where as a percent of the column's total" },
     band: { req: ["column", "bands"], opt: [R, "where", "asOf", "dateFormats", "allowEmpty"], claim: "{ bands: { \"<rowNumber>\": \"<band name>\" } }", summary: "each row's number (or, with asOf, its days since the date column) falls in one signed band" },
@@ -939,11 +939,18 @@ function runCells(plan, env, ctx) {
       if (claim.values !== undefined) {
         if (claim.values.some((v) => typeof v !== "string")) throw new Bad("claim-malformed", "values");
         const T = new Set(groups.map(([v]) => v));
-        const C = new Set(claim.values);
-        const miss = [...T].filter((v) => !C.has(v));
+        const C = new Set();
+        const twice = new Set(); // claimed more than once
+        for (const v of claim.values) {
+          if (C.has(v)) twice.add(v);
+          C.add(v);
+        }
+        // the gap names the ROWS of an omitted value, never its text (the expected answer stays in full.expected)
+        const miss = groups.filter(([v]) => !C.has(v)).flatMap(([, rs]) => rs).sort((a, b) => a - b);
         const ex = [...C].filter((v) => !T.has(v));
-        if (miss.length) gap(ctx, "values-missing", miss.map((v) => clip(v)));
+        if (miss.length) gap(ctx, "values-missing", miss);
         if (ex.length) gap(ctx, "values-extra", ex.map((v) => clip(v)));
+        if (twice.size) gap(ctx, "values-duplicated", [...twice].map((v) => clip(v)));
         expect(ctx, "values", groups.map(([v]) => v).slice(0, EXPECTED_ROWS));
       }
       if (claim.rows !== undefined) {
@@ -960,12 +967,14 @@ function runCells(plan, env, ctx) {
       const claim = claimOf(["totals"]);
       const base = conds.length ? matched(conds) : rows;
       const tot = new Map();
+      const firstRow = new Map(); // group -> its first row number (a gap names the row, never the group text)
       for (const r of base) {
         const s = r.cells[i];
         if (isBlank(s)) continue;
         const n = readCellNumber(s);
         if (n === null) { unread(ctx, `${r.rowNumber}:${plan.column}`); continue; }
         const key = r.cells[g];
+        if (!tot.has(key)) firstRow.set(key, r.rowNumber);
         tot.set(key, (tot.get(key) ?? 0) + n);
       }
       expect(ctx, "totals", [...tot].slice(0, EXPECTED_ROWS).map(([group, total]) => ({ group, total })));
@@ -980,7 +989,7 @@ function runCells(plan, env, ctx) {
       const miss = [...tot.keys()].filter((k) => !ct.has(k));
       const ex = [...ct.keys()].filter((k) => !tot.has(k));
       const wrong = [...ct].filter(([k, v]) => tot.has(k) && !close(v, tot.get(k), tol, true)).map(([k]) => k);
-      if (miss.length) gap(ctx, "groups-missing", miss.map((v) => clip(v)));
+      if (miss.length) gap(ctx, "groups-missing", miss.map((k) => firstRow.get(k)).sort((a, b) => a - b));
       if (ex.length) gap(ctx, "groups-extra", ex.map((v) => clip(v)));
       if (dups.length) gap(ctx, "groups-duplicated", dups);
       if (wrong.length) gap(ctx, "group-total-mismatch", wrong.map((v) => clip(v)));
@@ -1225,7 +1234,9 @@ function runDiff(plan, env, ctx) {
   const deleted = [...mb.keys()].filter((k) => !ma.has(k));
   if (op === "rowsAdded" || op === "rowsDeleted") {
     const got = op === "rowsAdded" ? added : deleted;
-    if (got.length !== plan.n) gap(ctx, op === "rowsAdded" ? "rows-added-count" : "rows-deleted-count", got.map((k) => clip(k)), { measured: got.length, limit: plan.n });
+    // the rows' numbers (in the after table for added, the before table for deleted), never their key text
+    const at = op === "rowsAdded" ? ma : mb;
+    if (got.length !== plan.n) gap(ctx, op === "rowsAdded" ? "rows-added-count" : "rows-deleted-count", got.map((k) => at.get(k).rowNumber), { measured: got.length, limit: plan.n });
     return;
   }
   const bset = new Set(before.header);
@@ -1371,6 +1382,7 @@ export const CELLS_GAP_KINDS = Object.freeze({
   "fewer-than-n": "fewer qualifying rows than n",
   "values-missing": "claim omits values",
   "values-extra": "claim names values that do not qualify",
+  "values-duplicated": "claim lists values twice",
   "groups-missing": "claim omits groups",
   "groups-extra": "claim names groups that do not exist",
   "groups-duplicated": "claim lists groups twice",

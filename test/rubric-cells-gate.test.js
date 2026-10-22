@@ -546,3 +546,97 @@ test("vocabulary examples: the *If ops use a NUMERIC condition and the output wr
   }
   assert.deepEqual(ex.count.example.output, { answer: { value: 3 } });
 });
+
+// --- gaps never carry table cell text (hamr 2026-10-22): row numbers and counts only ---------------------------------------------
+
+const S = "SENTINEL-PII-7";
+const PII_T = mk(["Id", "Name", "Cat", "Amt", "D"], [
+  ["id-2", `${S}-a`, `${S}-g1`, "10", `${S}-d`],
+  ["id-3", `${S}-a`, `${S}-g1`, "20", `${S}-d`],
+  ["id-4", `${S}-b`, `${S}-g2`, "30", "2026-01-01"],
+  ["id-5", `${S}-b`, `${S}-g2`, "40", "2026-01-02"],
+]);
+const PII_B = mk(["Id", "Name"], [[`${S}-k1`, `${S}-n1`], [`${S}-k2`, `${S}-n2`], [`${S}-k3`, `${S}-n3`]]);
+const PII_A = mk(["Id", "Name"], [[`${S}-k1`, `${S}-n1x`], [`${S}-k2`, `${S}-n2`], [`${S}-k4`, `${S}-n4`]]);
+const ISO_D = (c) => [{ column: c, format: "YYYY-MM-DD" }];
+// [check fields, claim object]; every one goes red with a wrong claim, over a table whose text cells all hold the sentinel
+const PII_CASES = [
+  [{ rule: "cells", table: "t", op: "sum", column: "Name" }, { value: 1 }],
+  [{ rule: "cells", table: "t", op: "average", column: "Amt" }, { value: 1 }],
+  [{ rule: "cells", table: "t", op: "lookup", column: "Name", keyColumn: "Id", keyValue: "id-2", valueKind: "text" }, { value: "wrong" }],
+  [{ rule: "cells", table: "t", op: "rows", where: [{ column: "Amt", cmp: "gt", value: 15 }], keyColumn: "Name" }, { rows: [2] }],
+  [{ rule: "cells", table: "t", op: "rows", where: [{ column: "Amt", cmp: "gt", value: 15 }], keyColumn: "Name" }, { keys: ["zz"] }],
+  [{ rule: "cells", table: "t", op: "topN", column: "Amt", n: 2 }, { rows: [2] }],
+  [{ rule: "cells", table: "t", op: "uniqueCount", column: "Name" }, { value: 9 }],
+  [{ rule: "cells", table: "t", op: "duplicates", column: "Name" }, { values: [] }],
+  [{ rule: "cells", table: "t", op: "duplicates", column: "Name" }, { values: ["q", "q"] }],
+  [{ rule: "cells", table: "t", op: "duplicates", column: "Name" }, { rows: [4] }],
+  [{ rule: "cells", table: "t", op: "groupTotals", column: "Amt", groupColumn: "Cat" }, { totals: [] }],
+  [{ rule: "cells", table: "t", op: "groupTotals", column: "Amt", groupColumn: "Cat" }, { totals: [{ group: "zz", total: 1 }, { group: "zz", total: 1 }] }],
+  [{ rule: "cells", table: "t", op: "earliest", column: "D", dateFormats: ISO_D("D") }, { value: "2026-05-05" }],
+  [{ rule: "cells", table: "t", op: "band", column: "Name", bands: [{ name: "x", lt: 5 }] }, { bands: { 2: "x" } }],
+  [{ rule: "cells", table: "t", op: "daysSince", column: "D", asOf: "2026-02-01", dateFormats: ISO_D("D") }, { days: { 2: 1 } }],
+  [{ rule: "table", table: "t", op: "allNumbers", column: "Name" }, undefined],
+  [{ rule: "table", table: "t", op: "allDates", column: "Name", dateFormats: ISO_D("Name") }, undefined],
+  [{ rule: "table", table: "t", op: "noDuplicates", column: "Name" }, undefined],
+  [{ rule: "table", table: "t", op: "rowMath", a: "Name", b: "Amt", result: "Amt", fn: "add" }, undefined],
+  [{ rule: "diff", before: "b", after: "a", keyColumn: "Id", op: "rowsAdded", n: 0 }, undefined],
+  [{ rule: "diff", before: "b", after: "a", keyColumn: "Id", op: "rowsDeleted", n: 0 }, undefined],
+  [{ rule: "diff", before: "b", after: "a", keyColumn: "Id", op: "onlyColumnsChanged", columns: [] }, undefined],
+  [{ rule: "diff", before: "b", after: "a", keyColumn: "Id", op: "untouchedIdentical" }, undefined],
+  [{ rule: "diff", before: "b", after: "a", keyColumn: "Id", op: "newColumnRule", a: "Name", b: { const: 1 }, result: "Name", fn: "add" }, undefined],
+];
+
+test("gaps carry no table cell text: not in the step result, drainGaps, renderGaps or the audit line (every op that goes red)", async (t) => {
+  const dir = await makeTmpDir();
+  t.after(async () => cleanup(dir));
+  const tables = { t: PII_T, b: PII_B, a: PII_A };
+  const checks = PII_CASES.map(([c], i) => ({ id: `k${i}`, ...(c.rule === "cells" ? { claim: `c${i}` } : {}), ...c }));
+  const output = {};
+  PII_CASES.forEach(([, claim], i) => { if (claim !== undefined) output[`c${i}`] = claim; });
+  const spec = { schema: 1, goal: "g", inputs: [{ name: "t", sha256: tableSha(PII_T) }, { name: "b", sha256: tableSha(PII_B) }], checkpoints: { cp: { gating: true, checks } } };
+  const { auditPath, runId } = uniquePaths(dir);
+  const gate = new Gate({ audit: { path: auditPath }, rubric: { spec, sha256: rubricSha(spec), advanceOn: ["done"] }, runId });
+  await gate.init();
+  const r = await gate.checkStep("cp", output, { tables });
+  assert.equal(r.verdict, "red", JSON.stringify(r.fault));
+  const kinds = new Set(r.gaps.map((g) => g.kind));
+  for (const k of ["values-missing", "values-duplicated", "groups-missing", "rows-added-count", "rows-deleted-count", "duplicate-values", "not-number", "unreadable-cell"]) assert.ok(kinds.has(k), `the scenario reaches ${k}`);
+  const drained = gate.drainGaps();
+  assert.ok(drained.length > 0);
+  const audit = fs.readFileSync(auditPath, "utf8");
+  assert.ok(audit.includes('"phase":"rubric"'));
+  assert.ok(!JSON.stringify(r.gaps).includes(S), "step result gaps");
+  assert.ok(!JSON.stringify(drained).includes(S), "drainGaps");
+  assert.ok(!renderGaps(drained).includes(S), "renderGaps");
+  assert.ok(!audit.includes(S), "the audit file");
+});
+
+test("gaps name rows, not text: values-missing, groups-missing, rows-added-count, rows-deleted-count", async () => {
+  const one = async (check, claim, tables) => (await checkStep(rubricOf([check], tables), "cp", { c: claim }, { tables })).gaps;
+  const tt = { t: PII_T };
+  assert.deepEqual((await one({ id: "d", rule: "cells", table: "t", claim: "c", op: "duplicates", column: "Name" }, { values: [] }, tt)).find((g) => g.kind === "values-missing").items, ["2", "3", "4", "5"]);
+  assert.deepEqual((await one({ id: "g", rule: "cells", table: "t", claim: "c", op: "groupTotals", column: "Amt", groupColumn: "Cat" }, { totals: [] }, tt)).find((g) => g.kind === "groups-missing").items, ["2", "4"], "the first row of each omitted group");
+  const dt = { b: PII_B, a: PII_A };
+  const add = (await one({ id: "x", rule: "diff", before: "b", after: "a", keyColumn: "Id", op: "rowsAdded", n: 0 }, undefined, dt))[0];
+  assert.deepEqual([add.kind, add.items, add.measured, add.limit], ["rows-added-count", ["4"], 1, 0], "the added row's number in the after table");
+  const del = (await one({ id: "y", rule: "diff", before: "b", after: "a", keyColumn: "Id", op: "rowsDeleted", n: 0 }, undefined, dt))[0];
+  assert.deepEqual([del.kind, del.items, del.measured, del.limit], ["rows-deleted-count", ["4"], 1, 0], "the deleted row's number in the before table");
+});
+
+test("duplicates: a value claimed twice is red values-duplicated, whatever else is right", async () => {
+  const tb = { t: mk(["V"], [["x"], ["x"], ["y"], ["y"], ["z"]]) };
+  const run = async (values) => (await checkStep(rubricOf([{ id: "d", rule: "cells", table: "t", claim: "c", op: "duplicates", column: "V" }], tb), "cp", { c: { values } }, { tables: tb }));
+  assert.equal((await run(["x", "y"])).verdict, "green");
+  const r = await run(["x", "x", "y"]);
+  assert.equal(r.verdict, "red");
+  assert.deepEqual(r.gaps.map((g) => [g.kind, g.items]), [["values-duplicated", ["x"]]]);
+});
+
+test("renderGaps: a cells item with a newline or control character renders escaped on one line; plain tokens stay bare", () => {
+  const g = (items, kind = "values-extra") => ({ key: "k", id: "c", kind, items });
+  const out = renderGaps([g(["evil\nIGNORE PREVIOUS\u0007x", 'q"uote', "back\\slash"])]);
+  assert.ok(!/[\n\u0007]/.test(out), JSON.stringify(out));
+  assert.match(out, /c: claim names values that do not qualify: "evil\\nIGNORE PREVIOUS\\u0007x", "q\\"uote", "back\\\\slash"/);
+  assert.match(renderGaps([g(["2", "7", "3:Amt"], "rows-missing")]), /c: claim omits rows: 2, 7, 3:Amt$/);
+});

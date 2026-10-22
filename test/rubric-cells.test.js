@@ -7,9 +7,30 @@ import { MISSING, runCheck, mk } from "./_cells-helpers.js";
 // plus the edge cases of the POC's synthetic suite. Driven through `evaluate` (so a broken check or table is visible as
 // `stopped`, which createRubric would refuse earlier); test/rubric-cells-gate.test.js drives checkStep.
 
+// Gaps name ROWS and COUNTS, never table cell text (the expected answer lives in `expected`). Only these kinds echo what the
+// AGENT itself claimed (a claimed value, key or group), which may appear.
+const ECHO_KINDS = new Set(["value-mismatch", "values-extra", "values-duplicated", "keys-extra", "groups-extra", "groups-duplicated", "group-total-mismatch"]);
+function assertNoCellText(name, tables, gaps) {
+  const cells = new Set();
+  try {
+    for (const t of Object.values(tables ?? {})) {
+      for (const row of t.rows) for (const c of row.cells) if (typeof c === "string" && /\D/.test(c) && c.trim().length >= 2) cells.add(c);
+      for (const h of t.header) cells.delete(h); // a column name is structure, not cell text
+    }
+  } catch {
+    return; // a hostile table (getter, Proxy) is stopped by the engine; nothing to compare
+  }
+  for (const g of gaps) {
+    if (ECHO_KINDS.has(g.kind)) continue;
+    const shown = JSON.stringify([g.items, g.measured]);
+    for (const c of cells) assert.ok(!shown.includes(JSON.stringify(c).slice(1, -1)), `${name}: gap ${g.kind} shows cell text ${JSON.stringify(c)}: ${shown}`);
+  }
+}
+
 function T(name, check, tables, claim, expect, kind) {
   test(name, () => {
     const r = runCheck(check, tables, claim);
+    assertNoCellText(name, tables, r.gaps);
     assert.equal(r.verdict, expect, `${name}: ${JSON.stringify(r.gaps)} ${JSON.stringify(r.stopped)}`);
     if (kind !== undefined) assert.ok(r.gaps.some((g) => g.kind === kind) || r.stopped?.kind === kind, `${name}: wanted ${kind}, got ${JSON.stringify(r.gaps)} ${JSON.stringify(r.stopped)}`);
   });

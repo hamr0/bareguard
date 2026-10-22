@@ -25,8 +25,8 @@ import { parseBound, compareBounds, decideQuote, parseClaimValue, displayCanon, 
  * @typedef {Object} Gap
  * A red check, as data for the worker's retry. `key` is `${checkpoint}:${checkId}`
  * and is stable across retries; ordered rules carry `direction`. Lists are bounded. The `cells`/`table`/`diff` rules
- * (docs/product/cells-prd.md) mint gaps with their own `kind`s, `items` (row numbers, `row:column` cells or keys, as strings),
- * and `measured`/`limit` for a count or a claimed value; the expected answer is never in a gap (it is in `full.expected`).
+ * (docs/product/cells-prd.md) mint gaps with their own `kind`s, `items` (row numbers, `row:Column` cells, column names, or a value the agent itself claimed; as strings;
+ * never table cell text), and `measured`/`limit` for a count or a claimed value; the expected answer is never in a gap (it is in `full.expected`).
  * @property {string} key
  * @property {string} checkpoint
  * @property {string} check the rule name
@@ -1735,6 +1735,17 @@ export function numbersInQuote(claim, quote) {
 // --- renderGaps --------------------------------------------------------------
 
 /**
+ * One list of strings for a rendered sentence, each JSON-escaped (a quote, backslash, newline or other control character never
+ * lands raw). `bare` leaves a plain token (row numbers, `row:Column`, `Column`) unquoted so `rows-missing: 2, 7` stays readable.
+ */
+function quoteList(a, bare = false) {
+  return a.map((k) => {
+    const s = String(k);
+    return bare && /^[\w:.,-]+$/.test(s) ? s : JSON.stringify(s);
+  }).join(", ");
+}
+
+/**
  * The two gaps that render as a plain sentence instead of a JSON row (fwdloop's strike detection keys on these
  * exact strings). null = not one of them, or a field is missing / the wrong type / unreadable: use the JSON row.
  */
@@ -1756,12 +1767,12 @@ function renderSentence(g, more = 0) {
       const l = g.limit;
       const num = (v) => typeof v === "number" || typeof v === "string";
       const meas = num(m) && num(l) ? ` (${m} vs ${l})` : num(m) ? ` (${m})` : "";
-      return `${g.id}: ${CELLS_GAP_KINDS[kind]}${meas}${items.length ? `: ${items.join(", ")}` : ""}${n > 0 ? ` and ${n} more` : ""}`;
+      return `${g.id}: ${CELLS_GAP_KINDS[kind]}${meas}${items.length ? `: ${quoteList(items, true)}` : ""}${n > 0 ? ` and ${n} more` : ""}`;
     }
     if (kind === "extra-keys") {
       const { keys, allowed } = g;
       if (!Array.isArray(keys) || !Array.isArray(allowed) || allowed.length === 0) return null;
-      const q = (a) => a.map((k) => JSON.stringify(String(k))).join(", ");
+      const q = quoteList;
       const al = q(allowed);
       const n = typeof g.itemsTotal === "number" ? g.itemsTotal - keys.length : 0;
       return `artifact has key(s) ${q(keys)}${n > 0 ? ` and ${n} more` : ""} besides ${al}; the check reads ${al} only, so put the whole answer in ${al}`;
