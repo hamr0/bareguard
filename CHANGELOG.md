@@ -3,6 +3,15 @@
 All notable changes to bareguard are documented here. Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [SemVer](https://semver.org/).
 
 
+## [Unreleased]
+
+### Added
+
+- **`cells`, `table` and `diff` rubric rules (ruling #67, `docs/product/cells-prd.md`).** Signed checks that recompute a declared op over typed table rows the caller passes in `opts.tables[name]` (`{ header, rows: [{ rowNumber, cells }] }`, every cell a string) and compare it with the step's claim. `cells` reads (23 ops: counts, sums, averages, median, min/max, `found`, `lookup`, `rows`, `topN`, `uniqueCount`, `duplicates`, `groupTotals`, `percentOfTotal`, `band`, `daysBetween`, `daysSince`, `earliest`, `latest`); `table` has shape checks and row math (`allNumbers`, `allDates`, `noEmpty`, `noDuplicates`, `rowCount`, `rowMath`); `diff` compares a before and an after table by a signed key (`onlyColumnsChanged`, `untouchedIdentical`, `rowsAdded`, `rowsDeleted`, `newColumnRule`). All three are in `rubricVocabulary` with each op's signed fields and claim shape; they are rules, not primitives (`primitives.json` is unchanged).
+- **Reading rules that are now SemVer surface.** Numbers: optional sign, then an optional glued `$`/`€`/`£`, proper thousands groups, decimals (`-$5` is read, `$-5`, `1e3`, `12%`, `.5`, `(500)` are not). Dates: a format signed per column from `YYYY-MM-DD`, `DD/MM/YYYY`, `MM/DD/YYYY`, `D MMM YYYY`, checked against the real calendar, never guessed. Blank = whitespace only; aggregates skip blanks; a blank row-math operand is red `empty-operand` unless the check signs `allowEmpty`. Float ops are green within an absolute 0.005 (signed `tolerance` overrides); counts, row sets and days are exact.
+- **New gap kinds and fault kinds.** Each cells/table/diff gap has its own `kind` (`rows-extra`, `rows-missing`, `value-mismatch`, `unreadable-cell`, `empty-operand`, `band-mismatch`, `table-too-large`, ...), with `items` as strings and the expected answer only in the new `full.expected`. `renderGaps` renders them as sentences with an `and N more` tail. New `Fault.kind` values `table-invalid` and `check-invalid`.
+- **Size caps.** A table over 500,000 cells (rows x columns) or 16 MiB of characters is red `table-too-large`; a claim list or map over 100,000 entries is red `claim-too-large` (`rubricVocabulary.cells`).
+
 ## [0.25.1] - 2026-10-19
 
 ### Fixed

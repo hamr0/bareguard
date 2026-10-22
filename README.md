@@ -173,6 +173,22 @@ console.log(quoteIn("time", " * lead time", { wholeLines: true }));   // { ok: f
 console.log(numbersInQuote("4 hours", "2 weeks"));                 // { ok: false, missing: ["4"] }
 ```
 
+Numbers in a table: the `cells`, `table` and `diff` rules recompute a signed op (a count, a sum, the rows over 500, days since a due date, an aging band, a before/after diff) over typed rows you pass in `opts.tables`, and compare it with the value the step claims. The signer picks the op, the columns and the date format per column (`YYYY-MM-DD`, `DD/MM/YYYY`, `MM/DD/YYYY` or `D MMM YYYY`); the step supplies values only, so it cannot author its own check. A blank operand, an unreadable cell or a table over the cap (500,000 cells) is red or `stopped`, never a quiet zero.
+
+```js
+const spec = { schema: 1, goal: "List every expense over 500", checkpoints: { answer: { gating: true, checks: [
+  { id: "over-500", rule: "cells", table: "expenses", claim: "answer", op: "rows",
+    where: [{ column: "Amount", cmp: "gt", value: 500 }] },
+] } } };
+const rubric = createRubric(spec);
+const table = { header: ["Description", "Amount"], rows: [
+  { rowNumber: 2, cells: ["Taxi", "36.20"] }, { rowNumber: 3, cells: ["Flight", "731.25"] }] };
+const r = await checkStep(rubric, "answer", { answer: { rows: [2, 3] } }, { tables: { expenses: table } });
+// r.verdict === "red"; r.gaps[0] -> { kind: "rows-extra", items: ["2"], ... }; r.full.expected -> [{ check: "over-500", rows: [3] }]
+```
+
+The full op list, claim shapes, number and date reading, tolerance and blank rules are in `bareguard.context.md` and in `rubricVocabulary.rules.cells.ops`.
+
 `advanceOn` matches an action's `type` or its `tool`; give the advance a reserved name no real tool uses (e.g. `fwdloop.advance`), or the rubric would run on that tool's ordinary calls. Denies on the advance: `rubric.unminted`, `rubric.exhausted`, `rubric.stopped`, `rubric.red`, `rubric.output-mismatch`, `rubric.needs-accept`, and `rubric.invalid` (the config was swapped after construct). `accept: "later"` is for a harness that parks and resumes in another process: it records the answer with `gate.recordAccept(...)`, which is **harness-only**. Pass a stable `runId` (and audit path) on resume, or red counts start fresh. Full contract: [`docs/product/rubric-prd.md`](docs/product/rubric-prd.md); harness guide: [`bareguard.context.md`](bareguard.context.md#rubric-signed-checks-that-gate-an-advance).
 
 ## Facts you computed: `annotate`

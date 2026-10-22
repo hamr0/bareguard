@@ -1,12 +1,12 @@
 ---
 type: product
-title: "cells — a signed rubric check computed over caller-given table rows (PROPOSED)"
-status: proposed
+title: "cells — a signed rubric check computed over caller-given table rows (BUILT, unreleased)"
+status: built on feat/cells, unreleased
 ---
 
-# cells — PROPOSED spec
+# cells — spec
 
-Status: PROPOSED. POC done (2026-10-22), defaults ruled. Not built. No version picked.
+Status: built on feat/cells, unreleased. POC done (2026-10-22), defaults ruled, build details settled in §10. No version picked (hamr's pick).
 Parent spec: [rubric-prd.md](rubric-prd.md) (laws §2, vocabulary §4). Ruling: #67 in rubric-prd.md §12.
 
 ## 0. In one paragraph
@@ -75,8 +75,8 @@ fwdloop asked for a rubric check computed over table cells.
   non-string cell, a ragged row, a duplicate header, a bad tolerance or `asOf`) is `stopped`; any
   unexpected internal exception is `stopped`, never green. Gaps show claimed values and row numbers; the
   expected answer stays in `full`, not in gaps.
-- DATES are FLEXIBLE: the signer picks a date format PER COLUMN from a closed list (proposed:
-  `YYYY-MM-DD`, `DD/MM/YYYY`, `MM/DD/YYYY`, `D MMM YYYY`; exact list fixed at build). bareguard reads
+- DATES are FLEXIBLE: the signer picks a date format PER COLUMN from a closed list (fixed at build:
+  `YYYY-MM-DD`, `DD/MM/YYYY`, `MM/DD/YYYY`, `D MMM YYYY`; details in §10). bareguard reads
   exactly that format with real-calendar validation and never guesses ("03/04" is never auto-read). fwd
   prefers this over caller-side ISO conversion: one implementation inside the checked code, and the
   signer sees the format. Every real fwd input is ISO today.
@@ -97,7 +97,7 @@ cell a string, each row carrying `rowNumber` (2-based, sheet-style). bareguard g
 signed check. No model, no user regex, no free formula language. Since bareguard now reads numbers and
 dates out of those strings (Law 11, §2), that reading is SemVer surface.
 
-## 4. Op list (PROPOSED, closed)
+## 4. Op list (closed; built as listed, §10)
 
 1. **Read / aggregate over a signed range of one column** (`cells`). `count`, `countEmpty`, `countIf`,
    `sum`, `sumIf`, `average`, `averageIf`, `median`, `min`, `max`, `found`, `lookup` (the cell in column
@@ -124,15 +124,19 @@ About 30 ops in all, so `rubricVocabulary` must describe each op's signed fields
 See §2: exact for counts, row sets, days and uniqueCount; absolute 0.005 default for float ops; a signed
 per-check `tolerance` overrides.
 
-## 6. OPEN
+## 6. OPEN (after the build)
 
-- What bareloop's "doc checks" covers (likely tables inside documents, which the caller turns into rows,
-  so the same rules).
-- The exact closed date-format list.
-- Table size cap and its value (the POC had none; the build needs one like cited's `QUOTE_WORK_CAP`).
-- `groupTotals` claim shape (map vs array of pairs). A map has agent-chosen keys (null-proto copies);
-  array-of-pairs is an option at build.
-- Law 5 fit (conditions are a closed operator set, not a regex): believed to fit, not separately ruled.
+SETTLED at build (details in §10):
+
+- The exact closed date-format list: `YYYY-MM-DD`, `DD/MM/YYYY`, `MM/DD/YYYY`, `D MMM YYYY`.
+- Table size cap and its value: 500,000 cells and 16 MiB of characters per table; over = red `table-too-large`.
+- `groupTotals` claim shape: an array of `{ group, total }` pairs (no agent-chosen map keys).
+- Law 5 fit: conditions are a closed operator set with typed signed values, no regex, no free text; built that way.
+
+STILL OPEN:
+
+- What bareloop's "doc checks" covers (likely tables inside documents, which the caller turns into rows, so the same rules).
+- Not built, no caller asked: per-row `daysBetween` over two date columns (the per-row date mode exists for `daysSince`; `daysBetween` takes two single cells), business days, OR conditions.
 
 ## 7. Consumers
 
@@ -165,4 +169,39 @@ real tries in place and runs synthetic cases per op.
 
 ## 9. Next
 
-Build plan to hamr, then build, then tell fwd and loop the version.
+Self-review, branch review, hamr picks the version, then tell fwd and loop the version.
+
+## 10. Build details (feat/cells, decided at build; each is SemVer surface once released)
+
+How a table reaches `checkStep`: `opts.tables[name]` = `{ header: string[], rows: [{ rowNumber, cells: string[] }] }`, referenced by the
+signed check's `table` (`before` / `after` for `diff`). It is NOT a signed `spec.inputs` entry (no sha): like `measurements` it is a value
+the caller measures (Law 11); the signed part is the op, the columns and the formats. A missing, ragged or non-string table is `stopped`
+(fault `table-invalid`); a signed column, row or field that cannot apply is `stopped` (`check-invalid`). Each table is copied once per
+`checkStep`. The claim is read from the output field the check names in `claim` (a plain object; keys per op in `rubricVocabulary`).
+
+Rule shape: `cells` takes `table`, `claim`, `op` + op fields; `table` takes `table`, `op` + op fields; `diff` takes `before`, `after`,
+`keyColumn`, `op` + op fields. `createRubric` refuses a signed check the engine would stop on (unknown op/field/cmp/format, a missing
+required field, an unused or missing `dateFormats` entry, a bad `asOf`, a negative `tolerance`, overlapping bands, a `tolerance` on an
+exact op); the same validator runs again at check time, where it yields `stopped` `check-invalid`.
+
+Readers: number = `[+-]?[$€£]?` + proper thousands groups + optional decimals (sign BEFORE symbol: `-$5` read, `$-5` refused), whitespace
+around is ignored. Dates: `DD/MM/YYYY` and `MM/DD/YYYY` need two-digit day and month; `D MMM YYYY` takes a 1- or 2-digit day and the English
+three-letter month in ANY letter case (`Sept` and full names are not read); all four check the real calendar, years 1-9999. `asOf`, condition
+bounds and `between` dates are always signed as `YYYY-MM-DD`, whatever the column's format. `daysSince` = `asOf` minus the date.
+
+Ops: `daysSince` with `cell` claims `{value}`; with `column` it is the per-row mode and claims `{days: {"<row>": n}}`. `band` takes signed
+`bands: [{name, gt|gte, lt|lte}]` and claims `{bands: {"<row>": "<name>"}}`; with `asOf` the column is a date column and the banded number is the
+days since. `diff.untouchedIdentical` takes `exceptKeys` (keys, not row numbers: a delete may renumber). `rowsAdded`/`rowsDeleted` require `n`.
+`rows` by keys: `{keys: [...]}` compared as text (`valueKind: "number"` reads numbers); `lookup` requires `valueKind` (text, number, date).
+A removed column is always red in `diff`; a new column is red unless listed (`onlyColumnsChanged`) or unless the op is `newColumnRule`.
+
+Gaps: own kinds (listed in `CELLS_GAP_KINDS`), `items` as strings (20 max, `itemsTotal` when cut), `measured`/`limit` for counts and the claimed
+value; the expected answer is in `full.expected` only. Faults: `table-invalid`, `check-invalid`, `exception`.
+
+Size caps (measured 2026-10-22 on the dev machine, load < 1; ms, median of 3): at 500,000 cells (50,000 rows x 10) snapshot 34, sum 48,
+median 51, countIf 48, rows 61, duplicates 60, groupTotals 67, topN 86, per-row daysSince 93, band with a 100k-key claim 75-160, rowMath 59,
+diff of one changed cell 161 (two tables); worst adversarial: diff with EVERY cell changed 330-430 ms. Measured earlier under load, over the cap
+(not kept): that every-cell diff at 1,000,000 cells took 739 ms and a one-cell diff at 2,000,000 cells 656 ms, so the cap is 500,000 cells and 16 MiB of characters (a single 32 MiB cell scans in about 170 ms). Over a table cap = red `table-too-large`
+(like `cited`'s source-too-large, not stopped: the cap is deterministic and the verdict is a pure function of the inputs); claim lists and maps over
+100,000 entries are red `claim-too-large`.
+
