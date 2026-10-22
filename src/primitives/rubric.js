@@ -1369,6 +1369,8 @@ function checkFormList(d, v, where) {
   if (v.length < 1 || v.length > d.list.max) throw fail(where, `must hold 1 to ${d.list.max} items when a list`);
   v.forEach((e, i) => checkValue({ ...d, list: undefined }, e, `${where}[${i}]`));
   if (new Set(v).size !== v.length) throw fail(where, "must not contain duplicates");
+  // a string list (unit) is matched against quote text normalized by normalizeForQuote: entries equal after it are one entry (the second is dead)
+  if (d.type === "string" && new Set(v.map((e) => normalizeForQuote(e))).size !== v.length) throw fail(where, "must not contain duplicates (entries equal after whitespace normalization)");
 }
 
 function checkValue(d, v, where) {

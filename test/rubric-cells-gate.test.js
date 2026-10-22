@@ -640,3 +640,16 @@ test("renderGaps: a cells item with a newline or control character renders escap
   assert.match(out, /c: claim names values that do not qualify: "evil\\nIGNORE PREVIOUS\\u0007x", "q\\"uote", "back\\\\slash"/);
   assert.match(renderGaps([g(["2", "7", "3:Amt"], "rows-missing")]), /c: claim omits rows: 2, 7, 3:Amt$/);
 });
+
+test("gap sentences whose items are row numbers say 'row'", async () => {
+  const { CELLS_GAP_KINDS } = await import("../src/primitives/rubric-cells.js");
+  for (const k of ["values-missing", "groups-missing", "rows-added-count", "rows-deleted-count", "rows-missing", "rows-extra", "rows-duplicated", "tied-rows-missing"]) assert.match(CELLS_GAP_KINDS[k], /row/, k);
+  assert.equal(renderGaps([{ key: "k", id: "d", kind: "values-missing", items: ["2", "3"] }]), "d: claim omits duplicated values in rows: 2, 3");
+});
+
+test("cited money unit list: entries equal after whitespace normalization are refused; different units are accepted", () => {
+  const mk1 = (unit) => () => createRubric({ schema: 1, goal: "g", inputs: [{ name: "o", sha256: "0".repeat(64) }], checkpoints: { cp: { gating: true, checks: [{ id: "c", rule: "cited", claims: "claims", source: "o", decides: [{ valueKind: "money", unit, op: "lt", value: 400 }] }] } } });
+  assert.throws(mk1(["US dollars", "US dollars "]), /must not contain duplicates/);
+  assert.throws(mk1(["US dollars", "US  dollars"]), /must not contain duplicates/);
+  assert.doesNotThrow(mk1(["US dollars", "dollars"]));
+});
