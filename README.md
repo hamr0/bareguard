@@ -35,7 +35,7 @@
 
 Both share one audit log of everything the agent tried, and the same hard caps (budget, limits) that halt with a human in the loop instead of silently.
 
-**What it isn't** — bareguard owns one layer and is honest about the rest. It's not a content filter (toxicity / PII / schema → `guardrails-ai`), not a sandbox (containment → Docker / gVisor), and not auth (who the actor *is* → upstream; per-principal policy rides `action._ctx`). It decides the action; it never runs it. It's also not an LLM judge — a judge runs on your side, and bareguard takes its answer as a fact (via `annotate`, or a caller-measured number in the rubric).
+**What it isn't** — not a content filter, not a sandbox, not auth, and it never runs an LLM. It decides the action; it never runs it. A judge runs on your side and bareguard takes its answer as a fact (via `annotate`, or a caller-measured number in the rubric).
 
 ## Install
 
@@ -71,20 +71,20 @@ if (decision.outcome === "allow") {
 }
 ```
 
-`fs.readScope` and `fs.writeScope` are separate, deny-by-default lists — a folder listed only in `writeScope` isn't readable, and file actions with neither list configured are denied outright, not left "no opinion." `fs.deny` is an optional extra layer *inside* whatever the scopes already allow, never a substitute for one. Deny-by-default here for the same reason the rest of this file's structure does: an allow-list mistake (a scope you forgot to add) fails **closed**, not open. Scope roots must be real paths: a root that is (or sits under) a symlink throws at construct and denies `fs.<scope>.symlinkRoot` at check time, since resolving it would silently move the scope to the link's target. On macOS `os.tmpdir()`, `/tmp` and `/etc` are symlinks — pass `fs.realpathSync(...)` of them.
+`fs.readScope` and `fs.writeScope` are separate and deny-by-default (unset or `[]` = nothing allowed). Scope roots must be real paths, not symlinks. Detail: [`bareguard.context.md`](bareguard.context.md#gotchas).
 
 ## The primitives
 
-Small files, each readable in a sitting. The gate runs them in a fixed order (**deny → ask → scope → default**, first match wins). Building tool-calling automation? Read **`primitives.json`** first — a compact, machine-readable menu of every verb (28 entries across gate · classify · matching · content · secrets · audit · axis-b · rwx · rubric), each carrying `when`, `import`, `signature`, `fails`, and a runnable `example`, generated from the source so it never drifts. Browse it on unpkg (`unpkg.com/bareguard/primitives.json`), or `import menu from 'bareguard/primitives.json' with { type: 'json' }`.
+Small files, each readable in a sitting. The gate runs them in a fixed order (**deny → ask → scope → default**, first match wins). Building tool-calling automation? Read **`primitives.json`** first, a machine-readable menu of every verb (`when`, `import`, `signature`, `fails`, `example`), generated from source. Also on unpkg: `unpkg.com/bareguard/primitives.json`.
 
 - **Scope what runs** — `bash` / `fs` / `net` bound which commands, paths, and domains are reachable. `net` gates on **any action carrying a `url`/`args.url` field**, not on `action.type === "fetch"`.
 - **Tier what's dangerous** — `bash.classify` ranks a command **safe → destructive → super-destructive**; `content` denies `rm -rf /` / `DROP TABLE` outright.
 - **Bound what accumulates** — `budget` caps spend, tokens, or any countable resource; `limits` caps turns / children / depth — both **halt with a human in the loop**, shared across processes.
 - **Gate on meaning, not text** — `flags` reads a structured field's value (e.g. a memory engine's `provenance`) straight off the action, no regex.
-- **Grade the work** — `rubric` checks word counts, headings, required phrases, quotes found in a frozen source (optionally with the price, time, date or a word such as a flight number in each quote decided and bound to the claim; a decide without `op` only ties the claim's value to the quote; `result.full.evidence` then says where in each quote the check read, so a harness can highlight the proof), and caller-measured numbers, then gates the next step on green.
+- **Grade the work** — `rubric`: signed checks on the work (words, headings, phrases, quoted proof, table math, caller-measured numbers); the next step is gated on green. See [Rubric](#rubric-checks-the-agent-must-green).
 - **Prove what happened** — `secrets` auto-redacts every audit line **by default**; one `audit` JSONL joins each request to its outcome and its approval.
 
-Full per-primitive reference lives in the **[Usage Guide](docs/product/usage-guide.md)** and **[Integration Guide](bareguard.context.md)**. Tested across Linux + macOS + Windows × Node 22 + 24.
+Full per-primitive reference lives in the **[Usage Guide](https://github.com/hamr0/bareguard/blob/main/docs/product/usage-guide.md)** and **[Integration Guide](bareguard.context.md)**. Tested across Linux + macOS + Windows × Node 22 + 24.
 
 ## rwx and rwxmap
 
@@ -109,13 +109,13 @@ const gate = new Gate({
 });
 ```
 
-An unlisted tool, command, or agent is **denied, never asked** (`rwx.unlisted`) — the fix is to add a row, not widen a letter. A starter file ships at [`bareguard.rwx.json`](bareguard.rwx.json). For a spec-less site met mid-run, `gate.add(entries)` tightens the running gate's own tools map (tighten-only); `addToGates(gates, entries)` fans one batch out to a fleet. Full contract: [`bareguard.context.md`](bareguard.context.md#runtime-growth-for-spec-less-sites--gateadd-gaterwxtools-addtogates-2321).
+An unlisted tool, command, or agent is **denied, never asked**; add a row, don't widen a letter. A starter file ships at [`bareguard.rwx.json`](bareguard.rwx.json); `gate.add(entries)` / `addToGates(gates, entries)` grow a running gate tighten-only. Full contract: [`bareguard.context.md`](bareguard.context.md#runtime-growth-for-spec-less-sites--gateadd-gaterwxtools-addtogates-2321).
 
-Hand-labeling a fleet's tools doesn't scale — **[rwxmap](https://github.com/hamr0/rwxmap)** [WIP] labels every OpenAPI operation r/w/x as a mechanical starting point, marking rows it's unsure of (`tight`/`loose`) for a human to review. Its exporter (`exportGate`) writes those labels straight into a bareguard `rwx` config, and `askOn: "loose"` routes an unreviewed row to a human instead of allowing it silently; a site met mid-run goes through `gate.add()`/`addToGates()` instead — bareguard never imports rwxmap. rwxmap's labels are suggestions, not verdicts: it never refuses, it just labels. Unlike a bare MCP hint that nothing enforces, here the gate enforces every row, and the review markers say which ones still need a human.
+**[rwxmap](https://github.com/hamr0/rwxmap)** [WIP] labels every OpenAPI operation r/w/x as a starting point and marks unsure rows (`tight`/`loose`) for human review; its exporter writes a bareguard `rwx` config, and `askOn: "loose"` sends unreviewed rows to a human. bareguard never imports it. See [marker-carrying entries](bareguard.context.md#marker-carrying-entries--rwxaskon-d103-settled-with-rwxmap-2026-09-24).
 
 ## Rubric (checks the agent must green)
 
-A **rubric** is a signed list of deterministic checks bound to a goal. bareguard never runs an LLM; it checks deterministic facts against declared, enumerated rules: word counts, headings present and in order, phrases carried, quotes found in a frozen source, and numbers a caller measured. It mints a verdict (`green` / `red` / `stopped`) and, at a checkpoint the operator marks **gating**, denies the advance action unless the verdict is green. The Axis A floor always runs first and a green verdict never turns a floor deny into an allow.
+A **rubric** is a signed list of deterministic checks bound to a goal. bareguard mints a verdict (`green` / `red` / `stopped`) and, at a checkpoint marked **gating**, denies the advance action unless it is green. The Axis A floor runs first; a green verdict never turns a floor deny into an allow.
 
 Three roles:
 - **The runner** (your harness) drafts the rubric from `rubricVocabulary`, drives the agent, takes any measurements and calls `gate.checkStep`.
@@ -138,106 +138,53 @@ Three roles:
 Per-rule detail (fields, examples, what turns red): [rubric-rules.md](https://github.com/hamr0/bareguard/blob/main/docs/product/rubric-rules.md). Exact field shapes: `rubricVocabulary`.
 
 ```js
-import { Gate, createRubric, rubricSha, renderGaps, quoteIn, numbersInQuote } from "bareguard";
+import { Gate, createRubric, rubricSha } from "bareguard";
 
-// 1. The runner drafts the spec from `rubricVocabulary`; the human signs `rubricSha(spec)`.
-const spec = {
-  schema: 1, goal: "Write the status report", inputs: [],
-  checkpoints: {
-    draft: { gating: true, checks: [
-      { id: "short",  rule: "maxWords", field: "text", value: 120 },
-      { id: "heads",  rule: "sectionOrder", field: "text", names: ["Summary", "Risks"] },
-    ] },
-    send: { gating: true, requiresHuman: true, checks: [   // accept: "live" is the default
-      { id: "has-ref", rule: "mustCarry", field: "text", phrases: ["PROJ-42"] },
-    ] },
-  },
-  maxReds: 3,
-};
-createRubric(spec);                                   // throws on an unknown check type or bad shape
-const signed = rubricSha(spec);                       // the human signs this fingerprint
-
-// 2. The gate holds the signed rubric. Stable runId = counts survive a restart.
+const spec = { schema: 1, goal: "Write the status report", inputs: [],
+  checkpoints: { draft: { gating: true, checks: [
+    { id: "short", rule: "maxWords", field: "text", value: 120 },
+    { id: "heads", rule: "sectionOrder", field: "text", names: ["Summary", "Risks"] },
+  ] } }, maxReds: 3 };
+createRubric(spec);                                    // throws on a bad shape
 const gate = new Gate({
-  rubric: { spec, sha256: signed, advanceOn: ["step.done"] },
-  runId: "report-2026-10-08",
-  audit: { path: null },   // no audit file, so every run starts clean; with a real audit path a stable runId RESUMES state (reds, ACCEPTs) across runs
-  humanChannel: async (event) => ({ decision: "allow" }),   // event.rubric = { rubricSha, checkpoint, outputSha, verdict, gaps }
+  rubric: { spec, sha256: rubricSha(spec), advanceOn: ["step.done"] },   // the human signs rubricSha(spec)
+  audit: { path: null }, humanChannel: async () => ({ decision: "allow" }),
 });
 await gate.init();
-
-// 3. Grade at the checkpoint. A red returns a gap (no rule text) for the retry.
-let r = await gate.checkStep("draft", "Summary\nall good");        // no Risks heading
-console.log(r.verdict, renderGaps(gate.drainGaps()));              // red + a one-string gap render (stable, for stuck-detection)
 const advance = (r) => ({ type: "step.done", checkpoint: "draft", outputSha: r.outputSha });
-console.log((await gate.check(advance(r))).rule);                  // rubric.red
 
-// 4. Fixed -> green -> the advance is allowed (the Axis A floor ran first).
+let r = await gate.checkStep("draft", "Summary\nall good");   // no Risks heading
+console.log(r.verdict, (await gate.check(advance(r))).rule);   // red rubric.red
 r = await gate.checkStep("draft", "Summary\nall good\nRisks\nnone");
-console.log(r.verdict, (await gate.check(advance(r))).outcome);    // green allow
-
-// 5. requiresHuman: a green advance asks humanChannel once per outputSha.
-const out = "Report for PROJ-42";
-const s = await gate.checkStep("send", out);
-const d = await gate.check({ type: "step.done", checkpoint: "send", outputSha: s.outputSha });
-console.log(s.verdict, d.outcome, d.rule);                          // green allow humanChannel.allow
-
-// Gate-less agents: the pure helpers.
-console.log(quoteIn("lead time", "The **lead  time** fell"));      // { ok: true }  (** and whitespace forgiven)
-console.log(quoteIn("time", " * lead time", { wholeLines: true }));   // { ok: false, why: "not-found" }  (opt-in: whole lines only)
-console.log(numbersInQuote("4 hours", "2 weeks"));                 // { ok: false, missing: ["4"] }
+console.log(r.verdict, (await gate.check(advance(r))).outcome); // green allow
 ```
 
-Numbers in a table: the `cells`, `table` and `diff` rules recompute a signed op (a count, a sum, the rows over 500, days since a due date, an aging band, a before/after diff) over typed rows you pass in `opts.tables`, and compare it with the value the step claims. A table a check reads is a signed input (`spec.inputs`, `sha256: tableSha(table)`, over the typed rows), like a `cited` source: a different table is `stopped`. The signer picks the op, the columns and the date format per column (`YYYY-MM-DD`, `DD/MM/YYYY`, `MM/DD/YYYY` or `D MMM YYYY`); the step supplies values only, so it cannot author its own check. A blank operand, an unreadable cell or a table over the cap (500,000 cells) is red or `stopped`, never a quiet zero.
-
-```js
-import { createRubric, checkStep, tableSha } from "bareguard";
-const table = { header: ["Description", "Amount"], rows: [
-  { rowNumber: 2, cells: ["Taxi", "36.20"] }, { rowNumber: 3, cells: ["Flight", "731.25"] }] };
-const spec = { schema: 1, goal: "List every expense over 500",
-  inputs: [{ name: "expenses", sha256: tableSha(table) }],   // the table is LOCKED: a different table is stopped
-  checkpoints: { answer: { gating: true, checks: [
-    { id: "over-500", rule: "cells", table: "expenses", claim: "answer", op: "rows",
-      where: [{ column: "Amount", cmp: "gt", value: 500 }] },
-  ] } } };
-const rubric = createRubric(spec);
-const r = await checkStep(rubric, "answer", { answer: { rows: [2, 3] } }, { tables: { expenses: table } });
-// r.verdict === "red"; r.gaps[0] -> { kind: "rows-extra", items: ["2"], ... }; r.full.expected -> [{ check: "over-500", rows: [3] }]
-```
-
-The full op list, claim shapes, number and date reading, tolerance and blank rules are in `bareguard.context.md` and in `rubricVocabulary.rules.cells.ops`.
-
-`advanceOn` matches an action's `type` or its `tool`; give the advance a reserved name no real tool uses (e.g. `fwdloop.advance`), or the rubric would run on that tool's ordinary calls. Denies on the advance: `rubric.unminted`, `rubric.exhausted`, `rubric.stopped`, `rubric.red`, `rubric.output-mismatch`, `rubric.needs-accept`, and `rubric.invalid` (the config was swapped after construct). `accept: "later"` is for a harness that parks and resumes in another process: it records the answer with `gate.recordAccept(...)`, which is **harness-only**. Pass a stable `runId` (and audit path) on resume, or red counts start fresh. Full contract: [`docs/product/rubric-prd.md`](docs/product/rubric-prd.md); harness guide: [`bareguard.context.md`](bareguard.context.md#rubric-signed-checks-that-gate-an-advance).
+`advanceOn` matches an action's `type` or `tool`: give the advance a reserved name no real tool uses (e.g. `fwdloop.advance`), or the rubric would run on that tool's ordinary calls. Deny rules, `accept: "later"` / `gate.recordAccept`, and resuming with a stable `runId`: [`bareguard.context.md`](bareguard.context.md#rubric-signed-checks-that-gate-an-advance), [`rubric-prd.md`](https://github.com/hamr0/bareguard/blob/main/docs/product/rubric-prd.md).
 
 ## Facts you computed: `annotate`
 
-bareguard never runs an LLM; it checks deterministic facts against declared, enumerated rules. `annotate` is transport for a fact you computed; for checks bareguard grades itself, see [Rubric](#rubric-checks-the-agent-must-green). To grade the agent's work, the rubric is now the way.
-
-```js
-// a fact you computed (a deterministic check); bareguard buffers it and rides the next ask
-await gate.annotate({ surface: true, verdict: "broke", where: "you said under €300; the booking is €400" });
-const facts = gate.drainAnnotations(); // feed them back to the agent, or read them off the audit line
-```
-
-Reversibility is read from the **gated action's type** via `axisB: { reversible: [...] }` — never from the fact, the agent, or the model. Full contract: [`bareguard.context.md`](bareguard.context.md#recipe-11-axis-b--surface-a-return-time-judge-fact-on-the-next-approval).
+`annotate` is transport for a fact you computed (bareguard never decides it): `await gate.annotate({ surface: true, verdict: "broke", where: "..." })`, then `gate.drainAnnotations()`. Reversibility is read from the gated action's type via `axisB.reversible`, never from the fact. Contract: [`bareguard.context.md`](bareguard.context.md#recipe-11-axis-b--surface-a-return-time-judge-fact-on-the-next-approval).
 
 ## The bare ecosystem
 
-Local-first, composable agent infrastructure — mix and match, each module works standalone. **Core:**
+Local-first, composable agent infrastructure. Same API patterns throughout —
+mix and match, each module works standalone.
 
-```js
-const ctx      = await memory.recall(goal);    // litectx   → ranked context
-const action   = await agent.next(goal, ctx);  // bareagent → a proposed action
-const decision = await gate.check(action);     // bareguard → allow / deny / ask-a-human
-if (decision.outcome === "allow") await run(action);
-```
+**Core** — the brain, the gate, the memory.
 
 - **[bareagent](https://npmjs.com/package/bare-agent)** — the think→act→observe loop. *Goal in → coordinated actions out.* Replaces LangChain, CrewAI, AutoGen.
 - **[bareguard](https://npmjs.com/package/bareguard)** — the single gate every action passes through. *Action in → allow / deny / ask-a-human out. Work in → green / red.* Replaces hand-rolled allowlists and scattered policy code.
 - **[litectx](https://npmjs.com/package/litectx)** — tree-sitter code + memory graph with activation decay, plus lightweight context engineering (write · select · compress · isolate). *Query in → ranked context out.*
-- **[rwxmap](https://github.com/hamr0/rwxmap)** [WIP] — labels every OpenAPI operation r/w/x as a starting point, marked for review. *API spec in → per-operation letter out.* Exports straight into bareguard's `rwx` mode.
 
-**Optional reach** — give the agent hands: **[barebrowse](https://npmjs.com/package/barebrowse)** (a real browser, replaces Playwright/Selenium/Puppeteer), **[baremobile](https://npmjs.com/package/baremobile)** (Android + iOS control, replaces Appium/Espresso/XCUITest), **[beeperbox](https://github.com/hamr0/beeperbox)** (50+ messaging networks via one MCP server, replaces Twilio/per-platform bot APIs).
+**Add-on for bareguard** — labels API operations for the gate.
+
+- **[rwxmap](https://github.com/hamr0/rwxmap)** [WIP] — labels every OpenAPI operation r/w/x as a starting point, marked for review. *API spec in → per-operation letter out.* The harness runs it offline; the file it writes goes straight into bareguard's `rwx` mode. bareguard never runs or depends on it.
+
+**Optional reach** — give the agent hands.
+
+- **[barebrowse](https://npmjs.com/package/barebrowse)** — a real browser for agents. *URL in → pruned snapshot out.* Replaces Playwright, Selenium, Puppeteer.
+- **[baremobile](https://npmjs.com/package/baremobile)** — Android + iOS device control. *Screen in → pruned snapshot out.* Replaces Appium, Espresso, XCUITest.
+- **[beeperbox](https://github.com/hamr0/beeperbox)** — 50+ messaging networks via one MCP server (headless Beeper Desktop in Docker). *Chat in → unified message stream out.* Replaces Twilio, per-platform bot APIs.
 
 **Wiring it into a real agent?** Hand your AI assistant `bareguard.context.md` (from `node_modules/bareguard/`) and describe your setup — it has the `humanChannel` patterns, shared-budget-across-processes setup, eval order, audit format, and 10+ wiring recipes.
 
