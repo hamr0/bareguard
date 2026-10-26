@@ -101,6 +101,7 @@ end -> human ACCEPT
 - `in` / `notIn`, `atMost`, `max` / `min`: value checks.
 - `cited`: every claim's quote is in the frozen input with its numbers.
 - `complete`: every item of a list is covered by a claim.
+- `cells`, `table`, `diff`: recompute a signed op over caller-given table rows (shipped 0.26.0, RULED #67); spec in [cells-prd.md](cells-prd.md).
 - Caller-measured: `notWorse`, `commandExit`, `patternAbsent`, `filesChanged`.
 - `judged`: `locate` or `verdict` judge question (§5).
 

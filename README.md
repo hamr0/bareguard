@@ -75,7 +75,7 @@ if (decision.outcome === "allow") {
 
 ## The primitives
 
-Small files, each readable in a sitting. The gate runs them in a fixed order (**deny → ask → scope → default**, first match wins). Building tool-calling automation? Read **`primitives.json`** first — a compact, machine-readable menu of every verb (27 entries across gate · classify · matching · content · secrets · audit · axis-b · rwx · rubric), each carrying `when`, `import`, `signature`, `fails`, and a runnable `example`, generated from the source so it never drifts. Browse it on unpkg (`unpkg.com/bareguard/primitives.json`), or `import menu from 'bareguard/primitives.json' with { type: 'json' }`.
+Small files, each readable in a sitting. The gate runs them in a fixed order (**deny → ask → scope → default**, first match wins). Building tool-calling automation? Read **`primitives.json`** first — a compact, machine-readable menu of every verb (28 entries across gate · classify · matching · content · secrets · audit · axis-b · rwx · rubric), each carrying `when`, `import`, `signature`, `fails`, and a runnable `example`, generated from the source so it never drifts. Browse it on unpkg (`unpkg.com/bareguard/primitives.json`), or `import menu from 'bareguard/primitives.json' with { type: 'json' }`.
 
 - **Scope what runs** — `bash` / `fs` / `net` bound which commands, paths, and domains are reachable. `net` gates on **any action carrying a `url`/`args.url` field**, not on `action.type === "fetch"`.
 - **Tier what's dangerous** — `bash.classify` ranks a command **safe → destructive → super-destructive**; `content` denies `rm -rf /` / `DROP TABLE` outright.
@@ -121,6 +121,21 @@ Three roles:
 - **The runner** (your harness) drafts the rubric from `rubricVocabulary`, drives the agent, takes any measurements and calls `gate.checkStep`.
 - **The human** signs the rubric before the work (`rubricSha`) and accepts the result after (`requiresHuman`).
 - **bareguard** grades and gates. It never sees the agent's reasoning, and the agent never sees the rubric: a retry is fed only the gap (`gate.drainGaps()`).
+
+**The rules at a glance**
+
+| Kind | Rule | Checks |
+|---|---|---|
+| Always on | `happened` | The output exists: non-empty text, or an object with a key. |
+| Size | `nonEmpty`, `maxWords`/`minWords`, `maxLines` | Field has content; word count or line count within a bound. |
+| Shape | `sections`, `sectionOrder`, `sectionWords`, `allowedKeys` | Headings present and in order; words per section; no unlisted object keys. |
+| Words | `mustCarry`, `blockLines`, `in`/`notIn`, `atMost` | Phrases carried; per-block phrases; value in or out of a list; rank cap. |
+| Numbers | `max`/`min` | A number field is at most, or at least, a bound. |
+| Proof | `cited`, `complete` | Each claim's quote is in the frozen input; every listed item is covered. |
+| Tables | `cells`, `table`, `diff` | Recompute counts, sums and lookups over rows; table shape; before/after changes. |
+| Measured by your harness | `notWorse`, `commandExit`, `patternAbsent`, `filesChanged` | Your measurements: score not worse, exit code, no bad pattern, only allowed files. |
+
+Per-rule detail (fields, examples, what turns red): [rubric-rules.md](https://github.com/hamr0/bareguard/blob/main/docs/product/rubric-rules.md). Exact field shapes: `rubricVocabulary`.
 
 ```js
 import { Gate, createRubric, rubricSha, renderGaps, quoteIn, numbersInQuote } from "bareguard";
