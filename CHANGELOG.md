@@ -3,6 +3,15 @@
 All notable changes to bareguard are documented here. Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [SemVer](https://semver.org/).
 
 
+## [0.26.2] - 2026-10-26
+
+### Docs
+
+- README trimmed to a short front page: one snippet each for quick start, rwx and rubric, with detail behind links (every link to a file under `docs/` is now a full GitHub URL, since `docs/` does not ship to npm).
+- README ecosystem section uses the shared sibling form, with rwxmap as an add-on for bareguard.
+- `bareguard.context.md`: gains the rwxmap exporter and review-marker details and the unpkg `primitives.json` URL.
+- No code or behaviour change.
+
 ## [0.26.1] - 2026-10-26
 
 ### Docs
