@@ -702,6 +702,8 @@ budget file, not N per child.
 
 bareguard never runs an LLM; it checks deterministic facts against declared, enumerated rules. Reach for the rubric when a step must not be called "done" until its output passes checks the human signed in advance (word caps, headings, phrases carried, a lint count not worse than baseline), and the agent must not be able to talk its way past them. It is **not** for judging meaning: that stays the caller's job (`gate.annotate` carries a caller-computed fact).
 
+Every rule, what it checks and what turns it red: [rubric-rules.md](https://github.com/hamr0/bareguard/blob/main/docs/product/rubric-rules.md).
+
 **Roles.** The *runner* (you, the harness) drafts the spec, takes measurements and calls `gate.checkStep`. The *human* signs `rubricSha(spec)` before and accepts after. *bareguard* grades and gates. The agent never holds the rubric, `gate.checkStep` or `gate.recordAccept`; it only sends the advance action.
 
 **Call shapes** (signatures, not a runnable script; the runnable example is at the end of this section).
