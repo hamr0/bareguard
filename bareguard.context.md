@@ -515,6 +515,8 @@ would blur that line. If you generate a draft `tools` section from a spec
 mechanically-derived residual, not a confirmed state (PRD §23.20) — before
 committing it as your own `bareguard.rwx.json`.
 
+rwxmap (`github.com/hamr0/rwxmap`, WIP) labels every OpenAPI operation r/w/x mechanically and marks rows it is unsure of (`tight`/`loose`) for human review; its exporter (`exportGate`) writes those labels straight into a bareguard `rwx` config. Its labels are suggestions, not verdicts: it never refuses, it only labels, and the gate enforces every row (unlike an MCP hint that nothing enforces). A site met mid-run goes through `gate.add()`/`addToGates()` instead. bareguard never imports rwxmap.
+
 ### `gate.allows()` filtering (the hide half of enforcement, §23.5)
 
 Enforcement is two places: (1) **hide** — your harness calls
@@ -899,6 +901,8 @@ single authority. Nothing in `src/` reads this file; it is author-time only,
 not a runtime tool surface. `npm run build:primitives` regenerates it;
 `npm run check:primitives` (CI) fails the build if the committed file has
 drifted from source.
+
+The file is also browsable without installing: `unpkg.com/bareguard/primitives.json`.
 
 ## Audit log format
 
