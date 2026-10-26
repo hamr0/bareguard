@@ -3,6 +3,15 @@
 All notable changes to bareguard are documented here. Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [SemVer](https://semver.org/).
 
 
+## [0.26.1] - 2026-10-26
+
+### Docs
+
+- README: a "rules at a glance" table of every rubric rule, linking to the new per-rule doc on GitHub (`docs/product/rubric-rules.md`: fields, an example, and the red and stopped kinds for each rule, including all 23 `cells` ops).
+- `bareguard.context.md`: links to the per-rule doc.
+- README: the `primitives.json` entry count corrected from 27 to 28 (`tableSha`, added in 0.26.0).
+- No code or behaviour change.
+
 ## [0.26.0] - 2026-10-22
 
 ### Added
