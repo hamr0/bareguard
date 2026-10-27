@@ -9,10 +9,12 @@
 // 0-9 only. Number and money values are EXACT decimals ({neg, int, frac} digit strings), never IEEE floats.
 
 import { normalizeForQuote, carries, clip } from "./rubric.js";
+import { isRealDay, monthTable, customMonthTable, MONTH_NAME_MAX } from "./rubric-months.js";
 
 const MAX_ITEMS = 20; // list bound inside a gap (same as rubric.js)
 const U_MINUS = 0x2212; // "−", never read as a minus, never dropped
 const CURRENCY = new Set(["$", "€", "£"]);
+const isCurrencyCode = (c) => CURRENCY.has(String.fromCharCode(c)); // ANY of $ € £, signed or not (RULED #68: both sides = unsure)
 
 // --- character classes -------------------------------------------------------
 
@@ -27,7 +29,8 @@ const isWs = (c) => c === 32 || (c >= 9 && c <= 13);
  * any "," is present, later groups exactly 3, at most one ".", then at least one digit). Null = malformed.
  * Returns an unsigned, normalized decimal {neg:false, int, frac}.
  */
-function parseGrammar(text, a, b) {
+function parseGrammar(text, a, b, comma = false) {
+  if (comma) return parseGrammarComma(text, a, b);
   let i = a;
   while (i < b && isDigit(text.charCodeAt(i))) i++;
   const first = i - a;
@@ -50,6 +53,42 @@ function parseGrammar(text, a, b) {
   let frac = "";
   if (i < b) {
     if (text.charCodeAt(i) !== 46) return null;
+    const f = i + 1;
+    if (f >= b) return null;
+    for (let k = f; k < b; k++) if (!isDigit(text.charCodeAt(k))) return null;
+    frac = text.slice(f, b);
+  }
+  return normDec(false, int, frac);
+}
+
+/**
+ * RULED #68, `decimal: ","`: the mirrored grammar `D+ | D{1,3} (SEP D{3})+` then optionally `"," D+`, SEP being "." or a single space, ONE
+ * kind per run (mixing is malformed). The first group is 1-3 digits when grouped, later groups exactly 3. Null = malformed.
+ */
+function parseGrammarComma(text, a, b) {
+  let i = a;
+  while (i < b && isDigit(text.charCodeAt(i))) i++;
+  const first = i - a;
+  if (first === 0) return null;
+  let int;
+  const sep = text.charCodeAt(i);
+  if (i < b && (sep === 46 || sep === 32)) {
+    if (first > 3) return null;
+    const parts = [text.slice(a, i)];
+    while (i < b && text.charCodeAt(i) === sep) {
+      if (i + 4 > b) return null; // need SEP + ddd fully inside the run
+      for (let k = 1; k <= 3; k++) if (!isDigit(text.charCodeAt(i + k))) return null;
+      if (i + 4 < b && isDigit(text.charCodeAt(i + 4))) return null; // a 4th digit in the group
+      parts.push(text.slice(i + 1, i + 4));
+      i += 4;
+    }
+    int = parts.join("");
+  } else {
+    int = text.slice(a, i);
+  }
+  let frac = "";
+  if (i < b) {
+    if (text.charCodeAt(i) !== 44) return null; // after the grouping only the decimal comma may follow (this also refuses a mixed SEP)
     const f = i + 1;
     if (f >= b) return null;
     for (let k = f; k < b; k++) if (!isDigit(text.charCodeAt(k))) return null;
@@ -125,13 +164,31 @@ const ignored = (end) => ({ end, tok: undefined });
 const malformed = (text, from, end) => ({ end, tok: { mal: true, raw: text.slice(from, end), vs: from, ve: end } });
 
 /** The numeric run starting at the digit `s`: [s, e) is maximal over 0-9 , . ; t is e minus trailing . and , */
-function numRun(text, s) {
+function numRun(text, s, comma = false) {
   const n = text.length;
   let e = s;
-  while (e < n) {
-    const c = text.charCodeAt(e);
-    if (isDigit(c) || c === 44 || c === 46) e++;
-    else break;
+  if (!comma) {
+    while (e < n) {
+      const c = text.charCodeAt(e);
+      if (isDigit(c) || c === 44 || c === 46) e++;
+      else break;
+    }
+  } else {
+    // RULED #68: with `decimal: ","` a single space joins the run only after 1-3 digits of a group, before exactly three digits
+    // (not followed by a digit), and only while no "," has been read (so "2026 123" and "12,50 123" do not join).
+    let g = 0; // digits since the last separator
+    let seenComma = false;
+    while (e < n) {
+      const c = text.charCodeAt(e);
+      if (isDigit(c)) g++;
+      else if (c === 46 || c === 44) {
+        if (c === 44) seenComma = true;
+        g = 0;
+      } else if (c === 32 && g >= 1 && g <= 3 && !seenComma && isDigit(text.charCodeAt(e + 1)) && isDigit(text.charCodeAt(e + 2)) && isDigit(text.charCodeAt(e + 3)) && !isDigit(text.charCodeAt(e + 4))) {
+        g = 0;
+      } else break;
+      e++;
+    }
   }
   let t = e;
   while (t > s) {
@@ -142,13 +199,13 @@ function numRun(text, s) {
   return { e, t };
 }
 
-function readNumber(text, s) {
+function readNumber(text, s, comma = false) {
   if (!isDigit(text.charCodeAt(s))) return ignored(s + 1);
-  const { e, t } = numRun(text, s);
+  const { e, t } = numRun(text, s, comma);
   const pre = prefixOf(text, s, F_NUMBER);
   const from = pre === OK || pre === NEG ? s : s - 1;
   if (pre === MAL || isLetter(text.charCodeAt(e))) return malformed(text, from, e);
-  const dec = parseGrammar(text, s, t);
+  const dec = parseGrammar(text, s, t, comma);
   if (dec === null) return malformed(text, s, e);
   if (pre === NEG && !(dec.int === "0" && dec.frac === "")) dec.neg = true;
   return { end: e, tok: { value: dec, raw: text.slice(s, t), vs: pre === NEG ? s - 1 : s, ve: t } };
@@ -159,13 +216,15 @@ function unitAt(text, u, unit) {
   return text.startsWith(unit, u) && !isLetter(text.charCodeAt(u + unit.length));
 }
 
-function readCurrency(text, s, symbol, units) {
+function readCurrency(text, s, symbol, units, comma, symCodes) {
   if (text.charAt(s) !== symbol || !isDigit(text.charCodeAt(s + 1))) return ignored(s + 1);
-  const { e, t } = numRun(text, s + 1);
+  const { e, t } = numRun(text, s + 1, comma);
   const pre = prefixOf(text, s, F_CURRENCY);
   const from = pre === OK ? s : s - 1;
   if (pre !== OK || isLetter(text.charCodeAt(e))) return malformed(text, from, e);
-  const dec = parseGrammar(text, s + 1, t);
+  // RULED #68: a signed symbol on BOTH sides ("$43$", "€43€", "$43€" with both signed) is unsure = red
+  if (t === e && isCurrencyCode(text.charCodeAt(e))) return malformed(text, s, e + 1);
+  const dec = parseGrammar(text, s + 1, t, comma);
   if (dec === null) return malformed(text, s, e);
   const tok = { value: dec, raw: text.slice(s, t), vs: s + 1, ve: t, cs: s, ce: s + 1 };
   // RULED #66: the unit directly after a symbol form ("$43 US dollars") is located here, as evidence only: `end`, the value and
@@ -183,9 +242,26 @@ function readCurrency(text, s, symbol, units) {
   return { end: e, tok };
 }
 
-function readUnit(text, s, unit) {
+/**
+ * RULED #68: a signed currency symbol glued AFTER the digits ("499€", "29,99€"), whole numbers included. Starts at the first digit of
+ * the run. No signed symbol directly after the digits = not a value of this form (ignored, the whole run skipped). A letter or digit
+ * after the symbol, or a bad prefix, is malformed (as for the unit form); the value's span is the digits, the `currency` span the symbol.
+ */
+function readCurrencyAfter(text, s, symCodes, comma) {
+  const { e, t } = numRun(text, s, comma);
+  if (t !== e || !symCodes.has(text.charCodeAt(e))) return ignored(e);
+  const sym = e + 1;
+  if (s > 0 && isCurrencyCode(text.charCodeAt(s - 1))) return malformed(text, s - 1, sym); // a symbol on BOTH sides, whether signed or not
+  const pre = prefixOf(text, s, F_UNIT);
+  if (pre !== OK || (sym < text.length && isWordCp(text.codePointAt(sym)))) return malformed(text, pre === OK ? s : s - 1, sym);
+  const dec = parseGrammar(text, s, t, comma);
+  if (dec === null) return malformed(text, s, sym);
+  return { end: sym, tok: { value: dec, raw: text.slice(s, t), vs: s, ve: t, cs: e, ce: sym } };
+}
+
+function readUnit(text, s, unit, comma = false) {
   if (!isDigit(text.charCodeAt(s))) return ignored(s + 1);
-  const { e, t } = numRun(text, s);
+  const { e, t } = numRun(text, s, comma);
   let matched = false;
   let end = e;
   if (text.charCodeAt(t) === 32 && unitAt(text, t + 1, unit)) {
@@ -200,22 +276,12 @@ function readUnit(text, s, unit) {
   if (!matched) return ignored(e); // a number NOT followed by one space + the unit is not a value of this decide
   const pre = prefixOf(text, s, F_UNIT);
   if (pre !== OK) return malformed(text, s - 1, end);
-  const dec = parseGrammar(text, s, t);
+  const dec = parseGrammar(text, s, t, comma);
   if (dec === null) return malformed(text, s, end);
   return { end, tok: { value: dec, raw: text.slice(s, t), vs: s, ve: t, us: t + 1, ue: end } };
 }
 
 // --- date ---------------------------------------------------------------------
-
-function isLeap(y) {
-  return y % 4 === 0 && (y % 100 !== 0 || y % 400 === 0);
-}
-
-function validDate(y, m, d) {
-  if (y < 1 || y > 9999 || m < 1 || m > 12 || d < 1) return false;
-  const dim = [31, isLeap(y) ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][m - 1];
-  return d <= dim;
-}
 
 function readDate(text, s) {
   const n = text.length;
@@ -236,8 +302,140 @@ function readDate(text, s) {
   const m = +text.slice(s + 5, s + 7);
   const d = +text.slice(s + 8, s + 10);
   const pre = prefixOf(text, s, F_DATE);
-  if (pre !== OK || isLetter(text.charCodeAt(e)) || !validDate(y, m, d)) return malformed(text, pre === OK ? s : s - 1, e);
+  if (pre !== OK || isLetter(text.charCodeAt(e)) || !isRealDay(y, m, d)) return malformed(text, pre === OK ? s : s - 1, e);
   return { end: e, tok: { value: text.slice(s, e), raw: text.slice(s, e), vs: s, ve: e } };
+}
+
+// --- date in a signed language (RULED #68) --------------------------------------
+// `lang` / `months` add three forms to the ISO one, each ONE token read left to right by the hand-coded reader below:
+//   day-month-year   D[.] <month> YYYY            every signed lang and `months`
+//   with connectors  D de <month> de YYYY         es / pt only; both connectors or neither
+//   month-day-year   <month> D, YYYY              lang "en" only; the comma is required
+// The month word is a whole word (never preceded or followed by a letter, a short form's "." aside). The value is the ISO string.
+
+const UNI_LETTER = /^[\p{L}\p{M}]$/u;
+const isLetterCp = (cp) => UNI_LETTER.test(String.fromCodePoint(cp));
+const letterAt = (t, i) => i < t.length && isLetterCp(t.codePointAt(i));
+/** Is the code point ENDING at `i` (exclusive) a letter or mark? */
+const letterBefore = (t, i) => i >= 1 && isLetterCp(cpEndingAt(t, i));
+const isDe = (t, p) => (t.charCodeAt(p) | 32) === 100 && (t.charCodeAt(p + 1) | 32) === 101 && t.charCodeAt(p + 2) === 32;
+
+/** The month word at `p` (a whole word of letters, optionally with a short form's trailing "."): `{ month, end }` or null. */
+function readMonthWord(text, p, table) {
+  let b = p;
+  let count = 0;
+  while (b < text.length && count <= MONTH_NAME_MAX) {
+    const cp = text.codePointAt(b);
+    if (!isLetterCp(cp)) break;
+    b += cp > 0xffff ? 2 : 1;
+    count++;
+  }
+  if (b === p || count > MONTH_NAME_MAX) return null;
+  const key = text.slice(p, b).toLowerCase();
+  if (text.charCodeAt(b) === 46) {
+    const dotted = table.get(key + ".");
+    if (dotted !== undefined) return { month: dotted, end: b + 1 };
+  }
+  const month = table.get(key);
+  return month === undefined ? null : { month, end: b };
+}
+
+/** Read exactly four digits at `p` (the year; not followed by a digit). Returns the year or -1. */
+function yearAt(text, p) {
+  for (let k = 0; k < 4; k++) if (!isDigit(text.charCodeAt(p + k))) return -1;
+  return isDigit(text.charCodeAt(p + 4)) ? -1 : +text.slice(p, p + 4);
+}
+
+const pad2 = (n) => (n < 10 ? "0" : "") + n;
+
+/** The finished token for a complete date shape [s, end): malformed on an ordinal, a letter before `s` / after the year, or a non-calendar day. */
+function dateToken(text, s, end, y, m, d, ordinal, checkBefore) {
+  const bad = ordinal || (checkBefore && letterBefore(text, s)) || letterAt(text, end) || !isRealDay(y, m, d);
+  if (bad) return malformed(text, checkBefore && letterBefore(text, s) ? s - 1 : s, end);
+  const iso = String(y).padStart(4, "0") + "-" + pad2(m) + "-" + pad2(d);
+  return { end, tok: { value: iso, raw: text.slice(s, end), vs: s, ve: end } };
+}
+
+/** `D[.] <month> YYYY` (with the es/pt connectors) from the run of 1-2 digits [s, e). */
+function readDayFirst(text, s, e, table, connector) {
+  let p = e;
+  let ordinal = false;
+  if (letterAt(text, p)) {
+    ordinal = true; // a day with a letter suffix ("5th"): malformed when the rest is a complete date shape, else ignored
+    while (letterAt(text, p)) p += text.codePointAt(p) > 0xffff ? 2 : 1;
+  } else if (text.charCodeAt(p) === 46) p++; // the day dot ("13. Oktober 2026")
+  if (text.charCodeAt(p) !== 32) return ignored(e);
+  p++;
+  const de1 = connector && isDe(text, p);
+  if (de1) p += 3;
+  const m = readMonthWord(text, p, table);
+  if (m === null || text.charCodeAt(m.end) !== 32) return ignored(e);
+  p = m.end + 1;
+  if (connector) {
+    const de2 = isDe(text, p);
+    if (de1 !== de2) return ignored(e); // both connectors or neither
+    if (de2) p += 3;
+  }
+  const y = yearAt(text, p);
+  if (y === -1) return ignored(e);
+  return dateToken(text, s, p + 4, y, m.month, +text.slice(s, e), ordinal, true);
+}
+
+/** `<month> D, YYYY` (English) from the month word at `s`. */
+function readMonthFirst(text, s, table) {
+  if (letterBefore(text, s)) return ignored(s + 1); // not the start of a word
+  const m = readMonthWord(text, s, table);
+  if (m === null) return ignored(s + 1);
+  let p = m.end;
+  if (text.charCodeAt(p) !== 32) return ignored(m.end);
+  p++;
+  const ds = p;
+  while (isDigit(text.charCodeAt(p)) && p - ds < 3) p++;
+  if (p === ds || p - ds > 2) return ignored(m.end);
+  const day = +text.slice(ds, p);
+  let ordinal = false;
+  if (letterAt(text, p)) {
+    ordinal = true;
+    while (letterAt(text, p)) p += text.codePointAt(p) > 0xffff ? 2 : 1;
+  }
+  if (text.charCodeAt(p) !== 44 || text.charCodeAt(p + 1) !== 32) return ignored(m.end);
+  const y = yearAt(text, p + 2);
+  if (y === -1) return ignored(m.end);
+  return dateToken(text, s, p + 6, y, m.month, day, ordinal, false);
+}
+
+const customTables = new WeakMap(); // a signed `months` array -> its lookup (built once per array)
+
+/** The reader of a `date` decide that signs `lang` or `months`. ISO `YYYY-MM-DD` keeps reading exactly as `readDate`. */
+function dateLangReader(d) {
+  let table;
+  if (d.months !== undefined) {
+    table = customTables.get(d.months);
+    if (table === undefined) customTables.set(d.months, (table = customMonthTable(d.months)));
+  } else table = monthTable(d.lang);
+  if (table === null) return null;
+  const monthFirst = d.months === undefined && d.lang === "en";
+  const connector = d.months === undefined && (d.lang === "es" || d.lang === "pt");
+  const runEnd = (text, s) => {
+    let e = s;
+    for (let c = text.charCodeAt(e); isDigit(c) || c === 45; c = text.charCodeAt(e)) e++;
+    return e;
+  };
+  const shortDay = (text, s, e) => isDigit(text.charCodeAt(s)) && e - s <= 2 && (e - s === 1 || isDigit(text.charCodeAt(s + 1)));
+  const read = (text, s) => {
+    const c0 = text.charCodeAt(s);
+    if (!isDigit(c0) && c0 !== 45) return monthFirst && isLetter(c0) ? readMonthFirst(text, s, table) : ignored(s + 1);
+    const e = runEnd(text, s);
+    if (e - s === 10) return readDate(text, s);
+    return shortDay(text, s, e) ? readDayFirst(text, s, e, table, connector) : ignored(e);
+  };
+  const quick = (text, s) => {
+    const c0 = text.charCodeAt(s);
+    if (isLetter(c0)) return -1;
+    const e = runEnd(text, s);
+    return e - s === 10 || shortDay(text, s, e) ? -1 : e;
+  };
+  return { read, starts: (c) => isDigit(c) || c === 45 || (monthFirst && isLetter(c)), quick, prefixes: false };
 }
 
 // --- time ---------------------------------------------------------------------
@@ -332,13 +530,20 @@ function moneyReader(d) {
   const symbols = d.currency === undefined ? [] : Array.isArray(d.currency) ? d.currency : [d.currency];
   const units = d.unit === undefined ? [] : Array.isArray(d.unit) ? d.unit : [d.unit];
   const symCodes = new Set(symbols.map((x) => x.charCodeAt(0)));
+  const comma = d.decimal === ",";
   const read = (t, s) => {
     const c = t.charCodeAt(s);
-    if (symCodes.has(c)) return readCurrency(t, s, t.charAt(s), units);
+    if (symCodes.has(c)) return readCurrency(t, s, t.charAt(s), units, comma, symCodes);
+    let resume = s + 1;
+    if (symCodes.size > 0 && isDigit(c)) {
+      const g = readCurrencyAfter(t, s, symCodes, comma); // RULED #68: the symbol glued after the digits
+      if (g.tok !== undefined) return g;
+      resume = g.end; // no symbol after the run: skip the WHOLE run, never restart inside it (a restart re-walks it and skips the space-group guard)
+    }
     /** @type {{ end: number, tok: any }} */
-    let best = ignored(s + 1);
+    let best = ignored(resume);
     for (const u of units) {
-      const r = readUnit(t, s, u);
+      const r = readUnit(t, s, u, comma);
       if (r.tok === undefined) {
         if (best.tok === undefined && r.end > best.end) best = r;
       } else if (r.tok.mal) return r;
@@ -346,17 +551,18 @@ function moneyReader(d) {
     }
     return best;
   };
-  return { read, starts: (c) => symCodes.has(c) || (units.length > 0 && isDigit(c)), prefixes: true, units };
+  return { read, starts: (c) => symCodes.has(c) || ((units.length > 0 || symCodes.size > 0) && isDigit(c)), prefixes: true, units };
 }
 
 /** The reader for a decide's valueKind: `(text, s) => {end, tok}`. Null for an unknown kind. */
 function readerFor(d) {
   switch (d.valueKind) {
     case "number":
-      return { read: readNumber, starts: (c) => isDigit(c), prefixes: true };
+      return { read: d.decimal === "," ? (t, s) => readNumber(t, s, true) : readNumber, starts: (c) => isDigit(c), prefixes: true };
     case "money":
       return moneyReader(d);
     case "date":
+      if (d.lang !== undefined || d.months !== undefined) return dateLangReader(d);
       return { read: readDate, starts: (c) => isDigit(c) || c === 45, quick: quickDate, prefixes: false };
     case "time":
       return { read: readTime, starts: (c) => isDigit(c) || c === 58, quick: quickTime, prefixes: true };
@@ -456,13 +662,16 @@ export function displayCanon(valueKind, canon) {
  * `number` an exact decimal (a leading `-` is allowed), `money` a non-negative decimal with NO currency
  * symbol and NO unit text, `date` one ISO `YYYY-MM-DD`, `time` one 24-hour or `h:mm AM|PM` token.
  * Returns `{ ok: true, canon }` (canon = the comparable form `evalDecide` reports as `extracted`) or
- * `{ ok: false }`. A non-string (a JSON number, null, an object) is `{ ok: false }`. Never throws.
+ * `{ ok: false }`. A non-string (a JSON number, null, an object) is `{ ok: false }`. The optional `decide` only matters for a `number` / `money` decide
+ * that signs `decimal: ","`: a claim value containing a "," is `{ ok: false }`. Never throws.
  */
-export function parseClaimValue(valueKind, raw) {
+export function parseClaimValue(valueKind, raw, decide) {
   try {
     if (typeof raw !== "string") return { ok: false };
     const text = normalizeForQuote(raw);
     if (text === "") return { ok: false };
+    // RULED #68: on a decide that signs `decimal: ","` the claim stays a canonical "."-decimal; a "," is never read (unsure = red)
+    if (decide !== undefined && decide !== null && decide.decimal === "," && (valueKind === "number" || valueKind === "money") && text.includes(",")) return { ok: false };
     let r;
     if (valueKind === "number") {
       const s = text.charCodeAt(0) === 45 ? 1 : 0; // a sign is judged by the token reader

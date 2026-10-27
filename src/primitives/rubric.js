@@ -19,6 +19,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { resolveWithSymlinks, findSymlinkComponent, within, norm } from "./fs.js";
 import { evaluate, makeEnv, tableShaOf, signedProblem, ruleFieldNames, CELLS_RULES, CELLS_GAP_KINDS, FIELD_DOCS, VOCAB_OPS, EXAMPLE_TABLES, DATE_FORMATS, TABLE_MAX_CELLS, TABLE_MAX_CHARS, CLAIM_MAX } from "./rubric-cells.js";
+import { MONTH_LANGS, MONTH_NAME_MAX } from "./rubric-months.js";
 import { parseBound, compareBounds, decideQuote, parseClaimValue, displayCanon, parseClaimText, textPresent, textAfter, textSpanPresent, textSpanAfter } from "./rubric-locate.js";
 
 /**
@@ -59,6 +60,9 @@ import { parseBound, compareBounds, decideQuote, parseClaimValue, displayCanon, 
  * @property {string|string[]} [unit]
  * @property {string} [anchor]
  * @property {string} [until] text decide only, needs an anchor: the claim value must equal the quote text between the anchor and the first `until` after it
+ * @property {"en"|"de"|"fr"|"es"|"it"|"pt"|"nl"} [lang] `date` only (RULED #68): the one signed language whose month names are read; absent = ISO `YYYY-MM-DD` only
+ * @property {string[]} [months] `date` only (RULED #68): exactly 12 signed month names, Jan..Dec, for a language not built in; refused with `lang`
+ * @property {"."|","} [decimal] `number` and `money` only (RULED #68): the signed decimal mark, default "."
  * @property {string[]} [phrases]
  *
  * @typedef {Object} Claim
@@ -277,6 +281,9 @@ const DECIDES = {
         unit: { type: "string", required: false, maxLength: 100, list: { max: 10 } },
         anchor: { type: "string", required: false, maxLength: MAX_SIGNED_LEN },
         until: { type: "string", required: false, maxLength: MAX_SIGNED_LEN },
+        lang: { type: "enum", required: false, enum: [...MONTH_LANGS] },
+        months: { type: "string-list", required: false, exactItems: 12, itemMaxLength: MONTH_NAME_MAX, monthNames: true },
+        decimal: { type: "enum", required: false, enum: [".", ","], default: "." },
       },
       // valueKind "text" holds only these fields (bind only); the validator refuses every other field of this shape on it
       textFields: ["valueKind", "anchor", "until"],
@@ -286,6 +293,7 @@ const DECIDES = {
         "valueKind text is bind-only: it refuses op, value, lo, hi, currency and unit, and the claim value is a non-empty string of at most 200 characters",
         "until is allowed only on a text decide that also signs an anchor: the claim value must then equal, case-insensitively, the quote text between the anchor and the first until after it",
         "money needs at least one of currency or unit (both are allowed; each takes one value or a list); currency and unit are refused on any other valueKind",
+        "lang (no default: absent = ISO YYYY-MM-DD only) and months (a signed list of exactly 12 month names, Jan..Dec) are date only and mutually exclusive; decimal (\".\" default, or \",\") is number and money only",
       ],
     },
     presence: {
@@ -879,7 +887,7 @@ function runCited(ctx, c) {
         if (!found) note(`#${i}:${key}:claim-value-absent:${clip(t.text)}`);
         continue;
       }
-      const parsed = parseClaimValue(kind, raw);
+      const parsed = parseClaimValue(kind, raw, decides[j]);
       if (!parsed.ok) {
         note(`#${i}:${key}:claim-value-malformed`);
         continue;
@@ -1204,7 +1212,7 @@ function describeField(name, d) {
   }
   if (d.type === "bound") return `${name}${d.required ? "" : "?"}: bound (number for number/money, string for date/time)`;
   if (d.type === "explanation") return `${name}?: string (the signer's explanation; never decides)`;
-  let t = d.type === "string-list" ? `non-empty list of non-blank strings, each max ${d.itemMaxLength} chars` : d.type === "name" ? `non-blank string, max ${d.maxLength} chars` : d.type === "string" ? `non-blank string, max ${d.maxLength} chars` : d.type;
+  let t = d.exactItems !== undefined ? `list of exactly ${d.exactItems} month names (January to December), each max ${d.itemMaxLength} chars, letters and an optional trailing ".", unique ignoring case` : d.type === "string-list" ? `non-empty list of non-blank strings, each max ${d.itemMaxLength} chars` : d.type === "name" ? `non-blank string, max ${d.maxLength} chars` : d.type === "string" ? `non-blank string, max ${d.maxLength} chars` : d.type;
   if (d.type === "integer" && d.min !== undefined) t = `integer >= ${d.min}`;
   if (d.type === "number") t = "finite number";
   if (d.type === "enum") t = d.enum.map((e) => JSON.stringify(e)).join(" | ");
@@ -1340,6 +1348,10 @@ function checkDecides(d, v, where) {
       return;
     }
     if (x.until !== undefined) throw fail(`${w}.until`, "is refused on a non-text decide (until closes an anchored text decide)");
+    for (const k of ["lang", "months"]) if (x[k] !== undefined && kind !== "date") throw fail(`${w}.${k}`, "is refused unless valueKind is date");
+    if (x.decimal !== undefined && kind !== "number" && kind !== "money") throw fail(`${w}.decimal`, "is refused unless valueKind is number or money");
+    for (const k of ["lang", "months", "decimal"]) if (x[k] !== undefined) checkValue(f[k], x[k], `${w}.${k}`);
+    if (x.lang !== undefined && x.months !== undefined) throw fail(`${w}.months`, "is refused together with lang (sign a built-in language or your own month names, not both)");
     const between = x.op === "between";
     for (const k of ["value", "lo", "hi"]) {
       if (x.op === undefined) {
@@ -1373,6 +1385,17 @@ function checkFormList(d, v, where) {
   if (d.type === "string" && new Set(v.map((e) => normalizeForQuote(e))).size !== v.length) throw fail(where, "must not contain duplicates (entries equal after whitespace normalization)");
 }
 
+/** RULED #68: a signed `months` list: exactly `d.exactItems` names, each letters/marks with an optional trailing ".", unique ignoring case. */
+function checkMonthNames(d, v, where) {
+  if (!Array.isArray(v) || v.length !== d.exactItems) throw fail(where, `must be a list of exactly ${d.exactItems} month names, January to December`);
+  v.forEach((n, i) => {
+    if (typeof n !== "string" || n.length > d.itemMaxLength || !/^[\p{L}\p{M}]+\.?$/u.test(n)) {
+      throw fail(`${where}[${i}]`, `must be a month name: letters (with marks) and an optional trailing ".", no space or digit, at most ${d.itemMaxLength} characters`);
+    }
+  });
+  if (new Set(v.map((n) => n.toLowerCase())).size !== v.length) throw fail(where, "must not contain duplicates (compared ignoring letter case)");
+}
+
 function checkValue(d, v, where) {
   switch (d.type) {
     case "decide-list":
@@ -1399,6 +1422,7 @@ function checkValue(d, v, where) {
       if (typeof v !== "string") throw fail(where, "must be a string (the signer's explanation)");
       return;
     case "string-list": {
+      if (d.exactItems !== undefined) return checkMonthNames(d, v, where);
       if (!Array.isArray(v) || v.length < 1) throw fail(where, "must be a non-empty array of non-blank strings");
       v.forEach((s, i) => {
         if (blank(s)) throw fail(`${where}[${i}]`, "must be a non-blank string");

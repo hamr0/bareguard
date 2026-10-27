@@ -3,6 +3,29 @@
 All notable changes to bareguard are documented here. Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [SemVer](https://semver.org/).
 
 
+## [0.27.0] - 2026-10-27
+
+### Added
+
+- **Page forms for `cited` decides (ruling #68, `docs/product/rubric-prd.md` §5.2 "Page forms"; a bareloop ask, F249).** Three new signed decide fields let a spec read what a real page prints. All are additive: an existing signed spec reads exactly as before, apart from the tightening below, and `rubricSha` of an existing spec is unchanged (the fields hash as signed fields, absent = default).
+- **Dates in a signed language: `lang` or `months`.** A `date` decide may sign `lang` (`en`, `de`, `fr`, `es`, `it`, `pt`, `nl`), with built-in case-insensitive, accent-exact month tables (full names and common short forms, a short form may carry a `.`), or `months`, a list of exactly 12 non-blank names (January to December order) for any other language. They are mutually exclusive (both = refused). With neither, the date reader is ISO `YYYY-MM-DD` only, as before; English forms are opt-in via `lang: "en"`. Forms read: day-month-year (`21 October 2026`, `13. Oktober 2026`), `es`/`pt` `5 de octubre de 2026` (`de` strictly both-or-neither), and English month-day-year (`September 29, 2026`, `lang: "en"` only); ISO keeps working. A weekday prefix is skipped (unanchored dates only). The day is checked against the real calendar. Not read: a missing year, ordinals, another language's month names. bareguard never detects a language. The claim value stays ISO `YYYY-MM-DD`.
+- **Decimal comma: `decimal: ","`** on a `number` or `money` decide (default `"."`, never guessed). The thousands mark is `.` or a single space (`1.234,99`, `12 832,99`). The claim value stays a canonical `.`-decimal string; a claim value containing a `,` on such a decide is `claim-value-malformed`. A decide that does not sign `decimal: ","` reads and judges claims exactly as before. Lifts the decimal-comma limit of #65.
+- **A currency symbol glued after the number** (`499€`, `699.00€`, `29,99€`) now reads as the signed currency (`$`, `€`, `£`), whole numbers included; no new field. One money decide may sign the same symbol in both `currency` and `unit`: glued `29,99€` is a currency token, spaced `29,99 €` a unit token, and the same amount on one page is one price (#65 rule 4); two different amounts are `value-many`.
+- **Evidence spans (#66):** a date token's `value` span is the whole token, and a glued-after symbol gets a `currency` span after the number.
+- **Validation.** `createRubric` refuses, with `e.path` naming the exact field (for example `spec.checkpoints.a.checks[0].decides[0].lang`): `lang`/`months` on a non-date decide, `decimal` on a non-number/money decide, an unknown `lang`, a bad `months` list, and `lang` together with `months`. `rubricVocabulary` lists `lang`, `months` and `decimal` with types and defaults.
+
+### Changed
+
+- **TIGHTENING: a currency symbol glued on both sides of a number (`$43$`, `€43$`) is now `value-malformed`, signed or not.** It read 43 before. A spec whose page can print that shape will now go red instead of green.
+
+### Known limits
+
+- Under `decimal: ","` a space-grouped run can swallow a preceding 1 to 3 digit token (`Zimmer 3 120€` reads 3120). An `anchor` ending before the swallowed token (`Zimmer`) still reads 3120; use an anchor that ends right before the price (`Zimmer 3` reads 120).
+- Month names match exactly as signed: accents are exact (a decomposed NFD page does not match, fails safe), and a `months` entry without a dot does not read a page form with a dot (`Okt` does not read `Okt.`).
+- A code before the number (`CHF 126.65`, `EUR 17.86`) is still unread (#37 and #65 stand); `126.65 CHF` already reads as a `unit`.
+- The weekday skip applies to unanchored dates: an anchored date must start right after the anchor.
+
+
 ## [0.26.2] - 2026-10-26
 
 ### Docs
