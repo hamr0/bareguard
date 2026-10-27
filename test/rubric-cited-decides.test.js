@@ -754,12 +754,12 @@ test("vocabulary and validator agree, both directions, for the decide value shap
   refusePath([{ op: "lt", value: 1 }], /decides\[0\]\.valueKind is required/);
   assert.doesNotThrow(() => mkRubric(REAL, [{ valueKind: "date" }]));
   // every field the vocab lists is a field the validator takes, and an unlisted one is refused
-  for (const f of Object.keys(shape.fields)) assert.ok(["valueKind", "op", "value", "lo", "hi", "currency", "unit", "anchor", "until"].includes(f), f);
+  for (const f of Object.keys(shape.fields)) assert.ok(["valueKind", "op", "value", "lo", "hi", "currency", "unit", "anchor", "until", "lang", "months", "decimal"].includes(f), f);
   refusePath([{ ...ok, color: "red" }], /decides\[0\]\.color is not a recognised decide field/);
   // the text shape's listed fields are exactly what text accepts
   for (const f of shape.textFields) assert.doesNotThrow(() => mkRubric(REAL, [{ valueKind: "text", ...(f === "anchor" || f === "until" ? { anchor: "a" } : {}), ...(f === "until" ? { until: "b" } : {}) }]), f);
   for (const f of Object.keys(shape.fields).filter((x) => !shape.textFields.includes(x))) {
-    const sample = { op: "lt", value: 1, lo: 1, hi: 2, currency: "$", unit: "u" }[f];
+    const sample = { op: "lt", value: 1, lo: 1, hi: 2, currency: "$", unit: "u", lang: "en", months: "jan feb mar apr may jun jul aug sep oct nov dec".split(" "), decimal: "," }[f];
     refusePath([{ valueKind: "text", [f]: sample }], new RegExp(`decides\\[0\\]\\.${f} is refused on a text decide`));
   }
   // the conditions say it, and the generated description carries it

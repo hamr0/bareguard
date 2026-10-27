@@ -10,6 +10,7 @@
 // createRubric, the runtime, and `rubricVocabulary`), and the evaluators. Pure; never throws.
 
 import { createHash } from "node:crypto";
+import { EN_MONTHS_3, isRealDay } from "./rubric-months.js";
 
 // --- constants ---------------------------------------------------------------
 
@@ -31,7 +32,7 @@ const MONEY_TOL = 0.005; // default absolute tolerance of a float op: a claim ro
 const FLOAT_SLACK = 1e-9; // relative slack for float noise only
 
 export const DATE_FORMATS = Object.freeze(["YYYY-MM-DD", "DD/MM/YYYY", "MM/DD/YYYY", "D MMM YYYY"]);
-const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+const MONTHS = EN_MONTHS_3; // the shared module owns the table; this reader stays English 3-letter only
 
 // --- readers (SemVer surface: changing them changes verdicts) ------------------
 
@@ -51,10 +52,6 @@ export function readCellNumber(s) {
 const isBlank = (s) => s.trim() === "";
 const isInt = (n) => Number.isInteger(n);
 
-const leap = (y) => (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0;
-function daysIn(y, m) {
-  return m === 2 ? (leap(y) ? 29 : 28) : m === 4 || m === 6 || m === 9 || m === 11 ? 30 : 31;
-}
 /** Days since 1970-01-01 (proleptic Gregorian). Integer arithmetic, no Date object, no time zone. */
 function civilDay(y, m, d) {
   const yy = y - (m <= 2 ? 1 : 0);
@@ -64,7 +61,7 @@ function civilDay(y, m, d) {
   return era * 146097 + yoe * 365 + Math.floor(yoe / 4) - Math.floor(yoe / 100) + doy - 719468;
 }
 function realDay(y, m, d) {
-  if (y < 1 || y > 9999 || m < 1 || m > 12 || d < 1 || d > daysIn(y, m)) return null;
+  if (!isRealDay(y, m, d)) return null;
   return civilDay(y, m, d);
 }
 const RE_ISO = /^(\d{4})-(\d{2})-(\d{2})$/;
