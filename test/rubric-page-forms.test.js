@@ -487,3 +487,38 @@ test("hostile and large input: the new readers stay linear and never throw", () 
   for (const [d, q] of cases) assert.doesNotThrow(() => decideQuote(q, [d], true), JSON.stringify(d));
   assert.ok(Date.now() - t0 < 5000, `took ${Date.now() - t0} ms`);
 });
+
+test("glued-after symbol: a digit run with no symbol after it is skipped whole, never restarted inside (no inflated amount)", () => {
+  const e = { decimal: "," };
+  // a restart one digit later re-walked the run and skipped the first-group guard: 2026 499€ read 26499
+  assert.deepEqual(eur("Seite 2026 499€", e), iso("499"));
+  assert.deepEqual(eur("Preis 12345 499€", e), iso("499"));
+  assert.deepEqual(eur("Seite 2026 499€", { ...e, anchor: "Seite" }), { kind: "value-none" });
+  // the spec's own space-group rule is unchanged: a 1-3 digit token before three digits joins (documented limit, "Known limits (#68)")
+  assert.deepEqual(eur("Tel 06 12 34 56 78 499€", e), iso("78499"));
+  assert.deepEqual(eur("Zimmer 3 120€", e), iso("3120"));
+  // "1 000 0000€": no join across a 4-digit group, so the last run "0000€" is read on its own
+  assert.deepEqual(eur("1 000 0000€", e), iso("0"));
+  // default decimal, same shape
+  assert.deepEqual(eur("Seite 2026 499€"), iso("499"));
+});
+
+test("glued-after symbol: a long digit run with no symbol is linear (4000 chars AT/OVER the quote cap, distinct inputs)", () => {
+  const best = (q, d) => {
+    let m = Infinity;
+    for (let i = 0; i < 7; i++) {
+      const t0 = process.hrtime.bigint();
+      decideQuote(q, [d], true);
+      m = Math.min(m, Number(process.hrtime.bigint() - t0) / 1e6);
+    }
+    return m;
+  };
+  for (const d of [{ valueKind: "money", currency: "€" }, { valueKind: "money", currency: "€", decimal: "," }]) {
+    for (const n of [3999, 4000, 4001]) {
+      const digits = Array.from({ length: n }, (_, i) => (i * 7 + n) % 10).join("").slice(0, n - 1);
+      const run = best(`${digits}x`, d); // one long run, no symbol after it
+      const ctrl = best(`${digits.slice(0, -1)}9€`, d); // same length, the symbol glued: one token, linear in the old code too
+      assert.ok(run < ctrl * 20 + 8, `${n} ${JSON.stringify(d)}: run ${run} ms vs control ${ctrl} ms`);
+    }
+  }
+});

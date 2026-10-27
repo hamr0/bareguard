@@ -534,12 +534,14 @@ function moneyReader(d) {
   const read = (t, s) => {
     const c = t.charCodeAt(s);
     if (symCodes.has(c)) return readCurrency(t, s, t.charAt(s), units, comma, symCodes);
+    let resume = s + 1;
     if (symCodes.size > 0 && isDigit(c)) {
       const g = readCurrencyAfter(t, s, symCodes, comma); // RULED #68: the symbol glued after the digits
       if (g.tok !== undefined) return g;
+      resume = g.end; // no symbol after the run: skip the WHOLE run, never restart inside it (a restart re-walks it and skips the space-group guard)
     }
     /** @type {{ end: number, tok: any }} */
-    let best = ignored(s + 1);
+    let best = ignored(resume);
     for (const u of units) {
       const r = readUnit(t, s, u, comma);
       if (r.tok === undefined) {
