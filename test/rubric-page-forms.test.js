@@ -234,7 +234,13 @@ test("glued-after symbol: whole numbers, decimals, comma decimal, the three symb
 test("glued-after symbol: both sides signed, a letter or digit after, a space before the symbol", () => {
   for (const q of ["$43$", "€43€"]) assert.equal(read({ valueKind: "money", currency: [q[0]] }, q).kind, "value-malformed", q);
   assert.deepEqual(read({ valueKind: "money", currency: ["$", "€"] }, "$43€"), { kind: "value-malformed", measured: "$43€" });
-  assert.deepEqual(read({ valueKind: "money", currency: "$" }, "$43€"), iso("43"), "€ is not signed here: reads as before");
+  // a symbol of ANY of $ € £ on both sides is malformed, signed or not (unsure = red), in both directions
+  assert.deepEqual(read({ valueKind: "money", currency: "$" }, "$43€"), { kind: "value-malformed", measured: "$43€" });
+  assert.deepEqual(read({ valueKind: "money", currency: "$" }, "€43$"), { kind: "value-malformed", measured: "€43$" });
+  assert.deepEqual(read({ valueKind: "money", currency: "€" }, "£43€"), { kind: "value-malformed", measured: "£43€" });
+  assert.deepEqual(read({ valueKind: "money", currency: "£" }, "$43£").kind, "value-malformed");
+  assert.deepEqual(read({ valueKind: "money", currency: "€" }, "€43£").kind, "value-malformed");
+  assert.deepEqual(read({ valueKind: "money", currency: "$" }, "€43 ok"), { kind: "value-none" }, "one unsigned symbol alone is still ignored");
   assert.deepEqual(eur("499€x"), { kind: "value-malformed", measured: "499€" });
   assert.deepEqual(eur("499€5").kind, "value-malformed");
   assert.deepEqual(eur("43€ €"), iso("43"), "the second symbol has no digits glued to it");

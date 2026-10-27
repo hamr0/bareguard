@@ -1210,8 +1210,8 @@ numbers and keep their `.`-decimal rendering. *Claim values stay canonical JS-st
 
 **Symbol glued after the number (money `currency`).** A signed symbol directly after the digits (`499€`, `699.00€`, `29,99€` with
 `decimal: ","`) reads as that currency, the same as the symbol before (`€499`): the run keeps its grammar (a whole number needs no decimals);
-the symbol must be one of the decide's signed `currency` symbols. No new signing field. A run with a signed symbol on BOTH sides
-(`$43$`, `€43€`, `$43€` with both signed) is MALFORMED (unsure = red). A letter or digit directly after the glued symbol
+the symbol must be one of the decide's signed `currency` symbols. No new signing field. A run with a currency symbol (any of `$ € £`, signed or not) on BOTH sides
+(`$43$`, `€43€`, `$43€` and `€43$` even when only one of them is signed) is MALFORMED (unsure = red). A letter or digit directly after the glued symbol
 (`499€x`) is MALFORMED; a space, punctuation, `*` or the end may follow (`29.99€*d)` reads). `43€ €` reads 43: the second symbol has no
 digits glued to it and is ignored (open question 4). A symbol AFTER A SPACE (`29.99 €`, `649,99 €`) is still NOT read by `currency`
 (#37): that form is the `unit` form, `unit: "€"` (works today, and with `decimal: ","`); a check that must read both signs
@@ -1220,6 +1220,8 @@ digits glued to it and is ignored (open question 4). A symbol AFTER A SPACE (`29
 adjacency (anchor, optional whitespace, number, symbol).
 
 **Required tests (the contract's list).** Dates: `03 Jul 2025` (`lang: "en"`, zero-padded day, 3-letter month), `21 October 2026`, `22 Okt. 2026`, `13. Oktober 2026`, `5 de octubre de 2026` and `5 octubre 2026` read, `5 de octubre 2026` not read; `September 29, 2026` and `Sep 29, 2026` (`en`), `September 29 2026` (no comma) not read; weekday prefixes (`Tue, September 29, 2026`, `Mi, 14. Oktober 2026`); `31 February 2026` and 29 February in a non-leap year malformed; `13. Mai 2026` under `en` and `May` under `de` not read; a missing year and an ordinal (`5th October 2026`, `October 5th, 2026`) as above; accents exact (`Marz` unread, `März` read); `months` (own list, no built-in table, no `de` connector); ISO still read under every `lang`; no `lang` = ISO only (`21 October 2026` is `value-none`); the claim value stays ISO. Decimal comma: every example and every MALFORMED case of the grammar above, the space-join conditions, `.`-default unchanged (`1,299` = 1299), a claim value with `,` on a `decimal: ","` decide is `claim-value-malformed`, a default-decimal decide still accepts `"1,234.56"`. Glued-after: `499€`, `699.00€`, `29,99€`, `$`/`£`, anchored, `$43$` / `€43€` / `$43€` (both signed) malformed, `499€x` malformed, `43€ €` reads 43, `29.99 €` NOT read by `currency`; one decide signing `currency: "€"` and `unit: "€"` reads `29,99€` and `29,99 €`, same amount on one page is one price, two amounts are `value-many`. Validation: every refusal with its exact `e.path`. Evidence spans, `rubricVocabulary` entries, and an existing signed spec's `rubricSha` unchanged. Real strings from bareloop's saved pages are fixtures.
+
+**Known limits (#68).** Month matching is code-unit exact: a page sending decomposed (NFD) text does not match (`value-none`, fails safe). A hyphen glued before a short day (`Mon-21 October 2026`) is `value-none`: a run of digits and hyphens is one unit, as for ISO. A signed `months` entry matches exactly as signed: an entry without a dot does not read a page form with a dot (`Okt` does not read `Okt.`), and one signed with a dot is read only with it. Letter edges of the date forms use Unicode letters; an ordinal suffix is any run of letters.
 
 **Evidence spans (#66).** Unchanged shape. A date token's `value` span is the whole token from its first character (the day, or the
 month word for `September 29, 2026`) to its last digit, including the day dot, a short-form `.`, and the `de` connectors, never
@@ -1235,7 +1237,7 @@ release 0.27.0 (confirmed by hamr), additive.
 
 **Behaviour changes (existing specs).** An existing signed spec reads identically except: (1) a money
 `currency` decide now reads a glued-after symbol: `29.99€` was ignored (`value-none`), it now reads. (2) A TIGHTENING: a token that was read as
-`$43` while a signed symbol sat directly behind it (`$43$`, `€43€`, `$43€` with both signed) is now `value-malformed`. A date decide with no `lang` is NOT changed (ISO only). Nothing else
+`$43` while a currency symbol (any of `$ € £`) sat directly behind it (`$43$`, `€43€`, `$43€`) is now `value-malformed`, and so is `€43$` with only `$` signed. A date decide with no `lang` is NOT changed (ISO only). Nothing else
 changes: ISO dates, `.`-decimal numbers, glued-before symbols and every unit form read exactly as before.
 
 **Exact comparison.** `number` and `money` values and bounds are exact decimals (integer part,

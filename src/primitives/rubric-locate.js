@@ -14,6 +14,7 @@ import { isRealDay, monthTable, customMonthTable, MONTH_NAME_MAX } from "./rubri
 const MAX_ITEMS = 20; // list bound inside a gap (same as rubric.js)
 const U_MINUS = 0x2212; // "−", never read as a minus, never dropped
 const CURRENCY = new Set(["$", "€", "£"]);
+const isCurrencyCode = (c) => CURRENCY.has(String.fromCharCode(c)); // ANY of $ € £, signed or not (RULED #68: both sides = unsure)
 
 // --- character classes -------------------------------------------------------
 
@@ -222,7 +223,7 @@ function readCurrency(text, s, symbol, units, comma, symCodes) {
   const from = pre === OK ? s : s - 1;
   if (pre !== OK || isLetter(text.charCodeAt(e))) return malformed(text, from, e);
   // RULED #68: a signed symbol on BOTH sides ("$43$", "€43€", "$43€" with both signed) is unsure = red
-  if (t === e && symCodes.has(text.charCodeAt(e))) return malformed(text, s, e + 1);
+  if (t === e && isCurrencyCode(text.charCodeAt(e))) return malformed(text, s, e + 1);
   const dec = parseGrammar(text, s + 1, t, comma);
   if (dec === null) return malformed(text, s, e);
   const tok = { value: dec, raw: text.slice(s, t), vs: s + 1, ve: t, cs: s, ce: s + 1 };
@@ -250,6 +251,7 @@ function readCurrencyAfter(text, s, symCodes, comma) {
   const { e, t } = numRun(text, s, comma);
   if (t !== e || !symCodes.has(text.charCodeAt(e))) return ignored(e);
   const sym = e + 1;
+  if (s > 0 && isCurrencyCode(text.charCodeAt(s - 1))) return malformed(text, s - 1, sym); // a symbol on BOTH sides, whether signed or not
   const pre = prefixOf(text, s, F_UNIT);
   if (pre !== OK || (sym < text.length && isWordCp(text.codePointAt(sym)))) return malformed(text, pre === OK ? s : s - 1, sym);
   const dec = parseGrammar(text, s, t, comma);
