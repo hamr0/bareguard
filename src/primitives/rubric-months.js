@@ -42,20 +42,20 @@ const TABLES = new Map();
  */
 export function monthTable(lang) {
   if (!Object.hasOwn(SOURCE, lang)) return null;
-  let t = TABLES.get(lang);
-  if (t === undefined) {
-    t = new Map();
-    SOURCE[lang].forEach((row, i) => {
-      const [full, short] = row.split("|");
-      for (const n of full.split(" ")) t.set(n, i + 1);
-      for (const n of short.split(" ")) {
-        if (n === "") continue;
-        t.set(n, i + 1);
-        t.set(n + ".", i + 1);
-      }
-    });
-    TABLES.set(lang, t);
-  }
+  const cached = TABLES.get(lang);
+  if (cached !== undefined) return cached;
+  /** @type {Map<string, number>} */
+  const t = new Map();
+  SOURCE[lang].forEach((row, i) => {
+    const [full, short] = row.split("|");
+    for (const n of full.split(" ")) t.set(n, i + 1);
+    for (const n of short.split(" ")) {
+      if (n === "") continue;
+      t.set(n, i + 1);
+      t.set(n + ".", i + 1);
+    }
+  });
+  TABLES.set(lang, t);
   return t;
 }
 
