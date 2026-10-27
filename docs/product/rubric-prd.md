@@ -467,7 +467,7 @@ on such a check: `#<i>:d<j>:claim-value-unknown` for each key, or `#<i>:values:c
 `decides` joins the `cited` descriptor in `rubricVocabulary` (RULED #46's list-of-decides descriptor, shared
 with the parked `judged`), is validated at `createRubric` exactly as §5.2 specifies (value XOR presence,
 `between` needs `lo`+`hi`, `money` signs at least one of `currency`/`unit` (RULED #65), bounds parsed by the same parser,
-at most 10, the whole list in `rubricSha`). Every claim of the check must satisfy the whole list: a check
+at most 10, the whole list in `rubricSha`; RULED #68 adds the date `lang`/`months` and `decimal` decide fields, see §5.2 "Page forms"). Every claim of the check must satisfy the whole list: a check
 whose claims are of different shapes is split into several `cited` checks over different `claims` fields.
 
 **Per claim, in this order** (a claim stops at its first QUOTE failure; once the quote is proven, every
@@ -935,6 +935,9 @@ A decide is EXACTLY one of two shapes (a mix, or neither, is refused at `createR
 | `lo`, `hi` | same type as `value` | refused | both required with `between`, refused otherwise; `lo <= hi` required (a wrap-around window such as 22:00-02:00 is refused) |
 | `currency` | `"$"` \| `"€"` \| `"£"`, or a list of 1-3 unique ones (RULED #65) | refused | with `money`: at least one of `currency` or `unit` is required (RULED #65, replaces the #43 XOR); refused on any other `valueKind`. Each signed symbol is a money form |
 | `unit` | non-blank string, max 100 characters | refused | with `money`: a string, or a list of 1-10 unique strings (RULED #65), each non-blank and max 100 characters: the signed unit text that follows the number (`"US dollars"`); may be signed together with `currency`; refused on any other `valueKind`; case-sensitive, exact as signed; never clipped in a gap |
+| `lang` | `"en"` \| `"de"` \| `"fr"` \| `"es"` \| `"it"` \| `"pt"` \| `"nl"`, no default (RULED #68) | refused | `date` only: the ONE signed language whose month names are read; ABSENT = ISO `YYYY-MM-DD` only, exactly as before; refused on any other `valueKind` and on `text`; mutually exclusive with `months`. See "Page forms" |
+| `months` | list of exactly 12 non-blank strings (Jan..Dec order) (RULED #68) | refused | `date` only: the signed month names for a language not in the built-in list; refused on any other `valueKind`; refused together with `lang`. See "Page forms" |
+| `decimal` | `"."` \| `","`, default `"."` (RULED #68) | refused | `number` and `money` only: the signed decimal mark; refused on `date`, `time` and `text`. Never guessed. See "Page forms" |
 | `anchor` | signed non-blank string | refused | optional; see "Anchor"; max 1000 characters; never clipped in a gap |
 | `phrases` | refused | non-empty list of non-blank strings | the PRESENCE decide: every phrase must be a case-insensitive substring of the quote (the `mustCarry` rule, on the normalized quote) |
 
@@ -1082,7 +1085,7 @@ value is still `value-many`. DOCTRINE: the forms come from the real captured pag
 imagination; the consumer (bareloop) drafts the rule from the page it saw. bareguard cannot see where a form
 came from and matches only what was signed. Limits, not built: a code BEFORE the number (`USD 43`) stays
 unread (RULED #37; `43 USD` works as `unit: ["USD"]`), `US$43` is `value-malformed`, and decimal-comma
-`43,50 €` is `value-malformed`.
+`43,50 €` is `value-malformed`. (RULED #68 lifts the decimal-comma limit for a decide that signs `decimal: ","`, and reads a symbol glued AFTER the number; see "Page forms" below.)
 - **With `currency`** (the symbol form): the signed symbol, then immediately a numeric run with the
   `number` grammar, no sign, no space between (`$318.40`, `$1,234`, `€400`). Only tokens with that symbol
   count: a bare `1234`, or `€400` in a `$` check, is not a money value (`€400` is ignored, not
@@ -1137,6 +1140,101 @@ is ignored (`1234`). Two forms:
   are stored as the canonical minutes.
 Compared as minutes since midnight; no time zone, no date. Linear and hand-coded: the token is read
 left to right, then a fixed look-ahead of at most 4 characters decides the suffix.
+
+#### Page forms: dates in a signed language, decimal comma, symbol after the number (RULED #68)
+
+Everything here is additive. A decide that signs none of `lang`, `months`, `decimal` reads as before, except for the three
+named changes in "Behaviour changes" below. bareguard NEVER detects a language, a date order or a decimal mark: only what the
+decide signed counts, and a quote in another language is not read (`value-none`). Forms come from the real captured page
+(#65 doctrine); bareloop drafts the rule from the page it saw.
+
+**Dates (`lang`, `months`).** `lang` is one of `en de fr es it pt nl`, with NO default: an absent `lang` (and an absent `months`) reads ISO `YYYY-MM-DD` only, exactly as before, and the English forms are opt-in via `lang: "en"`; an unknown code is refused at
+`createRubric` naming `decides[j].lang`. `months` is a list of EXACTLY 12 strings in Jan..Dec order, each non-blank, letters
+(with marks) and an optional trailing `.` only, no whitespace or digit, at most 40 characters, unique case-insensitively; a bad
+list is refused naming `decides[j].months` (or `decides[j].months[i]` for one bad entry). `lang` and `months` together are refused
+(the error names `decides[j].months`; mutually exclusive, even `lang: "en"` with `months`). With `months`, ONLY those 12 names are
+read (no built-in table, no `de` connector, no month-first form). Both fields are `date` only: on `number`, `money`, `time` or `text`
+the field is refused naming its own path (`decides[j].lang`).
+
+The month tables are built in, case-insensitive (`toLowerCase`, the fold used everywhere here), and ACCENT-EXACT (`März` is
+read, `Marz` is not; sign `months` for a page that strips accents). Each month has its full name and common short forms; a short
+form may carry one trailing `.` (`Okt.`), which belongs to the token. The exact short forms and the accent-exact rule are OPEN, pending bareloop's page evidence; the table is the proposal:
+
+| lang | full names / short forms |
+|---|---|
+| en | january..december; jan feb mar apr jun jul aug sep sept oct nov dec |
+| de | januar jänner februar märz april mai juni juli august september oktober november dezember; jan jän feb mär mrz apr jun jul aug sep sept okt nov dez |
+| fr | janvier février mars avril mai juin juillet août septembre octobre novembre décembre; janv févr avr juil sept oct nov déc |
+| es | enero febrero marzo abril mayo junio julio agosto septiembre setiembre octubre noviembre diciembre; ene feb mar abr may jun jul ago sep sept set oct nov dic |
+| it | gennaio febbraio marzo aprile maggio giugno luglio agosto settembre ottobre novembre dicembre; gen feb mar apr mag giu lug ago set sett ott nov dic |
+| pt | janeiro fevereiro março abril maio junho julho agosto setembro outubro novembro dezembro; jan fev mar abr mai jun jul ago set out nov dez |
+| nl | januari februari maart april mei juni juli augustus september oktober november december; jan feb mrt apr jun jul aug sep sept okt nov dec |
+
+Forms read (a form is one token; spaces are single, since the quote is already whitespace-normalized, #47, which also folds a
+no-break space to a space). The year is exactly 4 digits (0001-9999). The day is 1-2 digits, a leading zero allowed.
+- ISO `YYYY-MM-DD`: unchanged, read whatever the language, and the ONLY form read when neither `lang` nor `months` is signed.
+- Day-month-year, every signed `lang` and `months`: `D[.] <month> YYYY` (`21 October 2026`, `13. Oktober 2026`, `22 Okt. 2026`). One
+  optional `.` directly after the day (the German day dot); read uniformly for every language.
+- `es` and `pt` only: `D de <month> de YYYY` (`5 de octubre de 2026`); `de` is case-insensitive; both connectors or neither
+  (`5 octubre 2026` is read, `5 de octubre 2026` is not). OPEN, pending bareloop's page evidence (the both-or-neither rule).
+- Month-day-year, `lang: "en"` only: `<month> D, YYYY` (`September 29, 2026`, `Sep 29, 2026`); the comma is required.
+Reading rules: a month name matches as a whole word (not preceded or followed by a letter, short-form `.` aside). The value
+is a REAL calendar day (31 February, 30 April, 29 February in a non-leap year = `value-malformed`, the token being the whole shaped
+form). The decide's value is the canonical ISO `YYYY-MM-DD`, compared as today. A letter directly before the day, or directly after the
+year, makes a date-shaped form MALFORMED (as for ISO today). NOT read, with what they give: a missing year (`13. September`,
+`October 2026`) is not a date token and is ignored (`value-none` if nothing else); an ordinal (`5th October 2026`, `October 5th, 2026`)
+is MALFORMED when the rest is a complete date shape (a day with a letter suffix, a recognised month and a year), else ignored; a
+weekday word before the date (`Tue, September 29, 2026`, `Mi, 14. Oktober 2026`) is ignored text, never part of the token and never an
+error, so the date after it reads; a month name of another language (`13. Mai 2026` under `en`; `May` under `de`) is not a month, so
+nothing is read (`value-none`). Day-first vs month-first is never guessed: `lang` fixes the table, the forms above fix the order.
+
+*Claim value for a date stays the canonical ISO string.* `values.d<j>` is `"2026-10-21"`, never `"21 October 2026"`
+(`parseClaimValue` takes no decide and keeps one canonical form; a worker's non-ISO claim value is `claim-value-malformed`).
+Signed bounds (`value`, `lo`, `hi`) stay ISO. Reuse: `rubric-cells.js` already signs per-column formats including `D MMM YYYY` and
+folds month names with `toLowerCase`; the month-name matching, fold and real-day check are the same vocabulary, and the month
+tables SHOULD live in one shared module that both readers import. The cells readers themselves do NOT change (their `D MMM YYYY` stays
+English 3-letter only, and `Sept` stays unread there: SemVer).
+
+**Decimal comma (`decimal`).** `decimal` is `"."` (default) or `","`, on `number` and `money`; any other value is refused at
+`createRubric` naming `decides[j].decimal`; on `date`, `time`, `text` it is refused naming its own path. Never guessed: with
+`"."` the grammar is exactly as today (`,` is the thousands mark: `1,299` is 1299, and stays 1299). With `","` the mirrored grammar
+applies (the same strictness): a numeric run is `D+` or `D{1,3} (SEP D{3})+`, where SEP is `.` or a single space, ONE kind per run
+(mixing is MALFORMED), then optionally `"," D+`. The first group is 1-3 digits and every later group exactly 3; at most one `,`, after
+the grouping, followed by at least one digit; no `.` or space after the `,`. Examples: `1.234,99` = 1234.99, `12 832,99` = 12832.99,
+`649,99` = 649.99, `1,299` = 1.299, `1.234` = 1234; MALFORMED: `1.23`, `1.2345`, `1,234.56`, `1.234 567,8`, `12.34.56`. A space joins a run only when a digit
+is before it and exactly three digits (not followed by a digit) are after it and the group before has at most 3 digits and no `,` has
+been read; so `2026 123` and `12,50 123` do not join. The trailing `.`/`,` cut (sentence punctuation), the sign rules, letter
+adjacency and the leading-mark rule (`,5` is malformed) are unchanged. DOCUMENTED LIMIT: because space grouping is read, `Rated 4 832 times` under `decimal: ","`
+is 4832 (the signer chose a comma-decimal page; sign `decimal: ","` only on a check whose quote is a price). Signed bounds are JS
+numbers and keep their `.`-decimal rendering. *Claim values stay canonical JS-style decimals* (`"1234.99"`). On a decide that signs `decimal: ","`, a claim value containing a `,` (`"1,299"`, `"1234,99"`) is `claim-value-malformed`, never read: unsure = red, so a worker cannot slip a comma-decimal value past the grammar. (This needs the claim parser to receive the decide's `decimal`; decides that do not sign `decimal` keep today's claim grammar, including `"1,234.56"`.) Evidence `canon` stays the canonical decimal.
+
+**Symbol glued after the number (money `currency`).** A signed symbol directly after the digits (`499€`, `699.00€`, `29,99€` with
+`decimal: ","`) reads as that currency, the same as the symbol before (`€499`): the run keeps its grammar (a whole number needs no decimals);
+the symbol must be one of the decide's signed `currency` symbols. No new signing field. A run with a signed symbol on BOTH sides
+(`$43$`, `€43€`, `$43€` with both signed) is MALFORMED (unsure = red). A letter or digit directly after the glued symbol
+(`499€x`) is MALFORMED; a space, punctuation, `*` or the end may follow (`29.99€*d)` reads). `43€ €` reads 43: the second symbol has no
+digits glued to it and is ignored (open question 4). A symbol AFTER A SPACE (`29.99 €`, `649,99 €`) is still NOT read by `currency`
+(#37): that form is the `unit` form, `unit: "€"` (works today, and with `decimal: ","`); a check that must read both signs
+`currency: "€"` and `unit: "€"`, and the same-amount-one-price rule (#65) merges them. HELD, unchanged: a code before the number
+(`CHF 126.65`, `EUR 17.86`, #37 and #65 stand); `126.65 CHF` already reads as `unit: "CHF"`. The glued-after form works anchored with the same
+adjacency (anchor, optional whitespace, number, symbol).
+
+**Evidence spans (#66).** Unchanged shape. A date token's `value` span is the whole token from its first character (the day, or the
+month word for `September 29, 2026`) to its last digit, including the day dot, a short-form `.`, and the `de` connectors, never
+the weekday; `canon` (bind-only) is the ISO date. A glued-after money token gives a `value` span over the digits (including
+`.`/space groups and the `,` decimal) and a `currency` span over the symbol AFTER the number; a malformed token gives the shaped range as a `value`
+span. `decimal` changes no span role.
+
+**Hash, vocabulary, SemVer.** The new fields hash like any signed field: `rubricSha` is canonical JSON with sorted keys and an absent
+key is not in the hash, so an existing signed spec keeps its sha; an EXPLICIT `decimal: "."` hashes differently from absent (same meaning, a re-sign); `lang: "en"` is a real change of meaning (opt-in English forms), so it re-signs. `months` is an array: order is hashed. `rubricVocabulary` lists the three fields under the `cited`
+`decides` value shape (generated by `describeRule`): `lang` enum (no default; absent = ISO only), `months` string list of exactly 12 (the descriptor needs an exact-count
+bound, which `string-list` lacks today), `decimal` enum + default `"."`, with the conditions above, plus the per-kind refusals. Minor
+release 0.27.0 (confirmed by hamr), additive.
+
+**Behaviour changes (existing specs).** An existing signed spec reads identically except: (1) a money
+`currency` decide now reads a glued-after symbol: `29.99€` was ignored (`value-none`), it now reads. (2) A TIGHTENING: a token that was read as
+`$43` while a signed symbol sat directly behind it (`$43$`, `€43€`, `$43€` with both signed) is now `value-malformed`. A date decide with no `lang` is NOT changed (ISO only). Nothing else
+changes: ISO dates, `.`-decimal numbers, glued-before symbols and every unit form read exactly as before.
 
 **Exact comparison.** `number` and `money` values and bounds are exact decimals (integer part,
 fraction part, sign) compared digit by digit; never IEEE floats. `0` is a value (a zero is not
@@ -1907,7 +2005,7 @@ Status of #30-#47: kept as history. Live and shared with `cited`: #32 (exactly o
 62. RULED (hamr, 2026-10-13): HYPHEN DIGIT GLUE (extends #60). A `-` with a decimal digit (`\p{Nd}`) immediately before it and a letter or digit (`\p{L}`|`\p{Nd}`) immediately after it is not a boundary, at both match ends and for presence and the anchored end boundary. Unaffected: a letter before the `-` (`LAX-SFO`), an en dash, a space after the `-`, nothing after it (`costs 5-`). Reason: a wrong red is safer than a wrong green (Law 1). BUILT.
 63. RULED (hamr, 2026-10-13): DEDUPE the membership mismatch list. The quote's canonical values in a membership `claim-value-mismatch` item are de-duplicated (first-occurrence order); the 20 bound and the `(N in all)` total count DISTINCT values. Doc-only alongside: lowercase `am`/`pm` and no-space `9:27AM` stay malformed (ruling #34), and `v0.41.0` does not match claim `0.41.0` (`v0` is one whole token). BUILT.
 64. RULED (hamr, 2026-10-13): LABEL WORD EDGES. A signed `anchor` (any decide that takes one: value decides AND `text`) and a signed `until` match only where their word-character edges (`\p{L}\p{M}\p{Nd}`) sit on a token boundary: if the label's FIRST character is a word character, the quote character before the match must be a boundary or the quote start; if its LAST character is a word character, the character after the match must be a boundary or the quote end. Reuses `boundaryBefore` / `boundaryAfter` (so the #60 digit glue and #62 hyphen glue apply: this differs from a plain class check only for a label edge that is a digit next to a glued `.` `,` or `-`, e.g. anchor `v1` does not match in `v1.2`). A non-qualifying occurrence is SKIPPED: it does not count toward `anchor-ambiguous`, and for `until` the search continues to the next occurrence. Labels whose edge is punctuation or a space (`Total:`, a leading `" at"` space) are unaffected at that edge. Reason: `until:" at"` matched the start of `" attendant"` / `" atlas"` (quote `City: Boston atlas Hotel at X`, claim `Boston` was a false GREEN) and anchor `Leaves` matched inside `Leavesley`. Digit-glued anchors stay strict on purpose (hamr, 2026-10-13, unsure = red): signed anchor `From ` is trimmed to `From`, so quote `From59` is `anchor-missing` (it read `59` in 0.22.0), `From 59` is still ok, same for `Price12` / `Qty3`; sign the anchor against a page that puts a space or punctuation after the label. NOTE: this TIGHTENS released behavior for value-decide anchors (anchors on value decides shipped in 0.22.0; pre-1.0, a tightening ships in a minor/patch): the release CHANGELOG must list it under Changed. BUILT.
-65. RULED (hamr, 2026-10-14): MONEY FORMS, replaces #43's XOR. (1) `currency` takes `"$"|"€"|"£"` or a list of them (1-3, unique); `unit` takes a string or a list of strings (1-10, unique, each non-blank, max 100 characters). A plain string behaves exactly as in 0.23.0. (2) A money decide signs AT LEAST ONE of `currency` / `unit` (both allowed; neither is refused at `createRubric`, naming `decides[j].currency`); both are still refused on any non-money `valueKind` and on `text`. (3) The decide's money values are every token matching ANY signed form, in quote order; each form keeps its 0.23.0 grammar unchanged (symbol glued `$43`; unit = number + exactly one space + exact unit, case-sensitive, not followed by an ASCII letter). Anchored: the anchor, then a value in any signed form, same strict adjacency. A malformed token of any signed form is `value-malformed`. A numeric run matched by two forms (`$43 US dollars`) is ONE token. (4) SAME AMOUNT = ONE PRICE (money only): an `op` decide, unanchored, with 2+ money tokens that ALL have the same canonical amount reads as ONE value (no `value-many`) and the condition runs on it; two different amounts are `value-many` as today (same `measured` / `values`). Bind-only membership: unchanged semantics over the union of forms. Other value kinds: unchanged (a repeated equal value is still `value-many`). (5) DOCTRINE: forms come from the real captured page, never model-imagined; a consumer (bareloop) drafts the rule, bareguard cannot see where a form came from and matches only what was signed. Real example (bareloop live run mv7qabx4, Google Flights): quote `From 43 US dollars. Nonstop flight with ...` with `{ valueKind: "money", currency: "$", unit: ["US dollars"], op: "lt", value: 450, anchor: "From" }` extracts 43, green. A block holding both `$43` and `43 US dollars` with an unanchored `currency: "$"`, `unit: "US dollars"`, `lt` 450 is green (one price); with `$43` and `44 US dollars` it is `value-many`. NOT in #65: a code BEFORE the number (`USD 43`, #37 stands; `43 USD` works as `unit: ["USD"]`). Known limits, documented not built: `US$43` and decimal-comma `43,50 €` are `value-malformed`. BEHAVIOR CHANGE: a single-form money `op` decide that was `value-many` only because the SAME amount repeated now passes. Specs refused before (both forms, or arrays) are now accepted. SemVer surface: the spec shape is widened. Hash: arrays hash in order, so reordering a `unit` list changes `rubricSha`.
+65. RULED (hamr, 2026-10-14): MONEY FORMS, replaces #43's XOR. (1) `currency` takes `"$"|"€"|"£"` or a list of them (1-3, unique); `unit` takes a string or a list of strings (1-10, unique, each non-blank, max 100 characters). A plain string behaves exactly as in 0.23.0. (2) A money decide signs AT LEAST ONE of `currency` / `unit` (both allowed; neither is refused at `createRubric`, naming `decides[j].currency`); both are still refused on any non-money `valueKind` and on `text`. (3) The decide's money values are every token matching ANY signed form, in quote order; each form keeps its 0.23.0 grammar unchanged (symbol glued `$43`; unit = number + exactly one space + exact unit, case-sensitive, not followed by an ASCII letter). Anchored: the anchor, then a value in any signed form, same strict adjacency. A malformed token of any signed form is `value-malformed`. A numeric run matched by two forms (`$43 US dollars`) is ONE token. (4) SAME AMOUNT = ONE PRICE (money only): an `op` decide, unanchored, with 2+ money tokens that ALL have the same canonical amount reads as ONE value (no `value-many`) and the condition runs on it; two different amounts are `value-many` as today (same `measured` / `values`). Bind-only membership: unchanged semantics over the union of forms. Other value kinds: unchanged (a repeated equal value is still `value-many`). (5) DOCTRINE: forms come from the real captured page, never model-imagined; a consumer (bareloop) drafts the rule, bareguard cannot see where a form came from and matches only what was signed. Real example (bareloop live run mv7qabx4, Google Flights): quote `From 43 US dollars. Nonstop flight with ...` with `{ valueKind: "money", currency: "$", unit: ["US dollars"], op: "lt", value: 450, anchor: "From" }` extracts 43, green. A block holding both `$43` and `43 US dollars` with an unanchored `currency: "$"`, `unit: "US dollars"`, `lt` 450 is green (one price); with `$43` and `44 US dollars` it is `value-many`. NOT in #65: a code BEFORE the number (`USD 43`, #37 stands; `43 USD` works as `unit: ["USD"]`). Known limits, documented not built: `US$43` and decimal-comma `43,50 €` are `value-malformed`. (NOTE, #68: the decimal-comma limit is lifted when the decide signs `decimal: ","`; `US$43` stays `value-malformed`, and a code before the number stays unread.) BEHAVIOR CHANGE: a single-form money `op` decide that was `value-many` only because the SAME amount repeated now passes. Specs refused before (both forms, or arrays) are now accepted. SemVer surface: the spec shape is widened. Hash: arrays hash in order, so reordering a `unit` list changes `rubricSha`.
 66. RULED (hamr, 2026-10-18; spec agreed with bareloop, ask BG-2): EVIDENCE SPANS. `full.evidence` on the `checkStep` / `gate.checkStep` result gives, for every claim of every `cited` check that signs `decides`, the spans the check actually read in the normalized quote (`check`, `claim` index, `text`, `spans[{decide, role, start, end, canon?, matched?}]`, `spansTotal?`; roles anchor|value|currency|unit|until|phrase; bind-only membership marks the token(s) equal to the claim's own value with `matched`, per claim). Not in `gaps`, the audit line or the human ask event; no verdict change, no existing field changes, no new export. Bounds: 100 claims per check (`full.evidenceTotal`, one call-wide count, present only when cut), 50 spans per entry (`spansTotal`), `text` omitted over 4000 characters (always for `quote-too-long`). Amendments (hamr, 2026-10-19): every span comes from the read the check made (a symbol-form read records its own unit span); case-folded spans after or inside `İ` are mapped back, only an edge inside one `İ`'s expansion is omitted; (amendment 3) a malformed claim's entry is `{ check, claim, spans: [] }` with NO `text`, ever, and its raw quote is never read for evidence. Full text in §4.6 "Evidence spans". SemVer surface: `full.evidence` / `full.evidenceTotal` and the entry shape.
 
 **Open questions after #55** (for hamr; what the rulings did not decide; each has a spec default in §4.6 that the build follows unless changed):
@@ -1923,3 +2021,7 @@ Status of #30-#47: kept as history. Live and shared with `cited`: #32 (exactly o
 **2026-10-22 (fwdloop ask; RULED; built on feat/cells, unreleased)**
 
 67. RULED (hamr, 2026-10-22), spec in [cells-prd.md](cells-prd.md) (the page carries the detail; built on feat/cells, unreleased, no version picked): a closed-`op` family of generic checks with ONE menu in `rubricVocabulary`, selected by `rule: "cells" | "table" | "diff"` (read with a claim / shape and row math / before-vs-after with a signed key). The whole op list ships on day 1, write-side included. Flow: the agent suggests checks from the vocabulary at draft time, the person signs, the step gives VALUES only, `checkStep` recomputes. LAW 11 ALLOWED for these rules (bareguard computes over caller-given typed rows; the caller owns file parsing), so number, date and blank parsing rules become SemVer surface. Defaults ruled: strict number grammar (sign, optional `$`/`€`/`£`, proper thousands groups; `1e3`, `12%`, `.5`, `0x10`, accounting parentheses red), blank = whitespace-only and skipped by aggregates, row-math blank operand red `empty-operand` unless `allowEmpty: true`, absolute 0.005 default tolerance for float ops (counts, row sets, days exact; signed `tolerance` overrides), `topN` `ties: "any"` default, exact text equals, `rows` claimed by 2-based row number, bad claim red vs broken check or table `stopped`. DATES: the signer picks a format per column from a closed list (never guessed). Added: per-row date mode and a `band` op (fwd's AR aging). POC done (226 synthetic pass; 8 of 9 of fwd's real claiming tries had the right values and failed only on fwdloop's own cite grammar). bareloop will also use it. OPEN: bareloop's "doc checks", the closed date-format list, the table size cap, the `groupTotals` claim shape.
+
+**2026-10-27 (bareloop ask, saved real pages; RULED; spec only, unbuilt, target 0.27.0, confirmed)**
+
+68. RULED (hamr, 2026-10-27; spec agreed with bareloop): PAGE FORMS, additive, spec in §5.2 "Page forms". (1) DATES: a `date` decide may sign `lang` (`en de fr es it pt nl`; ABSENT = ISO only, exactly as today, English forms are opt-in via `lang: "en"`) with built-in case-insensitive, accent-exact month tables (full names and common short forms, a short form may carry a `.`), or a signed `months` list of exactly 12 non-blank names (Jan..Dec) for any other language; `lang` and `months` are mutually exclusive (both = refused at `createRubric` naming `decides[j].months`). Forms read: day-month-year (`21 October 2026`, `13. Oktober 2026` with the day dot), `es`/`pt` `5 de octubre de 2026`, English month-day-year (`September 29, 2026`, `lang: "en"` only); ISO keeps working. OPEN pending bareloop's page evidence: exact short forms/accents and the es/pt both-or-neither `de` rule. Real calendar day. NOT read: missing year, ordinals (malformed when otherwise a full date shape), weekday prefixes (ignored text), another language's month names. bareguard never detects a language. The worker's claim value stays ISO `YYYY-MM-DD`. (2) DECIMAL COMMA: a `number` or `money` decide may sign `decimal: ","` (default `"."`), never guessed; thousands mark `.` or a single space, mirrored strictness (`1.234,99`, `12 832,99`); the claim value stays a canonical `.`-decimal string, and a claim value containing a `,` on such a decide is `claim-value-malformed`. (3) SYMBOL GLUED AFTER: `499€`, `699.00€`, `29,99€` read as the signed currency (also `$`, `£`), whole numbers included, no new signing field; a symbol on both sides (`$43$`) is `value-malformed`. (4) HELD: a code before the number (`CHF 126.65`, `EUR 17.86`); #37 and #65 stand, `126.65 CHF` already reads as `unit`. (5) ERRORS: `lang`/`months` on a non-date decide, `decimal` on a non-number/money decide, an unknown `lang` and a bad `months` list are refused at `createRubric` via `fail(where, ...)`, `e.path` naming the exact field (for example `spec.checkpoints.a.checks[0].decides[0].lang`). (6) EVIDENCE (#66): a date token's `value` span is the whole token, a glued-after symbol gets a `currency` span after the number. (7) HASH: the fields hash as signed fields, absent = default, existing sha unchanged. `rubricVocabulary` lists `lang`, `months`, `decimal` with types and defaults. SemVer: minor 0.27.0 (confirmed by hamr), additive; every existing signed spec reads identically except `29.99€` now reads and `$43$` is now malformed (a tightening), named in §5.2. Lifts the decimal-comma limit of #65. SemVer surface: the three spec fields, the month tables, the grammar above.
