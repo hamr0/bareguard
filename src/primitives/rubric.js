@@ -1853,7 +1853,7 @@ function quoteList(a, bare = false) {
 }
 
 /**
- * The two gaps that render as a plain sentence instead of a JSON row (fwdloop's strike detection keys on these
+ * The gaps that render as a plain sentence instead of a JSON row (fwdloop's strike detection keys on these
  * exact strings). null = not one of them, or a field is missing / the wrong type / unreadable: use the JSON row.
  */
 function renderSentence(g, more = 0) {
@@ -1900,12 +1900,13 @@ function renderSentence(g, more = 0) {
  * A deterministic one-string render of a gap list: each gap becomes a JSON array
  * of its fields in a FIXED order [key, check, kind, field, measured, limit,
  * direction, items, itemsTotal] (absent = null), and the entries are joined by
- * "; " in the order given (the minted order is signed check order). The two gaps
+ * "; " in the order given (the minted order is signed check order). The gaps
  * `sectionWords` (kind `section-words`) and `allowedKeys` (kind `extra-keys`) render as a plain
  * sentence instead, exactly: `<section>: <words> words, about <asked> asked (<lo>-<hi>)` and
  * `artifact has key(s) "k1", "k2" besides "text"; the check reads "text" only, so put the whole answer in "text"`
  * (each key is JSON-escaped; when `itemsTotal` exceeds the items shown, ` and N more` follows the key list, and on the last
- * `section-words` sentence).
+ * `section-words` sentence). A `carriesAny` `none-found` gap (RULED #69) also renders as a sentence: `none of these words appear in "body": "crash", "hang"`
+ * (the field and each phrase JSON-escaped; ` and N more` when `itemsTotal` exceeds the phrases shown).
  * JSON makes the other rows' render injective, so the same failing state always gives the same string and
  * different states give different strings.
  * @param {Gap[]} gaps

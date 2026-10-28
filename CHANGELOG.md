@@ -3,6 +3,15 @@
 All notable changes to bareguard are documented here. Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [SemVer](https://semver.org/).
 
 
+## Unreleased
+
+### Added
+
+- **`carriesAny`, an any-of phrase rule on word edges (ruling #69; a fwdloop ask).** `{ id, rule: "carriesAny", field, phrases, strict? }` is green when at least one phrase appears in the field with a text edge or a non-letter/mark/digit character on both sides (no stemming: `hang` misses "hanging" and "change", hits "hang-up", "(hang)", "HANG:"). Case-insensitive; `strict: true` also needs the exact case. A single space in a phrase matches any whitespace run, newlines included. Matching is by hand, never a RegExp built from signed input. `mustCarry`, `carries()` and the presence decide are unchanged and every existing `rubricSha` is unchanged.
+- **New gap kind `none-found`** with `phrases` (the signed list, at most 20, `itemsTotal` when cut), distinct from `mustCarry`'s `missing`; `renderGaps` renders `none of these words appear in "body": "crash", "hang"` (plus ` and N more`).
+- **`full.matched`** on the `checkStep` / `gate.checkStep` result: always present, one `{ check, phrases, phrasesTotal? }` per green `carriesAny` check; not in `gaps`, the audit line or the humanChannel ask.
+- `createRubric` refuses bad `phrases` (empty, over 50, over 200 characters, blank, not starting and ending with a letter or digit, tab/newline/double space, case-fold duplicate) with the exact `e.path`. `rubricVocabulary` lists the rule.
+
 ## [0.27.0] - 2026-10-27
 
 ### Added
