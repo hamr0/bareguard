@@ -51,6 +51,23 @@ test("a failed candidate does not hide a later one", async () => {
   assert.equal(await hit(["not responding"], "not respondingly. not  responding"), true);
 });
 
+test("a failed candidate does not hide a later one, strict too (multi-word, both passes)", async () => {
+  assert.equal(await hit(["not responding"], "not respondingly. not  responding", { strict: true }), true);
+  assert.equal(await hit(["Not Responding"], "Not Respondingly, Not  Responding", { strict: true }), true);
+  assert.equal(await hit(["Not Responding"], "Not Respondingly, NOT  Responding", { strict: true }), false, "the later candidate has the wrong case");
+});
+
+test("KNOWN behaviour (self-review ledger): final sigma folds by position, so a phrase is not found in text where the sigma is not word-final", async () => {
+  // "ΟΔΟΣ".toLowerCase() is "οδος" (final sigma) but inside "ΟΔΟΣ.ΑΒ" the Σ lowers to "σ" ("οδοσ.αβ"). Red none-found today.
+  // Pinned as current behaviour, NOT a promise: the fold is deliberately left alone (ledger nit, hamr 2026-10-28).
+  assert.equal("ΟΔΟΣ".toLowerCase(), "οδος");
+  assert.equal("ΟΔΟΣ.ΑΒ".toLowerCase(), "οδοσ.αβ");
+  const r = await run(["ΟΔΟΣ"], "ΟΔΟΣ.ΑΒ");
+  assert.equal(r.verdict, "red");
+  assert.equal(r.gaps[0].kind, "none-found");
+  assert.equal(await hit(["ΟΔΟΣ"], "ΟΔΟΣ"), true);
+});
+
 test("case: forgiving folds; strict needs the exact case and is never looser", async () => {
   assert.equal(await hit(["ANR"], "anr"), true);
   assert.equal(await hit(["ANR"], "anr", { strict: true }), false);
@@ -271,4 +288,122 @@ test("gate.checkStep: matched is on the result, absent from the audit line and t
   // the none-found gap (phrases) is a worker gap and does appear in the red audit line
   assert.ok(rubricLines[0].gaps[0].phrases.includes("nopeSIGNED"));
   assert.deepEqual(g.drainGaps()[0].phrases, ["nopeSIGNED"], "the worker keeps the phrase list");
+});
+
+// --- work cap (RULED #69 amendment 1): a step counter, no clock -------------------------------------------------
+// Steps: one per candidate position (each indexOf hit of the first word), one per later word compared, one per whitespace
+// unit skipped. Both passes, all phrases, one budget per check. Over it = red too-many { limit }.
+
+const CAP = rubricVocabulary.bounds.carriesAnyWorkMax;
+const kindOf = (r) => r.gaps[0]?.kind ?? null;
+
+test("work cap: the bound is exposed in rubricVocabulary.bounds, not as a top-level export", async () => {
+  assert.equal(CAP, 10_000_000);
+  const top = await import("../src/index.js");
+  assert.ok(!Object.keys(top).some((k) => /work|cap/i.test(k)), "no cap constant is exported");
+});
+
+test("work cap boundary: phrase 'a b' on 'a' x n costs exactly n+1 steps; cap steps pass, cap+1 is red too-many", async () => {
+  const atCap = await run(["a b"], "a".repeat(CAP - 1));
+  assert.equal(kindOf(atCap), "none-found", "exactly CAP steps never trips");
+  const over = await run(["a b"], "a".repeat(CAP));
+  assert.equal(over.verdict, "red");
+  assert.deepEqual(over.gaps, [{ key: "a:k", checkpoint: "a", check: "carriesAny", id: "k", field: "body", kind: "too-many", limit: CAP }]);
+  assert.deepEqual(over.full.matched, []);
+});
+
+test("work cap guarantee: 3 x field length x total phrase words <= cap never trips, whatever the body", async () => {
+  // 1 phrase of 98 words, near-miss flood, forgiving and strict
+  const p98 = "a ".repeat(97) + "b";
+  const L98 = Math.floor(CAP / 3 / 98);
+  for (const strict of [false, true]) {
+    const r = await run([p98], "a ".repeat(Math.floor(L98 / 2)), { strict });
+    assert.equal(kindOf(r), "none-found", `98 words, strict=${strict}`);
+  }
+  // fwdloop's shape: 12 phrases of 2 words on a 120,000-char body (10x their real 12K), every word a first-word candidate
+  const twelve = Array.from({ length: 12 }, (_, i) => `a b${i}`);
+  assert.ok(3 * 120_000 * 24 <= CAP);
+  const bodies = ["a ".repeat(60_000), "a".repeat(120_000), "a  ".repeat(40_000), ("a" + " ".repeat(9)).repeat(12_000), "A ".repeat(60_000), "a\n".repeat(60_000), "a-".repeat(60_000)];
+  for (const strict of [false, true]) for (const [i, body] of bodies.entries()) {
+    const r = await run(twelve, body, { strict });
+    assert.equal(r.gaps[0]?.kind, "none-found", `body ${i} strict=${strict}`);
+  }
+  // forgiving hits at the very end, the raw (strict) pass then re-walks the whole body for every phrase
+  const hitsAtEnd = Array.from({ length: 12 }, (_, i) => (i === 11 ? "a b" : `a b${i}`));
+  const r = await run(hitsAtEnd, "a ".repeat(59_999) + "A B", { strict: true });
+  assert.equal(kindOf(r), "none-found");
+  const g = await run(hitsAtEnd, "a ".repeat(59_999) + "a b", { strict: true });
+  assert.equal(g.verdict, "green");
+});
+
+test("work cap: the 47 s case (50 legal 98-word near-miss phrases over 200 KB) is red too-many, and fast", async () => {
+  const phrases = Array.from({ length: 50 }, (_, i) => "a ".repeat(97) + "b" + i);
+  const body = "a ".repeat(100_000);
+  for (const strict of [false, true]) {
+    const t0 = process.hrtime.bigint();
+    const r = await run(phrases, body, { strict });
+    const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+    assert.equal(kindOf(r), "too-many", `strict=${strict}`);
+    assert.equal(r.gaps[0].limit, CAP);
+    assert.ok(ms < 5000, `${ms.toFixed(0)}ms (was 47-72 s; ~0.2 s unloaded)`);
+  }
+});
+
+test("work cap is per check, shared by every phrase: two phrases that each fit alone trip together", async () => {
+  const body = "a ".repeat(2_000_000); // ~6M steps per near-miss phrase
+  assert.equal(kindOf(await run(["a b"], body)), "none-found");
+  assert.equal(kindOf(await run(["a c"], body)), "none-found");
+  const both = await run(["a b", "a c"], body);
+  assert.equal(kindOf(both), "too-many");
+});
+
+test("work cap: strict mode counts the raw pass too", async () => {
+  // forgiving walks ~6M steps then hits at the end; the raw pass walks ~6M more and finds nothing ("A B" is the wrong case)
+  const body = "a ".repeat(2_000_000) + "A B";
+  const f = await run(["a b"], body);
+  assert.equal(f.verdict, "green");
+  const s = await run(["a b"], body, { strict: true });
+  assert.equal(kindOf(s), "too-many");
+});
+
+test("work cap: a hit found before the cap is green, matched keeps found phrases in signed order; a hit after the cap is never reached", async () => {
+  const body = "hit " + "a ".repeat(2_000_000);
+  const g = await run(["hit", "a b", "a c"], body);
+  assert.equal(g.verdict, "green", "green stays green when the budget runs out on a later phrase");
+  assert.deepEqual(g.full.matched, [{ check: "k", phrases: ["hit"] }]);
+  assert.deepEqual(g.gaps, []);
+  const late = await run(["a b", "a c", "hit"], body);
+  assert.equal(kindOf(late), "too-many", "signed order: phrases after the cap are not searched");
+  assert.deepEqual(late.full.matched, []);
+});
+
+test("work cap: renderGaps exact sentence; other too-many gaps keep their JSON row", async () => {
+  const over = await run(["a b"], "a".repeat(CAP));
+  assert.equal(renderGaps(over.gaps), `"body" is too large to check for these words (work limit ${CAP})`);
+  assert.equal(renderGaps(over.gaps), '"body" is too large to check for these words (work limit 10000000)');
+  const rb = createRubric({ schema: 1, goal: "g", checkpoints: { a: { gating: true, checks: [{ ...check(["a b"]), field: 'we"ird' }] } } });
+  const odd = await checkStep(rb, "a", { 'we"ird': "a".repeat(CAP) });
+  assert.equal(renderGaps(odd.gaps), `"we\\"ird" is too large to check for these words (work limit ${CAP})`);
+  // a hand-built gap of another rule is not rendered as this sentence
+  assert.equal(renderGaps([{ key: "a:c", check: "cited", kind: "too-many", field: "x", measured: 30, limit: 25 }]), JSON.stringify(["a:c", "cited", "too-many", "x", 30, 25, null, null, null]));
+});
+
+test("work cap through gate.checkStep: the too-many gap reaches the worker and the audit line", async (t) => {
+  const dir = await makeTmpDir(); t.after(async () => cleanup(dir));
+  const { auditPath, runId } = uniquePaths(dir);
+  const phrases = Array.from({ length: 50 }, (_, i) => "a ".repeat(97) + "b" + i);
+  const spec = { schema: 1, goal: "g", checkpoints: { a: { gating: true, checks: [check(phrases)] } } };
+  const g = new Gate({ audit: { path: auditPath }, runId, rubric: { spec, sha256: rubricSha(spec), advanceOn: ["done"] }, humanChannel: async () => ({ decision: "allow" }) });
+  await g.init();
+  const r = await g.checkStep("a", { body: "a ".repeat(100_000) });
+  assert.equal(r.verdict, "red");
+  assert.equal(r.gaps[0].kind, "too-many");
+  assert.equal(r.gaps[0].limit, CAP);
+  const line = fs.readFileSync(auditPath, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)).find((l) => l.phase === "rubric");
+  assert.equal(line.gaps[0].kind, "too-many");
+  assert.equal(line.gaps[0].limit, CAP);
+  assert.equal(line.gaps[0].field, "body");
+  const drained = g.drainGaps();
+  assert.equal(drained[0].kind, "too-many");
+  assert.equal(drained[0].limit, CAP);
 });

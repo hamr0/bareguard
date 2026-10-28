@@ -46,7 +46,7 @@ import { parseBound, compareBounds, decideQuote, parseClaimValue, displayCanon, 
  * @property {number} [hi] `sectionWords` only: the inclusive upper bound, `floor(asked * 1.2)`
  * @property {string[]} [keys] `allowedKeys` only: the output's own keys that are not allowed (insertion order, clipped, bounded)
  * @property {string[]} [allowed] `allowedKeys` only: the signed allowed keys (never clipped)
- * @property {string[]} [phrases] `carriesAny` only (kind `none-found`): the signed phrases (never clipped, at most 20; `itemsTotal` when cut)
+ * @property {string[]} [phrases] `carriesAny` only (kind `none-found`): the signed phrases (never clipped, at most 20; `itemsTotal` when cut). A `carriesAny` gap of kind `too-many` (RULED #69 amendment 1) carries `limit` = `rubricVocabulary.bounds.carriesAnyWorkMax` and no `measured`
  *
  * @typedef {Object} Decide
  * One signed decide of a `cited` check (§4.6): a VALUE decide `{ valueKind, op?, value | lo+hi, currency and/or unit (money), anchor? }`
@@ -624,46 +624,68 @@ function runMustCarry(ctx, c) {
 // --- carriesAny (RULED #69) ---------------------------------------------------
 
 const CARRY_WORD_CP = /^[\p{L}\p{M}\p{Nd}]$/u; // ONE code point at a time: a fixed class, never built from input
-const isCarryWordAt = (t, i) => i >= 0 && i < t.length && CARRY_WORD_CP.test(String.fromCodePoint(t.codePointAt(i)));
+const isAsciiWord = (c) => (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || (c >= 48 && c <= 57); // the ASCII members of [\p{L}\p{M}\p{Nd}]
+function isCarryWordAt(t, i) {
+  if (i < 0 || i >= t.length) return false;
+  const c = t.charCodeAt(i);
+  if (c < 128) return isAsciiWord(c); // hot path: no allocation
+  return CARRY_WORD_CP.test(String.fromCodePoint(t.codePointAt(i)));
+}
 /** True when the code point ENDING at `e` (exclusive) is a word character; `e` = 0 is the text edge (not a word). */
 function wordEndsAt(t, e) {
   if (e < 1) return false;
   const u = t.charCodeAt(e - 1);
+  if (u < 128) return isAsciiWord(u);
   const low = u >= 0xdc00 && u <= 0xdfff && e >= 2 && t.charCodeAt(e - 2) >= 0xd800 && t.charCodeAt(e - 2) <= 0xdbff;
   return isCarryWordAt(t, low ? e - 2 : e - 1);
 }
 const WS_UNIT = /^\s$/; // every `\s` character is one UTF-16 unit
+const isWsAt = (t, i) => {
+  const c = t.charCodeAt(i);
+  return c < 128 ? c === 32 || (c >= 9 && c <= 13) : WS_UNIT.test(t[i]); // ASCII fast path, same set as \s
+};
+const CARRY_WORK_CAP = 10_000_000; // `carriesAny`: steps (see carriesOnEdges) per check, all phrases and both passes together; over it = red too-many. Deterministic, never a clock (Law 8)
 
 /**
  * Hand-matched, no RegExp from signed input: is `words` (a phrase split on its single spaces) in `t` on word edges, a gap
  * between two words being a run of 1+ whitespace characters and everything else exact? `t` and `words` are in the SAME case
- * (both raw, or both lowered), and every index below is an index of `t` itself. Cost: text length x phrase words.
+ * (both raw, or both lowered), and every index below is an index of `t` itself.
+ *
+ * WORK: `meter.n` counts one step per candidate position tried (each `indexOf` hit of the first word), one per later word
+ * compared, one per whitespace unit skipped. Returns 1 (found), 0 (not found) or -1 (the next step would pass `meter.cap`:
+ * stop). No clock: the count is a pure function of the input. Steps for one phrase pass are under 2 x text length x phrase words.
  */
-function carriesOnEdges(t, words) {
+function carriesOnEdges(t, words, meter) {
   const w0 = words[0];
   for (let i = t.indexOf(w0); i !== -1; i = t.indexOf(w0, i + 1)) {
+    if (++meter.n > meter.cap) return -1;
     if (wordEndsAt(t, i)) continue;
     let pos = i + w0.length;
     let ok = true;
     for (let j = 1; j < words.length; j++) {
+      if (++meter.n > meter.cap) return -1;
       const from = pos;
-      while (pos < t.length && WS_UNIT.test(t[pos])) pos++;
+      while (pos < t.length && isWsAt(t, pos)) {
+        if (++meter.n > meter.cap) return -1;
+        pos++;
+      }
       if (pos === from || !t.startsWith(words[j], pos)) {
         ok = false;
         break;
       }
       pos += words[j].length;
     }
-    if (ok && !isCarryWordAt(t, pos)) return true;
+    if (ok && !isCarryWordAt(t, pos)) return 1;
   }
-  return false;
+  return 0;
 }
 
-/** Forgiving: case-insensitive on word edges. Strict: ALSO exact-case on the raw text (so never looser). */
-function carriesPhrase(raw, lower, phrase, strict) {
+/** Forgiving: case-insensitive on word edges. Strict: ALSO exact-case on the raw text (so never looser). 1 / 0 / -1 as above. */
+function carriesPhrase(raw, lower, phrase, strict, meter) {
   const low = phrase.toLowerCase();
-  if (!carriesOnEdges(lower, low.split(" "))) return false;
-  return !strict || carriesOnEdges(raw, phrase.split(" "));
+  const f = carriesOnEdges(lower, low.split(" "), meter);
+  if (f !== 1 || !strict) return f;
+  return carriesOnEdges(raw, phrase.split(" "), meter);
 }
 
 function runCarriesAny(ctx, c) {
@@ -671,8 +693,19 @@ function runCarriesAny(ctx, c) {
   if (t.gap) return t;
   const strict = c.strict === true;
   const lower = t.text.toLowerCase();
-  const found = c.phrases.filter((p) => carriesPhrase(t.text, lower, p, strict));
+  const meter = { n: 0, cap: CARRY_WORK_CAP }; // ONE budget for the whole check: every phrase, both passes
+  const found = [];
+  let over = false;
+  for (const p of c.phrases) {
+    const r = carriesPhrase(t.text, lower, p, strict, meter);
+    if (r === -1) {
+      over = true;
+      break;
+    }
+    if (r === 1) found.push(p);
+  }
   if (found.length === 0) {
+    if (over) return red("too-many", { limit: CARRY_WORK_CAP });
     const { items, itemsTotal } = boundItems(c.phrases, true);
     return red("none-found", { phrases: items, ...(itemsTotal !== undefined ? { itemsTotal } : {}) });
   }
@@ -1327,6 +1360,7 @@ export const rubricVocabulary = deepFreeze({
     name: { maxLength: MAX_NAME_LEN },
     quoteSourceMaxBytes: SOURCE_CAP_BYTES,
     quoteWorkMax: QUOTE_WORK_CAP,
+    carriesAnyWorkMax: CARRY_WORK_CAP, // `carriesAny` steps per check (candidate positions + later words compared + whitespace units skipped, all phrases, both passes); never trips while 3 x field length (UTF-16 units) x total phrase words <= it; over it = red `too-many` with `limit`
     quoteMaxChars: QUOTE_MAX_CHARS, // applies to a `cited` claim's normalized quote only when the check signs `decides`; over it = red `quote-too-long`
   },
   // `cells` / `table` / `diff` (docs/product/cells-prd.md): tables ride in `opts.tables[name]`, typed rows
@@ -1882,6 +1916,11 @@ function renderSentence(g, more = 0) {
       const n = typeof g.itemsTotal === "number" ? g.itemsTotal - phrases.length : 0;
       return `none of these words appear in ${JSON.stringify(field)}: ${quoteList(phrases)}${n > 0 ? ` and ${n} more` : ""}`;
     }
+    if (kind === "too-many" && g.check === "carriesAny") {
+      // RULED #69 amendment 1; the `cited` / list `too-many` gaps stay JSON rows
+      if (typeof g.field !== "string" || typeof g.limit !== "number") return null;
+      return `${JSON.stringify(g.field)} is too large to check for these words (work limit ${g.limit})`;
+    }
     if (kind === "extra-keys") {
       const { keys, allowed } = g;
       if (!Array.isArray(keys) || !Array.isArray(allowed) || allowed.length === 0) return null;
@@ -1906,7 +1945,8 @@ function renderSentence(g, more = 0) {
  * `artifact has key(s) "k1", "k2" besides "text"; the check reads "text" only, so put the whole answer in "text"`
  * (each key is JSON-escaped; when `itemsTotal` exceeds the items shown, ` and N more` follows the key list, and on the last
  * `section-words` sentence). A `carriesAny` `none-found` gap (RULED #69) also renders as a sentence: `none of these words appear in "body": "crash", "hang"`
- * (the field and each phrase JSON-escaped; ` and N more` when `itemsTotal` exceeds the phrases shown).
+ * (the field and each phrase JSON-escaped; ` and N more` when `itemsTotal` exceeds the phrases shown). A `carriesAny` `too-many` gap
+ * (the work limit, RULED #69 amendment 1) renders as `"body" is too large to check for these words (work limit 10000000)`.
  * JSON makes the other rows' render injective, so the same failing state always gives the same string and
  * different states give different strings.
  * @param {Gap[]} gaps
