@@ -256,7 +256,7 @@ test("perf: 50 phrases over a 1 MiB field stay well under a generous bound", asy
   const text = "near1 ".repeat(170_000);
   const rb = mk([check(phrases)]);
   const t = await best(() => checkStep(rb, "a", { body: text }), 2);
-  assert.ok(t < 20_000, `${t.toFixed(0)}ms (about 2 s on a loaded dev machine: 50 linear scans of 1 MiB; the native-indexOf matcher before amendment 3 took ~0.1 s here)`);
+  assert.ok(t < 8_000, `${t.toFixed(0)}ms (bound 8000; about 1.3-1.9 s on a loaded dev machine: 50 linear scans of 1 MiB; the native-indexOf matcher before amendment 3 took ~0.1 s here)`);
 });
 
 // --- gate: matched rides the result only -------------------------------------------------------
@@ -438,7 +438,7 @@ const timed = async (phrases, body, strict) => {
   return { r, ms: Number(process.hrtime.bigint() - t0) / 1e6 };
 };
 
-test("adversarial families are linear: none-found (never too-many), and fast", async () => {
+test("adversarial families are linear and none-found (never too-many)", async () => {
   const wsUnit = (w) => "a" + w.repeat(200);
   const fams = [
     ["50 near-miss 98-word phrases over 200 KB 'a '", P(50, (i) => "a ".repeat(97) + "b" + i), "a ".repeat(100_000)],
