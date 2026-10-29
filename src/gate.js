@@ -1111,8 +1111,8 @@ export class Gate {
 
       // askHuman path: emit gate audit (OUTSIDE the ordering lock — this is
       // not a final line, and `add()` must never block on a human),
-      // dispatch to humanChannel, apply. rwx.askOn:"loose" (D103) resolves
-      // an rwx match to askHuman too, so this line carries the same rwx
+      // dispatch to humanChannel, apply. rwx.askOn:"loose" (D103) and
+      // rwx.askUnheld (ruling #70) resolve an rwx match to askHuman too, so this line carries the same rwx
       // fields as the terminal branch above.
       await emit({
         phase: "gate", action,
@@ -1178,7 +1178,7 @@ export class Gate {
         event.tier = cls.tier;
       }
 
-      // rwx.askOn:"loose" (D103): surface the matched letter/marker so
+      // rwx.askOn:"loose" (D103) / rwx.askUnheld (#70): surface the matched letter/marker so
       // humanChannel can show what triggered the ask. Additive — absent for
       // every event that didn't come from rwx.ask, byte-identical otherwise.
       if (rwxInfo.rwxLetters) {
