@@ -46,6 +46,7 @@ import { parseBound, compareBounds, decideQuote, parseClaimValue, displayCanon, 
  * @property {number} [hi] `sectionWords` only: the inclusive upper bound, `floor(asked * 1.2)`
  * @property {string[]} [keys] `allowedKeys` only: the output's own keys that are not allowed (insertion order, clipped, bounded)
  * @property {string[]} [allowed] `allowedKeys` only: the signed allowed keys (never clipped)
+ * @property {string[]} [phrases] `carriesAny` only (kind `none-found`): the signed phrases (never clipped, at most 20; `itemsTotal` when cut).
  *
  * @typedef {Object} Decide
  * One signed decide of a `cited` check (§4.6): a VALUE decide `{ valueKind, op?, value | lo+hi, currency and/or unit (money), anchor? }`
@@ -114,7 +115,7 @@ import { parseBound, compareBounds, decideQuote, parseClaimValue, displayCanon, 
  * @property {string|null} outputSha sha256 (hex) of `opts.outputBytes`, else of a string output's UTF-8 bytes; null for an object output with no `outputBytes`
  * @property {Gap[]} gaps what the worker may see; [] unless red
  * @property {Fault|null} fault the first fault, when stopped
- * @property {{gaps: Gap[], faults: Fault[], evidence: EvidenceEntry[], evidenceTotal?: number, expected?: Object<string, any>[]}} full everything, for the human. `expected` (present only when a `cells`/`table`/`diff` check computed one): one entry `{ check, ...}` per such check with the answer bareguard computed (`value`, `rows`, `totals`, ...; row lists capped at 200 with a `...Total`). Never in `gaps`. `evidence` (RULED #66): where each `cited` check that signs `decides` read, one entry per claim (first 100 claims per check; `evidenceTotal` = all such claims in the call, present only when some were cut). Never in `gaps`, never in the audit line.
+ * @property {{gaps: Gap[], faults: Fault[], evidence: EvidenceEntry[], evidenceTotal?: number, matched: {check: string, phrases: string[], phrasesTotal?: number}[], expected?: Object<string, any>[]}} full everything, for the human. `expected` (present only when a `cells`/`table`/`diff` check computed one): one entry `{ check, ...}` per such check with the answer bareguard computed (`value`, `rows`, `totals`, ...; row lists capped at 200 with a `...Total`). Never in `gaps`. `evidence` (RULED #66): where each `cited` check that signs `decides` read, one entry per claim (first 100 claims per check; `evidenceTotal` = all such claims in the call, present only when some were cut). Never in `gaps`, never in the audit line. `matched` (RULED #69): one entry `{ check, phrases, phrasesTotal? }` per GREEN `carriesAny` check (the signed phrases found, in signed order, at most 20; `phrasesTotal` only when cut); always present, `[]` when none; never in `gaps`, the audit line or the humanChannel ask.
  * @property {Object<string, {baseline:number, baselineSource:{anchor:string, route:string}}>} baselines seed baselines this call measured, for the caller/gate to record
  * @property {Object<string, {count:number, sha256:string}>} callerItems caller item lists this call used (count + sha256 of the JSON list), for the audit
  */
@@ -254,6 +255,8 @@ const FIELD = { type: "name", required: true, nonBlank: true, maxLength: MAX_NAM
 const COUNT = { type: "integer", required: true, min: 1, max: null };
 const LIST = { type: "string-list", required: true, minItems: 1, itemType: "string", nonBlank: true, itemMaxLength: MAX_SIGNED_LEN };
 const OPT_LIST = { ...LIST, required: false };
+// RULED #69: `carriesAny` phrases are matched on word edges, so the signer's list is tighter than LIST (see checkCarryPhrases).
+const CARRY_PHRASES = { type: "string-list", required: true, minItems: 1, maxItems: 50, itemType: "string", nonBlank: true, itemMaxLength: 200, carryPhrases: true };
 const NONE_EXIT = { type: "integer", required: false };
 // `text` on EVERY check is the signer's explanation only (Law 6): optional, a string, never decides.
 const EXPLAIN = { type: "explanation", required: false };
@@ -616,6 +619,108 @@ function runMustCarry(ctx, c) {
   const lower = t.text.toLowerCase();
   const missing = c.phrases.filter((p) => !carries(t.text, lower, p, strict));
   return missing.length === 0 ? OK : red("missing", boundItems(missing, true));
+}
+
+// --- carriesAny (RULED #69) ---------------------------------------------------
+
+const CARRY_WORD_CP = /^[\p{L}\p{M}\p{Nd}]$/u; // ONE code point at a time: a fixed class, never built from input
+const isAsciiWord = (c) => (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || (c >= 48 && c <= 57); // the ASCII members of [\p{L}\p{M}\p{Nd}]
+function isCarryWordAt(t, i) {
+  if (i < 0 || i >= t.length) return false;
+  const c = t.charCodeAt(i);
+  if (c < 128) return isAsciiWord(c); // hot path: no allocation
+  return CARRY_WORD_CP.test(String.fromCodePoint(t.codePointAt(i)));
+}
+/** True when the code point ENDING at `e` (exclusive) is a word character; `e` = 0 is the text edge (not a word). */
+function wordEndsAt(t, e) {
+  if (e < 1) return false;
+  const u = t.charCodeAt(e - 1);
+  if (u < 128) return isAsciiWord(u);
+  const low = u >= 0xdc00 && u <= 0xdfff && e >= 2 && t.charCodeAt(e - 2) >= 0xd800 && t.charCodeAt(e - 2) <= 0xdbff;
+  return isCarryWordAt(t, low ? e - 2 : e - 1);
+}
+/**
+ * RULED #69 amendment 3: collapse every whitespace run (the JS `\s` set, one UTF-16 unit per character, so a run never splits a
+ * surrogate pair) to ONE ASCII space, in one native linear pass. The input is the lowered text (forgiving) or the raw text (strict).
+ * WHY the word edges read the same on the collapsed text: (a) no `\s` character is a word character (`\p{L}\p{M}\p{Nd}`), so the
+ * character before a match and the one after it are word or non-word identically whether it was a whole run or one space; (b) a
+ * phrase holds no whitespace but single ASCII spaces (createRubric), so a phrase space matches exactly one collapsed space, which
+ * is exactly "a run of 1+ whitespace" of the original; (c) the collapse is done AFTER `toLowerCase()`, never before: lowering
+ * keeps every whitespace character whitespace and creates none (`İ` lowers to `i` + U+0307, both non-whitespace, a letter and a
+ * combining mark), so the lowered text has the same runs as the raw one; (d) a run is made of BMP units only (no `\s` character is
+ * astral), so collapsing never cuts or joins a surrogate pair, and `wordEndsAt` / `isCarryWordAt` still see whole code points.
+ */
+const collapseWs = (s) => s.replace(/ \s+|[^\S ]\s*/g, " "); // a lone space is already collapsed: only a run that is not exactly " " is a match, so ordinary prose pays for no replacement
+
+/** KMP failure table of `p`: fail[k] = the length of the longest proper prefix of p[0..k] that is also its suffix. O(p.length). */
+function carryFailure(p) {
+  const fail = new Int32Array(p.length);
+  for (let i = 1, k = 0; i < p.length; i++) {
+    while (k > 0 && p.charCodeAt(i) !== p.charCodeAt(k)) k = fail[k - 1];
+    if (p.charCodeAt(i) === p.charCodeAt(k)) k++;
+    fail[i] = k;
+  }
+  return fail;
+}
+
+/**
+ * Is the single-spaced `phrase` in the whitespace-collapsed `t` on word edges? `t` and `phrase` are in the SAME case. No RegExp
+ * from signed input, and `t` is never re-read: KMP reads each text unit once (the pointer `k` rises by at most 1 per unit, and every
+ * fall-back by `fail` lowers it, so at most 2n steps in all; while `k` is 0 a native one-unit `indexOf` skips ahead, forward only), then each full match costs one O(1) edge check (`wordEndsAt` before it,
+ * `isCarryWordAt` after it, one code point each) and the scan continues from `fail[m - 1]`, so overlapping matches are all seen
+ * (there are at most n). The first match with both edges is the answer. Cost O(n + c) per call, n = t.length, c = phrase.length.
+ */
+function carriesOnEdges(t, phrase) {
+  const m = phrase.length;
+  const fail = carryFailure(phrase);
+  const first = phrase[0];
+  const f0 = phrase.charCodeAt(0);
+  for (let i = 0, k = 0; i < t.length; i++) {
+    if (k === 0 && t.charCodeAt(i) !== f0) {
+      // nothing is partially matched: jump to the next unit equal to the phrase's first one. A one-unit native search only moves
+      // forward and reads each unit once, so the O(n + c) bound stands; it only makes the common non-matching text fast.
+      i = t.indexOf(first, i);
+      if (i === -1) return false;
+    }
+    const u = t.charCodeAt(i);
+    while (k > 0 && u !== phrase.charCodeAt(k)) k = fail[k - 1];
+    if (u === phrase.charCodeAt(k)) k++;
+    if (k === m) {
+      if (!wordEndsAt(t, i + 1 - m) && !isCarryWordAt(t, i + 1)) return true;
+      k = fail[m - 1];
+    }
+  }
+  return false;
+}
+
+/**
+ * `carriesAny`: which signed phrases are in the field on word edges, in signed order. Forgiving: lowered text and lowered phrase.
+ * Strict: ALSO the raw text with the phrase as signed, only for a phrase the forgiving pass found (so never looser).
+ * COST (amendment 3; no cap, no counter): 2 normalizations of the field (lower + collapse, and collapse of the raw text, the latter
+ * only in strict mode and only when the forgiving pass found something) plus, per phrase, one KMP scan of the collapsed text per
+ * pass: about (2 + 2 x phrases) x field length in the worst case, whatever the input (whitespace floods, near-miss phrases,
+ * repeated letters, and `İ` all included). Strict re-scans the raw text for phrases the forgiving pass found, so it can take up to about twice as long when phrases are found. Each candidate match whose edge characters are non-ASCII (e.g. `İ`, accented letters) costs more to check than an ASCII edge. Bounding the field (output) size is the harness's job, because `gate.checkStep` holds the gate's ordering lock while it runs.
+ */
+function runCarriesAny(ctx, c) {
+  const t = textField(ctx, c.field);
+  if (t.gap) return t;
+  const strict = c.strict === true;
+  const lower = collapseWs(t.text.toLowerCase());
+  let raw = null; // collapsed raw text, built once and only when a strict pass needs it
+  const found = [];
+  for (const p of c.phrases) {
+    if (!carriesOnEdges(lower, p.toLowerCase())) continue;
+    if (strict) {
+      raw ??= collapseWs(t.text);
+      if (!carriesOnEdges(raw, p)) continue;
+    }
+    found.push(p);
+  }
+  if (found.length === 0) {
+    const { items, itemsTotal } = boundItems(c.phrases, true);
+    return red("none-found", { phrases: items, ...(itemsTotal !== undefined ? { itemsTotal } : {}) });
+  }
+  return { matched: { check: c.id, phrases: found.slice(0, MAX_ITEMS), ...(found.length > MAX_ITEMS ? { phrasesTotal: found.length } : {}) } };
 }
 
 function runBlockLines(ctx, c) {
@@ -1137,6 +1242,7 @@ const RULES = {
   sectionWords: { fields: { field: FIELD, names: LIST, wordsPerSection: COUNT }, run: runSectionWords },
   allowedKeys: { fields: { keys: LIST }, run: runAllowedKeys },
   mustCarry: { fields: { field: FIELD, phrases: LIST, strict: STRICT }, run: runMustCarry },
+  carriesAny: { fields: { field: FIELD, phrases: CARRY_PHRASES, strict: STRICT }, run: runCarriesAny },
   blockLines: { fields: { field: FIELD, size: COUNT, phrases: LIST, strict: STRICT }, run: runBlockLines },
   in: { fields: { field: FIELD, values: LIST }, run: runIn(true) },
   notIn: { fields: { field: FIELD, values: LIST }, run: runIn(false) },
@@ -1212,7 +1318,7 @@ function describeField(name, d) {
   }
   if (d.type === "bound") return `${name}${d.required ? "" : "?"}: bound (number for number/money, string for date/time)`;
   if (d.type === "explanation") return `${name}?: string (the signer's explanation; never decides)`;
-  let t = d.exactItems !== undefined ? `list of exactly ${d.exactItems} month names (January to December), each max ${d.itemMaxLength} chars, letters and an optional trailing ".", unique ignoring case` : d.type === "string-list" ? `non-empty list of non-blank strings, each max ${d.itemMaxLength} chars` : d.type === "name" ? `non-blank string, max ${d.maxLength} chars` : d.type === "string" ? `non-blank string, max ${d.maxLength} chars` : d.type;
+  let t = d.carryPhrases ? `non-empty list (max ${d.maxItems}) of non-blank phrases, each max ${d.itemMaxLength} chars, starting and ending with a letter or digit, only single ASCII spaces as whitespace, unique ignoring case` : d.exactItems !== undefined ? `list of exactly ${d.exactItems} month names (January to December), each max ${d.itemMaxLength} chars, letters and an optional trailing ".", unique ignoring case` : d.type === "string-list" ? `non-empty list of non-blank strings, each max ${d.itemMaxLength} chars` : d.type === "name" ? `non-blank string, max ${d.maxLength} chars` : d.type === "string" ? `non-blank string, max ${d.maxLength} chars` : d.type;
   if (d.type === "integer" && d.min !== undefined) t = `integer >= ${d.min}`;
   if (d.type === "number") t = "finite number";
   if (d.type === "enum") t = d.enum.map((e) => JSON.stringify(e)).join(" | ");
@@ -1396,6 +1502,24 @@ function checkMonthNames(d, v, where) {
   if (new Set(v.map((n) => n.toLowerCase())).size !== v.length) throw fail(where, "must not contain duplicates (compared ignoring letter case)");
 }
 
+const ALNUM_CP = /^[\p{L}\p{Nd}]$/u;
+/** RULED #69: `carriesAny` phrases. A list-level problem is reported at the list, a per-phrase one at `[i]`. */
+function checkCarryPhrases(d, v, where) {
+  if (!Array.isArray(v) || v.length < 1) throw fail(where, "must be a non-empty array of non-blank strings");
+  if (v.length > d.maxItems) throw fail(where, `must hold at most ${d.maxItems} phrases`);
+  v.forEach((s, i) => {
+    const w = `${where}[${i}]`;
+    if (blank(s)) throw fail(w, "must be a non-blank string");
+    if (s.length > d.itemMaxLength) throw fail(w, `must be at most ${d.itemMaxLength} characters`);
+    const cps = Array.from(s);
+    if (!ALNUM_CP.test(cps[0]) || !ALNUM_CP.test(cps[cps.length - 1])) {
+      throw fail(w, "must start and end with a letter or digit");
+    }
+    if (/[^\S ]/.test(s) || s.includes("  ")) throw fail(w, "may hold only single ASCII spaces as whitespace (no tab, newline or double space)");
+  });
+  if (new Set(v.map((s) => s.toLowerCase())).size !== v.length) throw fail(where, "must not contain duplicates (compared ignoring letter case)");
+}
+
 function checkValue(d, v, where) {
   switch (d.type) {
     case "decide-list":
@@ -1422,6 +1546,7 @@ function checkValue(d, v, where) {
       if (typeof v !== "string") throw fail(where, "must be a string (the signer's explanation)");
       return;
     case "string-list": {
+      if (d.carryPhrases) return checkCarryPhrases(d, v, where);
       if (d.exactItems !== undefined) return checkMonthNames(d, v, where);
       if (!Array.isArray(v) || v.length < 1) throw fail(where, "must be a non-empty array of non-blank strings");
       v.forEach((s, i) => {
@@ -1772,7 +1897,7 @@ function quoteList(a, bare = false) {
 }
 
 /**
- * The two gaps that render as a plain sentence instead of a JSON row (fwdloop's strike detection keys on these
+ * The gaps that render as a plain sentence instead of a JSON row (fwdloop's strike detection keys on these
  * exact strings). null = not one of them, or a field is missing / the wrong type / unreadable: use the JSON row.
  */
 function renderSentence(g, more = 0) {
@@ -1795,6 +1920,12 @@ function renderSentence(g, more = 0) {
       const meas = num(m) && num(l) ? ` (${m} vs ${l})` : num(m) ? ` (${m})` : "";
       return `${g.id}: ${CELLS_GAP_KINDS[kind]}${meas}${items.length ? `: ${quoteList(items, true)}` : ""}${n > 0 ? ` and ${n} more` : ""}`;
     }
+    if (kind === "none-found") {
+      const { phrases, field } = g;
+      if (!Array.isArray(phrases) || phrases.length === 0 || typeof field !== "string") return null;
+      const n = typeof g.itemsTotal === "number" ? g.itemsTotal - phrases.length : 0;
+      return `none of these words appear in ${JSON.stringify(field)}: ${quoteList(phrases)}${n > 0 ? ` and ${n} more` : ""}`;
+    }
     if (kind === "extra-keys") {
       const { keys, allowed } = g;
       if (!Array.isArray(keys) || !Array.isArray(allowed) || allowed.length === 0) return null;
@@ -1813,12 +1944,13 @@ function renderSentence(g, more = 0) {
  * A deterministic one-string render of a gap list: each gap becomes a JSON array
  * of its fields in a FIXED order [key, check, kind, field, measured, limit,
  * direction, items, itemsTotal] (absent = null), and the entries are joined by
- * "; " in the order given (the minted order is signed check order). The two gaps
+ * "; " in the order given (the minted order is signed check order). The gaps
  * `sectionWords` (kind `section-words`) and `allowedKeys` (kind `extra-keys`) render as a plain
  * sentence instead, exactly: `<section>: <words> words, about <asked> asked (<lo>-<hi>)` and
  * `artifact has key(s) "k1", "k2" besides "text"; the check reads "text" only, so put the whole answer in "text"`
  * (each key is JSON-escaped; when `itemsTotal` exceeds the items shown, ` and N more` follows the key list, and on the last
- * `section-words` sentence).
+ * `section-words` sentence). A `carriesAny` `none-found` gap (RULED #69) also renders as a sentence: `none of these words appear in "body": "crash", "hang"`
+ * (the field and each phrase JSON-escaped; ` and N more` when `itemsTotal` exceeds the phrases shown).
  * JSON makes the other rows' render injective, so the same failing state always gives the same string and
  * different states give different strings.
  * @param {Gap[]} gaps
@@ -1892,7 +2024,7 @@ function mintGap(checkpoint, c, partial) {
   const g = { key: `${checkpoint}:${c.id}`, checkpoint, check: c.rule, id: c.id };
   const field = c.field ?? c.claims ?? c.claim;
   if (field !== undefined) g.field = field;
-  for (const k of ["kind", "measured", "limit", "direction", "items", "itemsTotal", "section", "words", "asked", "lo", "hi", "keys", "allowed"]) {
+  for (const k of ["kind", "measured", "limit", "direction", "items", "itemsTotal", "section", "words", "asked", "lo", "hi", "keys", "allowed", "phrases"]) {
     let v = partial[k];
     if (v === undefined) continue;
     g[k] = v;
@@ -2009,6 +2141,7 @@ export async function checkStep(rubric, checkpoint, output, opts) {
   const evidence = []; // RULED #66
   let evidenceTotal = 0;
   const expected = []; // cells/table/diff: the answer bareguard computed (full.expected)
+  const matched = []; // carriesAny: one entry per GREEN check (RULED #69; full.matched)
 
   if (shapeGap !== null) {
     reds.push(mintGap(checkpoint, { id: "happened", rule: "happened" }, shapeGap));
@@ -2025,6 +2158,7 @@ export async function checkStep(rubric, checkpoint, output, opts) {
         evidenceTotal += res.evidence.total;
       }
       if (res.expected) expected.push({ check: c.id, ...res.expected });
+      if (res.matched) matched.push(res.matched);
       if (res.gap) reds.push(mintGap(checkpoint, c, res.gap));
       else if (res.gaps) for (const g of res.gaps) reds.push(mintGap(checkpoint, c, g)); // sectionWords: one gap per section
       else if (res.fault) faults.push({ key: `${checkpoint}:${c.id}`, checkpoint, id: c.id, kind: res.fault.kind, detail: res.fault.detail });
@@ -2039,7 +2173,7 @@ export async function checkStep(rubric, checkpoint, output, opts) {
     outputSha,
     gaps: verdict === "red" ? reds : [],
     fault: faults[0] ?? null,
-    full: { gaps: reds, faults, evidence, ...(evidenceTotal > evidence.length ? { evidenceTotal } : {}), ...(expected.length ? { expected } : {}) },
+    full: { gaps: reds, faults, evidence, matched, ...(evidenceTotal > evidence.length ? { evidenceTotal } : {}), ...(expected.length ? { expected } : {}) },
     baselines: { ...ctx.baselines }, // plain object out; own "__proto__" etc. survive the spread
     callerItems: { ...ctx.callerItems },
   });

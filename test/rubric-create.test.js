@@ -192,7 +192,7 @@ test("rubricSha: refuses non-JSON data instead of hashing a lossy form (NaN woul
 // --- rubricVocabulary ---------------------------------------------------------
 
 const DAY1_RULES = [
-  "allowedKeys", "atMost", "blockLines", "cells", "cited", "commandExit", "complete", "diff", "filesChanged", "in", "max", "maxLines", "maxWords",
+  "allowedKeys", "atMost", "blockLines", "carriesAny", "cells", "cited", "commandExit", "complete", "diff", "filesChanged", "in", "max", "maxLines", "maxWords",
   "min", "minWords", "mustCarry", "nonEmpty", "notIn", "notWorse", "patternAbsent", "sectionOrder", "sectionWords", "sections", "table",
 ];
 

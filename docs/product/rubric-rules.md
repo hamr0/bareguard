@@ -74,6 +74,16 @@ Every listed phrase appears in the field (case-insensitive substring; `strict` a
 - Example: `{ id: "carry", rule: "mustCarry", field: "text", phrases: ["rollback plan"] }`
 - Red: `missing` (items = the absent phrases).
 
+### `carriesAny`
+At least ONE listed phrase appears in the field on word edges (any-of; `mustCarry` is all-of).
+- Fields: `field`, `phrases`, `strict?`.
+- Match: the character before and after the match is the text edge or not a letter, mark or digit (no digit or hyphen glue, no stemming: `hang` misses "hanging" and "change", hits "hang-up", "(hang)", "HANG:"). Case-insensitive; `strict` also requires the exact case. A single space in a phrase matches any run of whitespace, newlines included; every other character is exact.
+- Phrases: 1 to 50, each at most 200 characters, starting and ending with a letter or digit, whitespace only as single ASCII spaces, no duplicates after the case fold. Else `createRubric` refuses with `e.path` at `phrases` or `phrases[i]`.
+- Example: `{ id: "crash", rule: "carriesAny", field: "body", phrases: ["crash", "hang", "not responding"] }`
+- Red: `none-found` (`phrases` = the signed list, up to 20, `itemsTotal` when cut; `renderGaps` says `none of these words appear in "body": "crash", "hang"`); a missing, non-string or unreadable field stays `missing`, `wrong-type`, `unreadable`.
+- Green detail: `full.matched` on the step result, one `{ check, phrases, phrasesTotal? }` per green `carriesAny` check (phrases found, signed order, up to 20). Not in the gaps, the audit line or the humanChannel ask.
+- Cost (ruling #69 amendment 3): no work cap and no `too-many` gap. The field is lowered and its whitespace runs collapsed once, then each phrase is searched by KMP (the text is never re-read), so the work is about (2 normalizations + 2 x phrases) x field length: linear, growing in proportion to field length x number of phrases, for any input, with no superlinear case. Strict re-scans the raw text for phrases the forgiving pass found, so it can take up to about twice as long when phrases are found. Each candidate match whose edge characters are non-ASCII (e.g. `İ`, accented letters) costs more to check than an ASCII edge. `full.matched` is always complete (every signed phrase found, signed order). Bounding the field (output) size is the harness's job, because `gate.checkStep` holds the gate's ordering lock while it runs.
+
 ### `blockLines`
 Non-empty lines are grouped in blocks of `size`; every listed phrase must appear in each block.
 - Fields: `field`, `size`, `phrases`, `strict?`.

@@ -422,7 +422,7 @@ test("rubricVocabulary lists decides on cited with its shapes and conditions; th
 
 test("rubricVocabulary: every EXISTING rule, the common/bounds/checkpoint blocks and the rest of cited are byte-identical to before", () => {
   const h = (x) => sha(JSON.stringify(x));
-  const { cited, cells: _c, table: _t, diff: _df, ...others } = rubricVocabulary.rules; // cells/table/diff are new (cells-prd.md)
+  const { cited, cells: _c, table: _t, diff: _df, carriesAny: _ca, ...others } = rubricVocabulary.rules; // cells/table/diff are new (cells-prd.md); carriesAny is new (#69)
   assert.equal(h(others), "1643c3f202e7a6a7cfa06be705536e96194bdd9c2ddb832063ae41b77400909a");
   const { decides: _d, ...citedFields } = cited.fields;
   assert.equal(h(cited.fields.claims), h({ type: "name", required: true, nonBlank: true, maxLength: 128 }));
@@ -431,15 +431,16 @@ test("rubricVocabulary: every EXISTING rule, the common/bounds/checkpoint blocks
     source: { type: "name", required: true, nonBlank: true, maxLength: 128, ref: "input" },
     text: { type: "explanation", required: false },
   });
-  const { schema, common, bounds: allBounds, checkpoint, foundational } = rubricVocabulary;
-  // quoteMaxChars is the one additive bounds entry (hamr-approved); every earlier bound stays byte-identical
+  const { schema, common: allCommon, bounds: allBounds, checkpoint, foundational } = rubricVocabulary;
+  const common = { ...allCommon, rule: { ...allCommon.rule, enum: allCommon.rule.enum.filter((r) => r !== "carriesAny") } }; // carriesAny (#69) is the one additive enum entry
+  // quoteMaxChars is the one additive bounds entry (hamr-approved); every earlier bound stays byte-identical (carriesAny has no bound, #69 amendment 3)
   const { quoteMaxChars, ...bounds } = allBounds;
   assert.equal(quoteMaxChars, 4000, "bounds.quoteMaxChars is the 4000-char quote cap (red quote-too-long with decides: see the quote-too-long test)");
   // common.rule.enum gained "cells", "table", "diff" (cells-prd.md, additive); nothing else in these blocks changed
   assert.equal(h({ schema, common, bounds, checkpoint, foundational }), "1b8b6b0cb9924bb53c47a6784007d463a47ac4589c708ca128e1fdad418354c9");
   assert.ok(cited.description.startsWith("cited({ id, claims: non-blank string, max 128 chars, source: non-blank string, max 128 chars, decides?: "));
   assert.ok(cited.description.endsWith(", text?: string (the signer's explanation; never decides) })"));
-  assert.deepEqual(Object.keys(rubricVocabulary.rules), "nonEmpty,maxWords,minWords,maxLines,sections,sectionOrder,sectionWords,allowedKeys,mustCarry,blockLines,in,notIn,atMost,max,min,cited,complete,commandExit,notWorse,patternAbsent,filesChanged,cells,table,diff".split(","));
+  assert.deepEqual(Object.keys(rubricVocabulary.rules), "nonEmpty,maxWords,minWords,maxLines,sections,sectionOrder,sectionWords,allowedKeys,mustCarry,carriesAny,blockLines,in,notIn,atMost,max,min,cited,complete,commandExit,notWorse,patternAbsent,filesChanged,cells,table,diff".split(","));
 });
 
 // --- parseClaimValue (the pure parser) ---------------------------------------------------------------
