@@ -109,7 +109,7 @@ const gate = new Gate({
 });
 ```
 
-An unlisted tool, command, or agent is **denied, never asked**; add a row, don't widen a letter. A starter file ships at [`bareguard.rwx.json`](bareguard.rwx.json); `gate.add(entries)` / `addToGates(gates, entries)` grow a running gate tighten-only. Full contract: [`bareguard.context.md`](bareguard.context.md#runtime-growth-for-spec-less-sites--gateadd-gaterwxtools-addtogates-2321).
+An unlisted tool, command, or agent is **denied, never asked**; add a row, don't widen a letter. To have a human decide instead of a flat deny when an agent lacks a *listed* letter, name that letter in `rwx.askUnheld` (e.g. `askUnheld: ["x"]`; default `[]` = deny); unlisted, joined and malformed cases still deny. See [`rwx.askUnheld`](bareguard.context.md#asking-for-an-unheld-letter--rwxaskunheld-ruling-70). A starter file ships at [`bareguard.rwx.json`](bareguard.rwx.json); `gate.add(entries)` / `addToGates(gates, entries)` grow a running gate tighten-only. Full contract: [`bareguard.context.md`](bareguard.context.md#runtime-growth-for-spec-less-sites--gateadd-gaterwxtools-addtogates-2321).
 
 **[rwxmap](https://github.com/hamr0/rwxmap)** [WIP] labels every OpenAPI operation r/w/x as a starting point and marks unsure rows (`tight`/`loose`) for human review; its exporter writes a bareguard `rwx` config, and `askOn: "loose"` sends unreviewed rows to a human. bareguard never imports it. See [marker-carrying entries](bareguard.context.md#marker-carrying-entries--rwxaskon-d103-settled-with-rwxmap-2026-09-24).
 

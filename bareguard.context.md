@@ -343,6 +343,7 @@ rwx: {
                      // its parent-clamped grant; skips the `agents` lookup. Falls
                      // back to the BAREGUARD_RWX_LETTERS env var.
   askOn:   "none",  // optional (default): "none" | "loose" — see below.
+  askUnheld: [],    // optional (default []): letters whose UNHELD match asks, not denies — see below.
 }
 ```
 
@@ -389,7 +390,7 @@ asked, never guessed**:
 | `rwx.denied` | the tool/command IS listed, but the agent's letters don't cover its tagged letter |
 | `rwx.joined` | a bash command contains a joined/chained/redirect construct and isn't listed **verbatim** |
 | `rwx.invalid` | the `rwx` config (or a value mutated after construction) is shape-broken and cannot be evaluated — fails closed, same family as every other `<key>.invalid` rule |
-| `rwx.ask` | (D103, only under `askOn:"loose"`) the letter IS covered, but the matched entry's marker is `"loose"` — asks via `humanChannel` instead of allowing; never fires for a letter that would otherwise deny |
+| `rwx.ask` | (D103, only under `askOn:"loose"`) the letter IS covered, but the matched entry's marker is `"loose"` — asks via `humanChannel` instead of allowing. Also (ruling #70) under `rwx.askUnheld`: the entry's letter is NOT covered but is listed there — asks instead of `rwx.denied` (see "Asking for an unheld letter") |
 
 An agent name absent from `rwx.agents` resolves to letters `"---"` — it
 starts, but every action denies with `rwx.unlisted`. Verified:
@@ -516,6 +517,34 @@ mechanically-derived residual, not a confirmed state (PRD §23.20) — before
 committing it as your own `bareguard.rwx.json`.
 
 rwxmap (`github.com/hamr0/rwxmap`, WIP) labels every OpenAPI operation r/w/x mechanically and marks rows it is unsure of (`tight`/`loose`) for human review; its exporter (`exportGate`) writes those labels straight into a bareguard `rwx` config. Its labels are suggestions, not verdicts: it never refuses, it only labels, and the gate enforces every row (unlike an MCP hint that nothing enforces). A site met mid-run goes through `gate.add()`/`addToGates()` instead. bareguard never imports rwxmap.
+
+### Asking for an unheld letter — `rwx.askUnheld` (ruling #70)
+
+`rwx.askUnheld` is an opt-in list of letters from `"r"`, `"w"`, `"x"`
+(default `[]`; unset, `null` and `[]` are byte-identical to every earlier
+release). When a matched tool or bash entry carries a listed letter that the
+agent does **not** hold, the gate asks via `humanChannel` (rule `rwx.ask`,
+event and audit fields `rwxLetters` / `rwxLetter`, plus `rwxMarker` when the
+entry has one) instead of denying `rwx.denied`. A human `allow` allows
+(`humanChannel.allow`); a human `deny` denies. With no `humanChannel`
+registered the ask denies like any other ask (reason ends
+`(no humanChannel registered)`). A letter not in the list still denies
+`rwx.denied`.
+
+Only a correctly matched, well-formed entry can become an ask. An unlisted
+agent, tool or command (`rwx.unlisted`), a joined bash command
+(`rwx.joined`), a bad tool identity (`tools.invalidTool`) and a malformed
+row or config (`rwx.invalid`) deny exactly as before, even with
+`askUnheld: ["r","w","x"]`. `askOn:"loose"` is unchanged and still applies
+only to letters the agent holds. Budget letter counts are unchanged.
+
+A non-array, a non-string element, an element that is not `r`/`w`/`x`, or a
+duplicate throws at construct time (`invalid bareguard config:
+rwx.askUnheld ...`). If the value is mutated into something unusable after
+construct, it reads as `[]` at check time (deny).
+
+bareguard derives a child's letters only (`gate.clampRwxLetters`); it
+derives no child copy of `askOn` or `askUnheld`, so a child gate sets its own.
 
 ### `gate.allows()` filtering (the hide half of enforcement, §23.5)
 

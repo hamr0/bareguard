@@ -93,12 +93,15 @@ export {};
  * @property {2|3} [tier]  Numeric form of `classification` (2 = destructive,
  *   3 = super_destructive).
  * @property {string} [rwxLetters]  This gate's agent's full 3-char rwx grant
- *   (§23); present only when `rwx.askOn:"loose"` (D103) raised this ask.
+ *   (§23); present only when `rwx.askOn:"loose"` (D103) or `rwx.askUnheld`
+ *   (ruling #70) raised this ask.
  * @property {string} [rwxLetter]  The single letter (`"r"|"w"|"x"`) the
  *   matched rwx entry carried.
  * @property {"tight"|"loose"|"settled"} [rwxMarker]  The matched entry's
- *   normalized marker — always `"loose"` when present, since that is the
- *   only marker `rwx.askOn:"loose"` ever asks on.
+ *   normalized marker — `"loose"` when `rwx.askOn:"loose"` raised the
+ *   ask (the only marker it asks on); an `rwx.askUnheld` ask carries
+ *   whatever marker the matched entry has (`"tight"`, `"loose"` or
+ *   `"settled"`), and none for a bare-string entry.
  */
 
 /**
@@ -489,6 +492,14 @@ export {};
  *   required first; a letter the agent lacks still denies `rwx.denied`
  *   unchanged. A bare-string entry has no marker and never asks. `"tight"`
  *   and `"settled"` never ask. Any other value throws at construct time.
+ * @property {Array<"r"|"w"|"x">} [askUnheld]  Ruling #70, default `[]`
+ *   (unset/`null`/`[]` is byte-identical to before). A matched tool/bash
+ *   entry whose letter the agent does NOT hold and that is listed here asks
+ *   (rule `rwx.ask`, via `humanChannel`) instead of denying `rwx.denied`.
+ *   Unlisted, joined, bad-identity and malformed-row denies never become
+ *   asks. A non-array, a non-string element, an element not `r`/`w`/`x`, or
+ *   a duplicate throws at construct time; an unusable value read at check
+ *   time falls back to `[]` (deny).
  */
 
 /**

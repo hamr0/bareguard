@@ -1138,6 +1138,10 @@ kept genuinely undoable (git / a copy / tight `fs.writeScope`), `x` granted rare
 deliberately ahead of time, budget caps against repetition — fence the blast radius (Part 2
 intent-drift framing). (bareguard-prd.md:1095-1105)
 
+*Since ruling #70 (§23.22):* an operator may opt in, per letter, to a human ask instead of a flat
+`rwx.denied` for a listed letter the agent does not hold (`rwx.askUnheld`, default `[]`). The
+default stands: `x` never auto-asks.
+
 ### 23.9 Delegation
 
 **Attenuate only** — a child's letters are `min(what the parent requested for it, what the
@@ -1648,3 +1652,41 @@ resolved value on full success — to the thrown `AggregateError` as `.results`.
 the `rwx.add_rejected` phase, the `rwx.tightened` deny rule, and the 10,000-entry size cap all
 join the 1.0 SemVer surface (§23.17). Built on `main`'s `feat/rwx-add` branch and shipped in
 0.18.0.
+
+### 23.22 `rwx.askUnheld`: ask instead of deny for a letter the agent does not hold (ruling #70)
+
+**RULED (hamr, 2026-10-29; requested by the barebox sandbox). Target 0.29.0, not yet released.**
+Today an action whose matched entry's letter is not in the agent's grant is a flat `rwx.denied`
+(§23.4, §23.20). barebox needs an opt-in to ask a human instead, for chosen letters only. New
+optional config key `rwx.askUnheld`: a list of distinct letters from `"r"`, `"w"`, `"x"`. Default
+`[]` (unset, `null` and `[]` all mean the same), and the default is byte-identical to every prior
+release.
+
+1. **Decision.** In the tools branch and the bash branch of the rwx check, at the exact point that
+   returns `rwx.denied`: if the matched entry's letter is in `askUnheld`, the gate returns
+   `askHuman` with rule `rwx.ask` (the same rule name `askOn:"loose"` uses) instead, carrying
+   `rwxLetters`, `rwxLetter` and, for a marker-carrying entry, `rwxMarker`. Otherwise it denies
+   `rwx.denied` unchanged. The ask resolves through the normal `humanChannel` path: human allow
+   gives allow (`humanChannel.allow`), human deny gives deny, and an ask with no `humanChannel`
+   behaves as any other ask does today.
+2. **Unchanged denies.** An unlisted agent, tool or command (`rwx.unlisted`), a joined bash
+   command (`rwx.joined`), a bad tool identity (`tools.invalidTool`), a malformed row or config
+   (`rwx.invalid`) and every other shape error still deny, whatever `askUnheld` holds. Only a
+   correctly matched, well-formed entry whose letter is not granted can become an ask.
+3. **Validation.** A non-array, a non-string element, an element not `r`/`w`/`x`, or a duplicate
+   throws at construct time (`invalid bareguard config: rwx.askUnheld ...`). A value that is
+   unusable when read at check time (the config object was mutated after construct) falls back to
+   `[]`, which is the narrower behavior (deny), the same way `askOn` falls back to `"none"`.
+4. **Interplay.** `askOn:"loose"` is unchanged and applies only to held letters. Budget letter
+   counts (§23.10) are unchanged.
+5. **Delegation.** bareguard derives a child's letters only (`clampRwxLetters`, §23.9); it derives
+   no child copy of `askOn`, so none is invented for `askUnheld`. A child gate is configured by its
+   caller.
+
+**Supersedes** the parts of §23.8 / §23.20 that say an unheld letter always denies and that the
+only ask is `askOn:"loose"` on a held letter, but only for letters the operator lists in
+`askUnheld`. Nothing is inferred: an unlisted letter keeps the deny.
+
+**SemVer surface (ships in 0.29.0):** the config key `rwx.askUnheld` and its validation messages,
+and its use of the existing `rwx.ask` rule and the `rwxLetters`/`rwxLetter`/`rwxMarker` ask and
+audit fields.

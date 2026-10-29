@@ -21,6 +21,9 @@
 //                      // humanChannel) before allowing an action whose
 //                      // matched entry carries marker:"loose" — the letter
 //                      // is still required; a missing letter still denies.
+//     askUnheld: [],   // optional (default []): letters from "r","w","x" whose
+//                      // matched entry the agent does NOT hold asks (via
+//                      // humanChannel) instead of denying rwx.denied.
 //   }
 //
 // A `tools`/`bash` map ENTRY (D103, settled with the rwxmap project,
@@ -303,6 +306,28 @@ export function matchRwxLetter(action, rwxCfg) {
 }
 
 /**
+ * Read `rwx.askUnheld` at check time: a valid list of distinct r/w/x letters,
+ * else `[]` (fail narrower = deny). Never throws.
+ * @param {*} cfg the `rwx` config object
+ * @returns {string[]}
+ */
+function readAskUnheld(cfg) {
+  try {
+    const v = cfg.askUnheld;
+    if (!Array.isArray(v)) return [];
+    const out = [];
+    for (const el of v) {
+      if (el !== "r" && el !== "w" && el !== "x") return [];
+      if (out.includes(el)) return [];
+      out.push(el);
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+/**
  * Step-5 rwx decision (§23.4/§23.5/§23.6) — runs in place of
  * `tools.allowlist` when `rwx` config is present (mutually exclusive,
  * enforced at construct time by {@link assertRwxConfig}). Deny by absence,
@@ -316,7 +341,10 @@ export function matchRwxLetter(action, rwxCfg) {
  * entry's marker is `"loose"`, an otherwise-allowed action resolves to
  * `askHuman` instead — the marker only ever TIGHTENS: it never grants a
  * letter a `rwx.denied` would still deny, and it never turns a deny into an
- * allow or an ask.
+ * allow or an ask. When `rwx.askUnheld` (ruling #70) lists the matched
+ * entry's letter and the agent does NOT hold it, the `rwx.denied` becomes an
+ * `askHuman` `rwx.ask` instead; every other deny (unlisted, joined,
+ * invalidTool, invalid) is unchanged.
  * @param {object} action action being evaluated
  * @param {*} rwxCfg `cfg.rwx` — the caller's rwx config object
  * @returns {{outcome:string,severity:string,rule:string,reason:(string|null),rwxLetters?:string,rwxLetter?:string,rwxMarker?:string}} a terminal allow/deny/askHuman decision (never null); `check()` resolves `askHuman` via `humanChannel` as usual
@@ -348,6 +376,12 @@ export function rwxCheck(action, rwxCfg) {
   // (TOCTOU) falls back to "none" — the strictly-narrower, byte-identical
   // behavior — rather than failing the whole check closed over an ask-only knob.
   const askOn = rwxCfg.askOn === "loose" ? "loose" : "none";
+
+  // askUnheld (ruling #70): letters whose UNHELD match asks instead of
+  // denying `rwx.denied`. Default [] is byte-identical to before. Validated at
+  // construct time; an unusable value read here (TOCTOU) falls back to [] —
+  // the strictly-narrower behavior (deny), same as askOn's fallback.
+  const askUnheld = readAskUnheld(rwxCfg);
 
   if (action?.type === "bash") {
     const rawCmd = action.cmd ?? action.args?.cmd ?? action.args?.command;
@@ -382,6 +416,14 @@ export function rwxCheck(action, rwxCfg) {
       };
     }
     if (!letters.includes(m.letter)) {
+      if (askUnheld.includes(m.letter)) {
+        return {
+          outcome: "askHuman", severity: "action", rule: "rwx.ask",
+          reason: `"${clipKey(cmd)}" is tagged "${m.letter}" but agent "${clipKey(agentName)}" only holds "${letters}" — rwx.askUnheld asks for "${m.letter}"`,
+          rwxLetters: letters, rwxLetter: m.letter,
+          ...(m.marker ? { rwxMarker: m.marker } : {}),
+        };
+      }
       return {
         outcome: "deny", severity: "action", rule: "rwx.denied",
         reason: `"${clipKey(cmd)}" is tagged "${m.letter}" but agent "${clipKey(agentName)}" only holds "${letters}"`,
@@ -438,6 +480,14 @@ export function rwxCheck(action, rwxCfg) {
     };
   }
   if (!letters.includes(letter)) {
+    if (askUnheld.includes(letter)) {
+      return {
+        outcome: "askHuman", severity: "action", rule: "rwx.ask",
+        reason: `"${clipKey(identity)}" is tagged "${letter}" but agent "${clipKey(agentName)}" only holds "${letters}" — rwx.askUnheld asks for "${letter}"`,
+        rwxLetters: letters, rwxLetter: letter,
+        ...(marker ? { rwxMarker: marker } : {}),
+      };
+    }
     return {
       outcome: "deny", severity: "action", rule: "rwx.denied",
       reason: `"${clipKey(identity)}" is tagged "${letter}" but agent "${clipKey(agentName)}" only holds "${letters}"`,
@@ -474,6 +524,7 @@ export function rwxCheck(action, rwxCfg) {
  *   - an `agents` map value (or `rwx.letters`) that is not a 3-char
  *     `[r-][w-][x-]` string;
  *   - `rwx.askOn` present but not exactly `"none"` or `"loose"` (D103);
+ *   - `rwx.askUnheld` present but not an array of distinct `"r"|"w"|"x"` (ruling #70);
  *   - `rwx` configured TOGETHER WITH `tools.allowlist` / `bash.allow` /
  *     `bash.denyPatterns` — the two modes are mutually exclusive (§23.2), so
  *     nobody is left guessing which is in charge;
@@ -575,6 +626,25 @@ export function assertRwxConfig(config) {
       throw new Error(
         `invalid bareguard config: rwx.askOn must be "none" or "loose", got ${JSON.stringify(rwxCfg.askOn)}`,
       );
+    }
+  }
+  if (rwxCfg.askUnheld !== undefined && rwxCfg.askUnheld !== null) {
+    if (!Array.isArray(rwxCfg.askUnheld)) {
+      throw new Error(
+        `invalid bareguard config: rwx.askUnheld must be an array of "r"|"w"|"x", got ${typeof rwxCfg.askUnheld}`,
+      );
+    }
+    const seen = new Set();
+    for (const el of rwxCfg.askUnheld) {
+      if (el !== "r" && el !== "w" && el !== "x") {
+        throw new Error(
+          `invalid bareguard config: rwx.askUnheld elements must each be "r", "w" or "x", got ${JSON.stringify(el)}`,
+        );
+      }
+      if (seen.has(el)) {
+        throw new Error(`invalid bareguard config: rwx.askUnheld has a duplicate letter ${JSON.stringify(el)}`);
+      }
+      seen.add(el);
     }
   }
 }
