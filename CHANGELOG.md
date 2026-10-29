@@ -3,6 +3,12 @@
 All notable changes to bareguard are documented here. Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [SemVer](https://semver.org/).
 
 
+## [Unreleased]
+
+### Documentation
+
+- `bareguard.context.md` gotcha #22 and a README fs note: a tool that walks a directory (grep/glob over a root) is gated as one action, so it must check each directory before descending and each file before reading with `gate.allows()` and prune/skip on `false`; otherwise it can read paths under `fs.deny`. `allows()` treats an ask as allowed (fs rules never ask). Docs only, no behaviour change.
+
 ## [0.29.0] - 2026-10-29
 
 ### Added
