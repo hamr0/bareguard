@@ -1138,6 +1138,10 @@ kept genuinely undoable (git / a copy / tight `fs.writeScope`), `x` granted rare
 deliberately ahead of time, budget caps against repetition — fence the blast radius (Part 2
 intent-drift framing). (bareguard-prd.md:1095-1105)
 
+*Since ruling #70 (§23.22):* an operator may opt in, per letter, to a human ask instead of a flat
+`rwx.denied` for a listed letter the agent does not hold (`rwx.askUnheld`, default `[]`). The
+default stands: `x` never auto-asks.
+
 ### 23.9 Delegation
 
 **Attenuate only** — a child's letters are `min(what the parent requested for it, what the

@@ -444,7 +444,7 @@ absence, enforcement, bash matching, delegation/count-cap rules, the rwxmap alig
 2026-09-22 implementation decisions, the POC evidence, rejected alternatives, known limits, the
 1.0-surface status, the two open questions that remain, and the marker-carrying-entries +
 `rwx.askOn` extension settled with rwxmap's D103 (2026-09-24), and `rwx.askUnheld` (ruling #70, §23.22; unreleased, target 0.29.0) — is Part 1 §23
-(`bareguard-prd.md:981-1307`).
+(`bareguard-prd.md`, §23.1-§23.22).
 
 ## §20 POC retrospective (what we built, why)
 
