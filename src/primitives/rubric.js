@@ -699,7 +699,7 @@ function carriesOnEdges(t, phrase) {
  * COST (amendment 3; no cap, no counter): 2 normalizations of the field (lower + collapse, and collapse of the raw text, the latter
  * only in strict mode and only when the forgiving pass found something) plus, per phrase, one KMP scan of the collapsed text per
  * pass: about (2 + 2 x phrases) x field length in the worst case, whatever the input (whitespace floods, near-miss phrases,
- * repeated letters, and `İ` all included). Strict re-scans the raw text for phrases the forgiving pass found, so it can take up to about twice as long when phrases are found. Text whose word edges are non-ASCII (e.g. `İ`, accented letters) is slower per character than ASCII text. Bounding the field (output) size is the harness's job, because `gate.checkStep` holds the gate's ordering lock while it runs.
+ * repeated letters, and `İ` all included). Strict re-scans the raw text for phrases the forgiving pass found, so it can take up to about twice as long when phrases are found. Each candidate match whose edge characters are non-ASCII (e.g. `İ`, accented letters) costs more to check than an ASCII edge. Bounding the field (output) size is the harness's job, because `gate.checkStep` holds the gate's ordering lock while it runs.
  */
 function runCarriesAny(ctx, c) {
   const t = textField(ctx, c.field);
