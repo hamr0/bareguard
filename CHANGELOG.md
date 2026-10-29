@@ -3,6 +3,12 @@
 All notable changes to bareguard are documented here. Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [SemVer](https://semver.org/).
 
 
+## [Unreleased]
+
+### Added
+
+- **`rwx.askUnheld`, ask a human instead of denying for a letter the agent does not hold (ruling #70; a barebox ask).** Optional list of distinct letters from `"r"`, `"w"`, `"x"`; default `[]` (unset, `null` and `[]` behave exactly as before). When a matched tool or bash entry's letter is listed and the agent does not hold it, the gate returns `askHuman` with rule `rwx.ask` (with `rwxLetters`, `rwxLetter`, and `rwxMarker` when the entry has one) instead of `rwx.denied`, and the ask resolves through `humanChannel` like any other. Unlisted agent/tool/command (`rwx.unlisted`), joined bash (`rwx.joined`), bad tool identity (`tools.invalidTool`) and malformed rows (`rwx.invalid`) still deny. A non-array, a non-string element, an element not `r`/`w`/`x`, or a duplicate throws at construct time; a value made unusable after construct reads as `[]` at check time. Join the SemVer surface when released: the key and its validation messages. `askOn:"loose"` and budget letter counts are unchanged.
+
 ## [0.28.0] - 2026-10-29
 
 ### Added
