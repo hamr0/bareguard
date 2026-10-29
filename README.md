@@ -73,6 +73,8 @@ if (decision.outcome === "allow") {
 
 `fs.readScope` and `fs.writeScope` are separate and deny-by-default (unset or `[]` = nothing allowed). Scope roots must be real paths, not symlinks. Detail: [`bareguard.context.md`](bareguard.context.md#gotchas).
 
+A tool that walks a directory (a grep/glob over a root) is gated as one action, so it must check each directory and file it touches with `await gate.allows({ type: "read", tool, path })` and prune/skip on `false`; otherwise it can read under `fs.deny`. See gotcha 22 in [`bareguard.context.md`](bareguard.context.md#gotchas).
+
 ## The primitives
 
 Small files, each readable in a sitting. The gate runs them in a fixed order (**deny → ask → scope → default**, first match wins). Building tool-calling automation? Read **`primitives.json`** first, a machine-readable menu of every verb (`when`, `import`, `signature`, `fails`, `example`), generated from source. Also on unpkg: `unpkg.com/bareguard/primitives.json`.
