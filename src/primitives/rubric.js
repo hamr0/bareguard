@@ -46,7 +46,7 @@ import { parseBound, compareBounds, decideQuote, parseClaimValue, displayCanon, 
  * @property {number} [hi] `sectionWords` only: the inclusive upper bound, `floor(asked * 1.2)`
  * @property {string[]} [keys] `allowedKeys` only: the output's own keys that are not allowed (insertion order, clipped, bounded)
  * @property {string[]} [allowed] `allowedKeys` only: the signed allowed keys (never clipped)
- * @property {string[]} [phrases] `carriesAny` only (kind `none-found`): the signed phrases (never clipped, at most 20; `itemsTotal` when cut). A `carriesAny` gap of kind `too-many` (RULED #69 amendments 1-2) carries `limit` = `rubricVocabulary.bounds.carriesAnyWorkMax` and no `measured`
+ * @property {string[]} [phrases] `carriesAny` only (kind `none-found`): the signed phrases (never clipped, at most 20; `itemsTotal` when cut).
  *
  * @typedef {Object} Decide
  * One signed decide of a `cited` check (§4.6): a VALUE decide `{ valueKind, op?, value | lo+hi, currency and/or unit (money), anchor? }`
@@ -639,97 +639,85 @@ function wordEndsAt(t, e) {
   const low = u >= 0xdc00 && u <= 0xdfff && e >= 2 && t.charCodeAt(e - 2) >= 0xd800 && t.charCodeAt(e - 2) <= 0xdbff;
   return isCarryWordAt(t, low ? e - 2 : e - 1);
 }
-const WS_UNIT = /^\s$/; // every `\s` character is one UTF-16 unit
-const isWsAt = (t, i) => {
-  const c = t.charCodeAt(i);
-  return c < 128 ? c === 32 || (c >= 9 && c <= 13) : WS_UNIT.test(t[i]); // ASCII fast path, same set as \s
-};
-const CARRY_STEP_COST = 40; // K: the fixed weight of one step (a first-word candidate tried, a later word compared); see carriesOnEdges
-const CARRY_WORK_CAP = 403_200_000; // `carriesAny`: work units (see carriesOnEdges) per check, all phrases and both passes together; over it = red too-many. = 120,000 x 12 x (2 x K x 2 + 3 x 40): fwdloop's shape. Deterministic, never a clock (Law 8)
+/**
+ * RULED #69 amendment 3: collapse every whitespace run (the JS `\s` set, one UTF-16 unit per character, so a run never splits a
+ * surrogate pair) to ONE ASCII space, in one native linear pass. The input is the lowered text (forgiving) or the raw text (strict).
+ * WHY the word edges read the same on the collapsed text: (a) no `\s` character is a word character (`\p{L}\p{M}\p{Nd}`), so the
+ * character before a match and the one after it are word or non-word identically whether it was a whole run or one space; (b) a
+ * phrase holds no whitespace but single ASCII spaces (createRubric), so a phrase space matches exactly one collapsed space, which
+ * is exactly "a run of 1+ whitespace" of the original; (c) the collapse is done AFTER `toLowerCase()`, never before: lowering
+ * keeps every whitespace character whitespace and creates none (`İ` lowers to `i` + U+0307, both non-whitespace, a letter and a
+ * combining mark), so the lowered text has the same runs as the raw one; (d) a run is made of BMP units only (no `\s` character is
+ * astral), so collapsing never cuts or joins a surrogate pair, and `wordEndsAt` / `isCarryWordAt` still see whole code points.
+ */
+const collapseWs = (s) => s.replace(/ \s+|[^\S ]\s*/g, " "); // a lone space is already collapsed: only a run that is not exactly " " is a match, so ordinary prose pays for no replacement
+
+/** KMP failure table of `p`: fail[k] = the length of the longest proper prefix of p[0..k] that is also its suffix. O(p.length). */
+function carryFailure(p) {
+  const fail = new Int32Array(p.length);
+  for (let i = 1, k = 0; i < p.length; i++) {
+    while (k > 0 && p.charCodeAt(i) !== p.charCodeAt(k)) k = fail[k - 1];
+    if (p.charCodeAt(i) === p.charCodeAt(k)) k++;
+    fail[i] = k;
+  }
+  return fail;
+}
 
 /**
- * Hand-matched, no RegExp from signed input: is `words` (a phrase split on its single spaces) in `t` on word edges, a gap
- * between two words being a run of 1+ whitespace characters and everything else exact? `t` and `words` are in the SAME case
- * (both raw, or both lowered), and every index below is an index of `t` itself.
- *
- * WORK (RULED #69 amendments 1 and 2): `meter.n` counts work units, each charged BEFORE the work is done: K + (length of the
- * first word) for every candidate position tried (each `indexOf` hit of the first word), K + (length of the word) for every
- * later word compared, 1 for every whitespace unit skipped; K = CARRY_STEP_COST. Returns 1 (found), 0 (not found) or -1 (the
- * next charge would pass `meter.cap`: stop). No clock: the count is a pure function of the input. Not charged: the native scan
- * BETWEEN hits, which never restarts (`indexOf` resumes at the last hit + 1), so at most one text length per phrase per pass.
- *
- * GUARANTEE. With n = the field length in UTF-16 units, and for each signed phrase w = its words and c = its length in UTF-16
- * units (spaces included), a check NEVER trips while
- *     n x SUM over the phrases of ( 2 x K x w + 3 x c )  <=  CARRY_WORK_CAP.
- * PROOF, one pass over a text of length m, one phrase (w words, c units):
- *  1. A hit is a start position, so there are at most m hits. A hit costs K x w + (the lengths of the words it reached)
- *     + (the whitespace units it skipped) at most; the words are joined by w - 1 single spaces, so the word lengths add up
- *     to at most c - (w - 1).
- *  2. Whitespace: a signed word holds no whitespace (a phrase holds only single ASCII spaces) and ends on a non-whitespace
- *     character. The run skipped before word j starts at the end of word j - 1, and that end fixes the hit's start (walk back
- *     over the fixed word lengths and the maximal runs), so two hits never share a run for the same j, and the runs of one j
- *     are disjoint: they add up to at most m units. Over j = 1..w-1 that is at most (w - 1) x m, which the (w - 1) spaces in c
- *     pay for (c - (w - 1) + (w - 1) = c).
- *  3. So one pass costs at most m x (K x w + c).
- *  4. The forgiving pass reads the LOWERED text and phrase. Only `İ` lengthens under toLowerCase() (to 2 units: `i` and U+0307),
- *     so the lowered phrase is at most 2c; a hit starts on a phrase's first character, a letter or digit, never on U+0307 and
- *     never on a low surrogate, so the hits are still at most n. That pass costs at most n x (K x w + 2c).
- *  5. The strict pass reads the raw text and runs only after a forgiving hit: at most n x (K x w + c).
- *  Forgiving + strict = n x (2 x K x w + 3c) per phrase; the check sums its phrases. fwdloop's shape, 12 phrases of at most 2
- *  words and 40 characters on 120,000 characters: 120,000 x 12 x (2 x 40 x 2 + 3 x 40) = 403,200,000 = the cap.
+ * Is the single-spaced `phrase` in the whitespace-collapsed `t` on word edges? `t` and `phrase` are in the SAME case. No RegExp
+ * from signed input, and `t` is never re-read: KMP reads each text unit once (the pointer `k` rises by at most 1 per unit, and every
+ * fall-back by `fail` lowers it, so at most 2n steps in all; while `k` is 0 a native one-unit `indexOf` skips ahead, forward only), then each full match costs one O(1) edge check (`wordEndsAt` before it,
+ * `isCarryWordAt` after it, one code point each) and the scan continues from `fail[m - 1]`, so overlapping matches are all seen
+ * (there are at most n). The first match with both edges is the answer. Cost O(n + c) per call, n = t.length, c = phrase.length.
  */
-function carriesOnEdges(t, words, meter) {
-  const w0 = words[0];
-  const first = CARRY_STEP_COST + w0.length;
-  for (let i = t.indexOf(w0); i !== -1; i = t.indexOf(w0, i + 1)) {
-    if ((meter.n += first) > meter.cap) return -1;
-    if (wordEndsAt(t, i)) continue;
-    let pos = i + w0.length;
-    let ok = true;
-    for (let j = 1; j < words.length; j++) {
-      if ((meter.n += CARRY_STEP_COST + words[j].length) > meter.cap) return -1;
-      const from = pos;
-      while (pos < t.length && isWsAt(t, pos)) {
-        if (++meter.n > meter.cap) return -1;
-        pos++;
-      }
-      if (pos === from || !t.startsWith(words[j], pos)) {
-        ok = false;
-        break;
-      }
-      pos += words[j].length;
+function carriesOnEdges(t, phrase) {
+  const m = phrase.length;
+  const fail = carryFailure(phrase);
+  const first = phrase[0];
+  const f0 = phrase.charCodeAt(0);
+  for (let i = 0, k = 0; i < t.length; i++) {
+    if (k === 0 && t.charCodeAt(i) !== f0) {
+      // nothing is partially matched: jump to the next unit equal to the phrase's first one. A one-unit native search only moves
+      // forward and reads each unit once, so the O(n + c) bound stands; it only makes the common non-matching text fast.
+      i = t.indexOf(first, i);
+      if (i === -1) return false;
     }
-    if (ok && !isCarryWordAt(t, pos)) return 1;
+    const u = t.charCodeAt(i);
+    while (k > 0 && u !== phrase.charCodeAt(k)) k = fail[k - 1];
+    if (u === phrase.charCodeAt(k)) k++;
+    if (k === m) {
+      if (!wordEndsAt(t, i + 1 - m) && !isCarryWordAt(t, i + 1)) return true;
+      k = fail[m - 1];
+    }
   }
-  return 0;
+  return false;
 }
 
-/** Forgiving: case-insensitive on word edges. Strict: ALSO exact-case on the raw text (so never looser). 1 / 0 / -1 as above. */
-function carriesPhrase(raw, lower, phrase, strict, meter) {
-  const low = phrase.toLowerCase();
-  const f = carriesOnEdges(lower, low.split(" "), meter);
-  if (f !== 1 || !strict) return f;
-  return carriesOnEdges(raw, phrase.split(" "), meter);
-}
-
+/**
+ * `carriesAny`: which signed phrases are in the field on word edges, in signed order. Forgiving: lowered text and lowered phrase.
+ * Strict: ALSO the raw text with the phrase as signed, only for a phrase the forgiving pass found (so never looser).
+ * COST (amendment 3; no cap, no counter): 2 normalizations of the field (lower + collapse, and collapse of the raw text, the latter
+ * only in strict mode and only when the forgiving pass found something) plus, per phrase, one KMP scan of the collapsed text per
+ * pass: about (2 + 2 x phrases) x field length in the worst case, whatever the input (whitespace floods, near-miss phrases,
+ * repeated letters, and `İ` all included). MEASURED (2M-char bodies, best of 3, a loaded 8-core machine where a bare `charCodeAt` loop costs 13-27 ns/char): normalization ~5-10 ns/char; one forgiving phrase scan ~17-23 ns/char when the phrase's first character is frequent in the text (ASCII or non-ASCII alike, the worst case) and ~0 when it is rare (the native one-unit skip); a strict phrase that the forgiving pass found costs both scans, ~30-55 ns/char. Bounding the
+ * field size is the harness's job, as for every text rule.
+ */
 function runCarriesAny(ctx, c) {
   const t = textField(ctx, c.field);
   if (t.gap) return t;
   const strict = c.strict === true;
-  const lower = t.text.toLowerCase();
-  const meter = { n: 0, cap: CARRY_WORK_CAP }; // ONE budget for the whole check: every phrase, both passes
+  const lower = collapseWs(t.text.toLowerCase());
+  let raw = null; // collapsed raw text, built once and only when a strict pass needs it
   const found = [];
-  let over = false;
   for (const p of c.phrases) {
-    const r = carriesPhrase(t.text, lower, p, strict, meter);
-    if (r === -1) {
-      over = true;
-      break;
+    if (!carriesOnEdges(lower, p.toLowerCase())) continue;
+    if (strict) {
+      raw ??= collapseWs(t.text);
+      if (!carriesOnEdges(raw, p)) continue;
     }
-    if (r === 1) found.push(p);
+    found.push(p);
   }
   if (found.length === 0) {
-    if (over) return red("too-many", { limit: CARRY_WORK_CAP });
     const { items, itemsTotal } = boundItems(c.phrases, true);
     return red("none-found", { phrases: items, ...(itemsTotal !== undefined ? { itemsTotal } : {}) });
   }
@@ -1384,7 +1372,6 @@ export const rubricVocabulary = deepFreeze({
     name: { maxLength: MAX_NAME_LEN },
     quoteSourceMaxBytes: SOURCE_CAP_BYTES,
     quoteWorkMax: QUOTE_WORK_CAP,
-    carriesAnyWorkMax: CARRY_WORK_CAP, // `carriesAny` work units per check (K=40 per step + characters compared + whitespace units, all phrases, both passes); never trips while n x SUM(2 x 40 x words + 3 x chars) <= it, n = field length in UTF-16 units; over it = red `too-many` with `limit`
     quoteMaxChars: QUOTE_MAX_CHARS, // applies to a `cited` claim's normalized quote only when the check signs `decides`; over it = red `quote-too-long`
   },
   // `cells` / `table` / `diff` (docs/product/cells-prd.md): tables ride in `opts.tables[name]`, typed rows
@@ -1940,11 +1927,6 @@ function renderSentence(g, more = 0) {
       const n = typeof g.itemsTotal === "number" ? g.itemsTotal - phrases.length : 0;
       return `none of these words appear in ${JSON.stringify(field)}: ${quoteList(phrases)}${n > 0 ? ` and ${n} more` : ""}`;
     }
-    if (kind === "too-many" && g.check === "carriesAny") {
-      // RULED #69 amendment 1; the `cited` / list `too-many` gaps stay JSON rows
-      if (typeof g.field !== "string" || typeof g.limit !== "number") return null;
-      return `${JSON.stringify(g.field)} is too large to check for these words (work limit ${g.limit})`;
-    }
     if (kind === "extra-keys") {
       const { keys, allowed } = g;
       if (!Array.isArray(keys) || !Array.isArray(allowed) || allowed.length === 0) return null;
@@ -1969,8 +1951,7 @@ function renderSentence(g, more = 0) {
  * `artifact has key(s) "k1", "k2" besides "text"; the check reads "text" only, so put the whole answer in "text"`
  * (each key is JSON-escaped; when `itemsTotal` exceeds the items shown, ` and N more` follows the key list, and on the last
  * `section-words` sentence). A `carriesAny` `none-found` gap (RULED #69) also renders as a sentence: `none of these words appear in "body": "crash", "hang"`
- * (the field and each phrase JSON-escaped; ` and N more` when `itemsTotal` exceeds the phrases shown). A `carriesAny` `too-many` gap
- * (the work limit, RULED #69 amendment 1) renders as `"body" is too large to check for these words (work limit 403200000)`.
+ * (the field and each phrase JSON-escaped; ` and N more` when `itemsTotal` exceeds the phrases shown).
  * JSON makes the other rows' render injective, so the same failing state always gives the same string and
  * different states give different strings.
  * @param {Gap[]} gaps
