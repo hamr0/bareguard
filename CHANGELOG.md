@@ -3,15 +3,16 @@
 All notable changes to bareguard are documented here. Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [SemVer](https://semver.org/).
 
 
-## Unreleased
+## [0.28.0] - 2026-10-29
 
 ### Added
 
 - **`carriesAny`, an any-of phrase rule on word edges (ruling #69; a fwdloop ask).** `{ id, rule: "carriesAny", field, phrases, strict? }` is green when at least one phrase appears in the field with a text edge or a non-letter/mark/digit character on both sides (no stemming: `hang` misses "hanging" and "change", hits "hang-up", "(hang)", "HANG:"). Case-insensitive; `strict: true` also needs the exact case. A single space in a phrase matches any whitespace run, newlines included. Matching is by hand, never a RegExp built from signed input. `mustCarry`, `carries()` and the presence decide are unchanged and every existing `rubricSha` is unchanged.
 - **New gap kind `none-found`** with `phrases` (the signed list, at most 20, `itemsTotal` when cut), distinct from `mustCarry`'s `missing`; `renderGaps` renders `none of these words appear in "body": "crash", "hang"` (plus ` and N more`).
 - **`full.matched`** on the `checkStep` / `gate.checkStep` result: always present, one `{ check, phrases, phrasesTotal? }` per green `carriesAny` check; not in `gaps`, the audit line or the humanChannel ask.
-- **`carriesAny` is linear (ruling #69 amendment 3).** The field is lowered and its whitespace runs (the `\s` set) collapsed to one space once, then each phrase is searched by KMP, which never re-reads the text; word edges are checked exactly as before and a phrase space still matches any whitespace run. Cost grows in proportion to field length x number of phrases, for any input, with no superlinear case. Strict re-scans the raw text for phrases the forgiving pass found, so it can take up to about twice as long when phrases are found. Each candidate match whose edge characters are non-ASCII (e.g. `İ`, accented letters) costs more to check than an ASCII edge. There is no cap, no `too-many` gap for `carriesAny` and no `bounds` entry, and `full.matched` is always complete. Bounding the field (output) size is the harness's job, because `gate.checkStep` holds the gate's ordering lock while it runs.
+- **`carriesAny` is linear (ruling #69 amendment 3).** The field is lowered and its whitespace runs (the `\s` set) collapsed to one space once, then each phrase is searched by KMP, which never re-reads the text; word edges are checked exactly as before and a phrase space still matches any whitespace run. Cost grows in proportion to field length x number of phrases, for any input, with no superlinear case. Strict re-scans the raw text for phrases the forgiving pass found, so it can take up to about twice as long when phrases are found. Each candidate match whose edge characters are non-ASCII (e.g. `İ`, accented letters) costs more to check than an ASCII edge. There is no cap, and `full.matched` is always complete. Bounding the field (output) size is the harness's job, because `gate.checkStep` holds the gate's ordering lock while it runs.
 - `createRubric` refuses bad `phrases` (empty, over 50, over 200 characters, blank, not starting and ending with a letter or digit, tab/newline/double space, case-fold duplicate) with the exact `e.path`. `rubricVocabulary` lists the rule.
+- **`createRubric`'s thrown-error `e.path` is now on the SemVer surface** (from this release; see `docs/product/rubric-prd.md` §9 table). A released `e.path` string will not change.
 
 ## [0.27.0] - 2026-10-27
 
