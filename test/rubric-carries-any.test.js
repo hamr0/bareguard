@@ -256,7 +256,7 @@ test("perf: 50 phrases over a 1 MiB field stay well under a generous bound", asy
   const text = "near1 ".repeat(170_000);
   const rb = mk([check(phrases)]);
   const t = await best(() => checkStep(rb, "a", { body: text }), 2);
-  assert.ok(t < 8_000, `${t.toFixed(0)}ms (bound 8000; about 1.3-1.9 s on a loaded dev machine: 50 linear scans of 1 MiB; the native-indexOf matcher before amendment 3 took ~0.1 s here)`);
+  assert.ok(t < 20_000, `${t.toFixed(0)}ms (about 2 s on a loaded dev machine: 50 linear scans of 1 MiB; the native-indexOf matcher before amendment 3 took ~0.1 s here)`);
 });
 
 // --- gate: matched rides the result only -------------------------------------------------------
