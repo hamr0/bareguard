@@ -46,7 +46,7 @@ import { parseBound, compareBounds, decideQuote, parseClaimValue, displayCanon, 
  * @property {number} [hi] `sectionWords` only: the inclusive upper bound, `floor(asked * 1.2)`
  * @property {string[]} [keys] `allowedKeys` only: the output's own keys that are not allowed (insertion order, clipped, bounded)
  * @property {string[]} [allowed] `allowedKeys` only: the signed allowed keys (never clipped)
- * @property {string[]} [phrases] `carriesAny` only (kind `none-found`): the signed phrases (never clipped, at most 20; `itemsTotal` when cut). A `carriesAny` gap of kind `too-many` (RULED #69 amendment 1) carries `limit` = `rubricVocabulary.bounds.carriesAnyWorkMax` and no `measured`
+ * @property {string[]} [phrases] `carriesAny` only (kind `none-found`): the signed phrases (never clipped, at most 20; `itemsTotal` when cut). A `carriesAny` gap of kind `too-many` (RULED #69 amendments 1-2) carries `limit` = `rubricVocabulary.bounds.carriesAnyWorkMax` and no `measured`
  *
  * @typedef {Object} Decide
  * One signed decide of a `cited` check (§4.6): a VALUE decide `{ valueKind, op?, value | lo+hi, currency and/or unit (money), anchor? }`
@@ -644,26 +644,50 @@ const isWsAt = (t, i) => {
   const c = t.charCodeAt(i);
   return c < 128 ? c === 32 || (c >= 9 && c <= 13) : WS_UNIT.test(t[i]); // ASCII fast path, same set as \s
 };
-const CARRY_WORK_CAP = 10_000_000; // `carriesAny`: steps (see carriesOnEdges) per check, all phrases and both passes together; over it = red too-many. Deterministic, never a clock (Law 8)
+const CARRY_STEP_COST = 40; // K: the fixed weight of one step (a first-word candidate tried, a later word compared); see carriesOnEdges
+const CARRY_WORK_CAP = 403_200_000; // `carriesAny`: work units (see carriesOnEdges) per check, all phrases and both passes together; over it = red too-many. = 120,000 x 12 x (2 x K x 2 + 3 x 40): fwdloop's shape. Deterministic, never a clock (Law 8)
 
 /**
  * Hand-matched, no RegExp from signed input: is `words` (a phrase split on its single spaces) in `t` on word edges, a gap
  * between two words being a run of 1+ whitespace characters and everything else exact? `t` and `words` are in the SAME case
  * (both raw, or both lowered), and every index below is an index of `t` itself.
  *
- * WORK: `meter.n` counts one step per candidate position tried (each `indexOf` hit of the first word), one per later word
- * compared, one per whitespace unit skipped. Returns 1 (found), 0 (not found) or -1 (the next step would pass `meter.cap`:
- * stop). No clock: the count is a pure function of the input. Steps for one phrase pass are under 2 x text length x phrase words.
+ * WORK (RULED #69 amendments 1 and 2): `meter.n` counts work units, each charged BEFORE the work is done: K + (length of the
+ * first word) for every candidate position tried (each `indexOf` hit of the first word), K + (length of the word) for every
+ * later word compared, 1 for every whitespace unit skipped; K = CARRY_STEP_COST. Returns 1 (found), 0 (not found) or -1 (the
+ * next charge would pass `meter.cap`: stop). No clock: the count is a pure function of the input. Not charged: the native scan
+ * BETWEEN hits, which never restarts (`indexOf` resumes at the last hit + 1), so at most one text length per phrase per pass.
+ *
+ * GUARANTEE. With n = the field length in UTF-16 units, and for each signed phrase w = its words and c = its length in UTF-16
+ * units (spaces included), a check NEVER trips while
+ *     n x SUM over the phrases of ( 2 x K x w + 3 x c )  <=  CARRY_WORK_CAP.
+ * PROOF, one pass over a text of length m, one phrase (w words, c units):
+ *  1. A hit is a start position, so there are at most m hits. A hit costs K x w + (the lengths of the words it reached)
+ *     + (the whitespace units it skipped) at most; the words are joined by w - 1 single spaces, so the word lengths add up
+ *     to at most c - (w - 1).
+ *  2. Whitespace: a signed word holds no whitespace (a phrase holds only single ASCII spaces) and ends on a non-whitespace
+ *     character. The run skipped before word j starts at the end of word j - 1, and that end fixes the hit's start (walk back
+ *     over the fixed word lengths and the maximal runs), so two hits never share a run for the same j, and the runs of one j
+ *     are disjoint: they add up to at most m units. Over j = 1..w-1 that is at most (w - 1) x m, which the (w - 1) spaces in c
+ *     pay for (c - (w - 1) + (w - 1) = c).
+ *  3. So one pass costs at most m x (K x w + c).
+ *  4. The forgiving pass reads the LOWERED text and phrase. Only `İ` lengthens under toLowerCase() (to 2 units: `i` and U+0307),
+ *     so the lowered phrase is at most 2c; a hit starts on a phrase's first character, a letter or digit, never on U+0307 and
+ *     never on a low surrogate, so the hits are still at most n. That pass costs at most n x (K x w + 2c).
+ *  5. The strict pass reads the raw text and runs only after a forgiving hit: at most n x (K x w + c).
+ *  Forgiving + strict = n x (2 x K x w + 3c) per phrase; the check sums its phrases. fwdloop's shape, 12 phrases of at most 2
+ *  words and 40 characters on 120,000 characters: 120,000 x 12 x (2 x 40 x 2 + 3 x 40) = 403,200,000 = the cap.
  */
 function carriesOnEdges(t, words, meter) {
   const w0 = words[0];
+  const first = CARRY_STEP_COST + w0.length;
   for (let i = t.indexOf(w0); i !== -1; i = t.indexOf(w0, i + 1)) {
-    if (++meter.n > meter.cap) return -1;
+    if ((meter.n += first) > meter.cap) return -1;
     if (wordEndsAt(t, i)) continue;
     let pos = i + w0.length;
     let ok = true;
     for (let j = 1; j < words.length; j++) {
-      if (++meter.n > meter.cap) return -1;
+      if ((meter.n += CARRY_STEP_COST + words[j].length) > meter.cap) return -1;
       const from = pos;
       while (pos < t.length && isWsAt(t, pos)) {
         if (++meter.n > meter.cap) return -1;
@@ -1360,7 +1384,7 @@ export const rubricVocabulary = deepFreeze({
     name: { maxLength: MAX_NAME_LEN },
     quoteSourceMaxBytes: SOURCE_CAP_BYTES,
     quoteWorkMax: QUOTE_WORK_CAP,
-    carriesAnyWorkMax: CARRY_WORK_CAP, // `carriesAny` steps per check (candidate positions + later words compared + whitespace units skipped, all phrases, both passes); never trips while 3 x field length (UTF-16 units) x total phrase words <= it; over it = red `too-many` with `limit`
+    carriesAnyWorkMax: CARRY_WORK_CAP, // `carriesAny` work units per check (K=40 per step + characters compared + whitespace units, all phrases, both passes); never trips while n x SUM(2 x 40 x words + 3 x chars) <= it, n = field length in UTF-16 units; over it = red `too-many` with `limit`
     quoteMaxChars: QUOTE_MAX_CHARS, // applies to a `cited` claim's normalized quote only when the check signs `decides`; over it = red `quote-too-long`
   },
   // `cells` / `table` / `diff` (docs/product/cells-prd.md): tables ride in `opts.tables[name]`, typed rows
@@ -1946,7 +1970,7 @@ function renderSentence(g, more = 0) {
  * (each key is JSON-escaped; when `itemsTotal` exceeds the items shown, ` and N more` follows the key list, and on the last
  * `section-words` sentence). A `carriesAny` `none-found` gap (RULED #69) also renders as a sentence: `none of these words appear in "body": "crash", "hang"`
  * (the field and each phrase JSON-escaped; ` and N more` when `itemsTotal` exceeds the phrases shown). A `carriesAny` `too-many` gap
- * (the work limit, RULED #69 amendment 1) renders as `"body" is too large to check for these words (work limit 10000000)`.
+ * (the work limit, RULED #69 amendment 1) renders as `"body" is too large to check for these words (work limit 403200000)`.
  * JSON makes the other rows' render injective, so the same failing state always gives the same string and
  * different states give different strings.
  * @param {Gap[]} gaps

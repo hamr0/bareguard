@@ -290,50 +290,91 @@ test("gate.checkStep: matched is on the result, absent from the audit line and t
   assert.deepEqual(g.drainGaps()[0].phrases, ["nopeSIGNED"], "the worker keeps the phrase list");
 });
 
-// --- work cap (RULED #69 amendment 1): a step counter, no clock -------------------------------------------------
-// Steps: one per candidate position (each indexOf hit of the first word), one per later word compared, one per whitespace
-// unit skipped. Both passes, all phrases, one budget per check. Over it = red too-many { limit }.
+// --- work cap (RULED #69 amendments 1 and 2): a work-unit counter, no clock ------------------------------------
+// Units: K (=40) + the first word's length per candidate position (each indexOf hit of the first word), K + the word's length per
+// later word compared, 1 per whitespace unit skipped. Both passes, all phrases, one budget per check. Over it = red too-many { limit }.
+// Never trips while n x SUM(2 x K x words + 3 x chars) <= cap (n = field length, chars = phrase length with its spaces).
 
 const CAP = rubricVocabulary.bounds.carriesAnyWorkMax;
+const K = 40;
 const kindOf = (r) => r.gaps[0]?.kind ?? null;
+const bound = (n, phrases) => n * phrases.reduce((sum, p) => sum + 2 * K * p.split(" ").length + 3 * p.length, 0);
 
 test("work cap: the bound is exposed in rubricVocabulary.bounds, not as a top-level export", async () => {
-  assert.equal(CAP, 10_000_000);
+  assert.equal(CAP, 403_200_000);
   const top = await import("../src/index.js");
   assert.ok(!Object.keys(top).some((k) => /work|cap/i.test(k)), "no cap constant is exported");
 });
 
-test("work cap boundary: phrase 'a b' on 'a' x n costs exactly n+1 steps; cap steps pass, cap+1 is red too-many", async () => {
-  const atCap = await run(["a b"], "a".repeat(CAP - 1));
-  assert.equal(kindOf(atCap), "none-found", "exactly CAP steps never trips");
-  const over = await run(["a b"], "a".repeat(CAP));
+test("work cap boundary, first-word characters: a hit costs K + len(first word); exactly the cap passes, the next hit is red too-many", async () => {
+  // phrase "a" x 60 over "a" x m: m - 59 hits at 40 + 60 = 100 units each (every hit but the first is skipped on its left edge, still charged)
+  const w0 = "a".repeat(60);
+  const hits = CAP / 100;
+  const atCap = await run([w0], "a".repeat(hits + 59));
+  assert.equal(kindOf(atCap), "none-found", "exactly CAP units never trips");
+  const over = await run([w0], "a".repeat(hits + 60));
   assert.equal(over.verdict, "red");
   assert.deepEqual(over.gaps, [{ key: "a:k", checkpoint: "a", check: "carriesAny", id: "k", field: "body", kind: "too-many", limit: CAP }]);
   assert.deepEqual(over.full.matched, []);
 });
 
-test("work cap guarantee: 3 x field length x total phrase words <= cap never trips, whatever the body", async () => {
-  // 1 phrase of 98 words, near-miss flood, forgiving and strict
+test("work cap boundary, later-word characters: a later word costs K + its length, a skipped whitespace unit costs 1", async () => {
+  // phrase "a " + "c" x 58 over "a " x h: per hit 41 (first word) + 98 (second word) + 1 (the space) = 140 units
+  const phrase = "a " + "c".repeat(58);
+  const hits = CAP / 140;
+  assert.equal(kindOf(await run([phrase], "a ".repeat(hits))), "none-found", "exactly CAP units never trips");
+  assert.equal(kindOf(await run([phrase], "a ".repeat(hits + 1))), "too-many", "one more hit is over");
+});
+
+test("work cap guarantee: n x SUM(2 x K x words + 3 x chars) <= cap never trips, whatever the body (fwdloop: 12 phrases, <= 2 words, <= 40 chars, 120,000 chars)", async () => {
+  const twelve = Array.from({ length: 12 }, (_, i) => "a".repeat(37) + " b" + String.fromCharCode(97 + i)); // 2 words, 40 chars
+  assert.ok(twelve.every((p) => p.length === 40));
+  assert.equal(bound(120_000, twelve), CAP, "fwdloop's shape is exactly the cap");
+  const firsts = Array.from({ length: 12 }, (_, i) => String.fromCharCode(97 + i).repeat(37) + " z" + String.fromCharCode(97 + i)); // each phrase its own first word
+  const iPhrases = Array.from({ length: 12 }, (_, i) => "İ".repeat(37) + " b" + String.fromCharCode(97 + i)); // lowered phrase is 2x as long
+  assert.ok(bound(120_000, iPhrases) <= CAP && bound(120_000, firsts) <= CAP);
+  const tail = (w0, ch) => Array.from({ length: 12 }, (_, i) => " " + w0 + " " + ch + String.fromCharCode(97 + i)).join("");
+  const pad = (s, filler) => filler.repeat(Math.floor((120_000 - s.length) / filler.length)) + s;
+  const cases = [
+    ["a flood", twelve, "a".repeat(120_000)],
+    ["a-space flood", twelve, "a ".repeat(60_000)],
+    ["a flood of each phrase's own first word", firsts, firsts.map((p) => p.split(" ")[0]).map((w) => w.repeat(Math.floor(10_000 / 37))).join(" ")],
+    ["whitespace runs", twelve, ("a" + " ".repeat(99)).repeat(1_200)],
+    ["only whitespace", twelve, " ".repeat(120_000)],
+    ["newline flood", twelve, "a\n".repeat(60_000)],
+    ["İ flood, İ-free phrases", twelve, "İ".repeat(120_000)],
+    ["İ flood, İ phrases (lowered 2x)", iPhrases, "İ".repeat(120_000)],
+    ["i + combining dot flood, İ phrases", iPhrases, "i̇".repeat(60_000)],
+    ["İ phrases, forgiving hits at the end", iPhrases, pad(tail("İ".repeat(37), "b"), "İ")],
+    ["every phrase hits at the end (strict re-walk)", twelve, pad(tail("a".repeat(37), "b"), "a")],
+    ["forgiving hits, strict misses (wrong case)", twelve, pad(tail("A".repeat(37), "B"), "a")],
+  ];
+  for (const strict of [false, true]) for (const [name, phrases, body] of cases) {
+    assert.ok(body.length <= 120_000, name);
+    const r = await run(phrases, body, { strict });
+    assert.notEqual(kindOf(r), "too-many", `${name} strict=${strict}`);
+  }
+  // 1 phrase of 98 words, near-miss flood: n x (2 x 40 x 98 + 3 x 195) <= cap, forgiving and strict
   const p98 = "a ".repeat(97) + "b";
-  const L98 = Math.floor(CAP / 3 / 98);
+  const n98 = Math.floor(CAP / bound(1, [p98]));
   for (const strict of [false, true]) {
-    const r = await run([p98], "a ".repeat(Math.floor(L98 / 2)), { strict });
+    const r = await run([p98], "a ".repeat(Math.floor(n98 / 2)), { strict });
     assert.equal(kindOf(r), "none-found", `98 words, strict=${strict}`);
   }
-  // fwdloop's shape: 12 phrases of 2 words on a 120,000-char body (10x their real 12K), every word a first-word candidate
-  const twelve = Array.from({ length: 12 }, (_, i) => `a b${i}`);
-  assert.ok(3 * 120_000 * 24 <= CAP);
-  const bodies = ["a ".repeat(60_000), "a".repeat(120_000), "a  ".repeat(40_000), ("a" + " ".repeat(9)).repeat(12_000), "A ".repeat(60_000), "a\n".repeat(60_000), "a-".repeat(60_000)];
-  for (const strict of [false, true]) for (const [i, body] of bodies.entries()) {
-    const r = await run(twelve, body, { strict });
-    assert.equal(r.gaps[0]?.kind, "none-found", `body ${i} strict=${strict}`);
+});
+
+test("work cap guarantee holds on random small-alphabet inputs (incl. İ and whitespace): the bound is never exceeded", async () => {
+  // every random case is inside the formula's regime (asserted), so none may trip; the meter-vs-formula comparison itself ran as a
+  // 9,600-case fuzz on a scratch copy with the cap lifted (max used/bound 0.154), reported with the build
+  let seed = 7;
+  const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+  const pick = (a) => a[Math.floor(rnd() * a.length)];
+  for (let it = 0; it < 300; it++) {
+    const ph = [...new Set(Array.from({ length: 1 + Math.floor(rnd() * 3) }, () => Array.from({ length: 1 + Math.floor(rnd() * 3) }, () => Array.from({ length: 1 + Math.floor(rnd() * 3) }, () => pick(["a", "İ", "i"])).join("")).join(" ")))];
+    const body = Array.from({ length: Math.floor(rnd() * 300) }, () => pick(["a", "a", " ", "İ", "i", "\n"])).join("");
+    assert.ok(bound(body.length, ph) <= CAP);
+    assert.notEqual(kindOf(await run(ph, body, { strict: rnd() < 0.5 })), "too-many");
   }
-  // forgiving hits at the very end, the raw (strict) pass then re-walks the whole body for every phrase
-  const hitsAtEnd = Array.from({ length: 12 }, (_, i) => (i === 11 ? "a b" : `a b${i}`));
-  const r = await run(hitsAtEnd, "a ".repeat(59_999) + "A B", { strict: true });
-  assert.equal(kindOf(r), "none-found");
-  const g = await run(hitsAtEnd, "a ".repeat(59_999) + "a b", { strict: true });
-  assert.equal(g.verdict, "green");
 });
 
 test("work cap: the 47 s case (50 legal 98-word near-miss phrases over 200 KB) is red too-many, and fast", async () => {
@@ -345,21 +386,36 @@ test("work cap: the 47 s case (50 legal 98-word near-miss phrases over 200 KB) i
     const ms = Number(process.hrtime.bigint() - t0) / 1e6;
     assert.equal(kindOf(r), "too-many", `strict=${strict}`);
     assert.equal(r.gaps[0].limit, CAP);
-    assert.ok(ms < 5000, `${ms.toFixed(0)}ms (was 47-72 s; ~0.2 s unloaded)`);
+    assert.ok(ms < 5000, `${ms.toFixed(0)}ms (was 47-72 s; ~0.3 s at the cap)`);
   }
 });
 
-test("work cap is per check, shared by every phrase: two phrases that each fit alone trip together", async () => {
-  const body = "a ".repeat(2_000_000); // ~6M steps per near-miss phrase
+test("work cap: long repeated-letter first words (amendment 2: each hit verifies the whole word) are red too-many, and fast", async () => {
+  // 50 legal phrases "a" x (148 + i) + " b" over 200,000 "a": was ~10M steps in 2.4-3.7 s; now every hit pays its characters
+  const phrases = Array.from({ length: 50 }, (_, i) => "a".repeat(148 + i) + " b");
+  const body = "a".repeat(200_000);
+  for (const strict of [false, true]) {
+    const t0 = process.hrtime.bigint();
+    const r = await run(phrases, body, { strict });
+    const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+    assert.equal(kindOf(r), "too-many", `strict=${strict}`);
+    assert.ok(ms < 3000, `${ms.toFixed(0)}ms (about 0.3 s at the cap on an idle machine)`);
+  }
+  // the cap, not the body length, decides: 5 of the 50 phrases cost far less than the budget
+  assert.equal(kindOf(await run(phrases.slice(0, 5), body)), "none-found");
+});
+
+test("work cap is per check, shared by every phrase: three phrases that each fit alone trip together", async () => {
+  const body = "a ".repeat(2_000_000); // 83 units per hit: 166M per near-miss phrase
   assert.equal(kindOf(await run(["a b"], body)), "none-found");
   assert.equal(kindOf(await run(["a c"], body)), "none-found");
-  const both = await run(["a b", "a c"], body);
-  assert.equal(kindOf(both), "too-many");
+  assert.equal(kindOf(await run(["a b", "a c"], body)), "none-found", "332M is under the cap");
+  assert.equal(kindOf(await run(["a b", "a c", "a d"], body)), "too-many", "498M is over it");
 });
 
 test("work cap: strict mode counts the raw pass too", async () => {
-  // forgiving walks ~6M steps then hits at the end; the raw pass walks ~6M more and finds nothing ("A B" is the wrong case)
-  const body = "a ".repeat(2_000_000) + "A B";
+  // forgiving walks 249M units then hits at the end; the raw pass walks 249M more and finds nothing ("A B" is the wrong case)
+  const body = "a ".repeat(3_000_000) + "A B";
   const f = await run(["a b"], body);
   assert.equal(f.verdict, "green");
   const s = await run(["a b"], body, { strict: true });
@@ -367,7 +423,7 @@ test("work cap: strict mode counts the raw pass too", async () => {
 });
 
 test("work cap: a hit found before the cap is green, matched keeps found phrases in signed order; a hit after the cap is never reached", async () => {
-  const body = "hit " + "a ".repeat(2_000_000);
+  const body = "hit " + "a ".repeat(3_000_000);
   const g = await run(["hit", "a b", "a c"], body);
   assert.equal(g.verdict, "green", "green stays green when the budget runs out on a later phrase");
   assert.deepEqual(g.full.matched, [{ check: "k", phrases: ["hit"] }]);
@@ -378,11 +434,13 @@ test("work cap: a hit found before the cap is green, matched keeps found phrases
 });
 
 test("work cap: renderGaps exact sentence; other too-many gaps keep their JSON row", async () => {
-  const over = await run(["a b"], "a".repeat(CAP));
+  const body = "a ".repeat(5_000_000); // 415M units for "a b"
+  const over = await run(["a b"], body);
+  assert.equal(kindOf(over), "too-many");
   assert.equal(renderGaps(over.gaps), `"body" is too large to check for these words (work limit ${CAP})`);
-  assert.equal(renderGaps(over.gaps), '"body" is too large to check for these words (work limit 10000000)');
+  assert.equal(renderGaps(over.gaps), '"body" is too large to check for these words (work limit 403200000)');
   const rb = createRubric({ schema: 1, goal: "g", checkpoints: { a: { gating: true, checks: [{ ...check(["a b"]), field: 'we"ird' }] } } });
-  const odd = await checkStep(rb, "a", { 'we"ird': "a".repeat(CAP) });
+  const odd = await checkStep(rb, "a", { 'we"ird': body });
   assert.equal(renderGaps(odd.gaps), `"we\\"ird" is too large to check for these words (work limit ${CAP})`);
   // a hand-built gap of another rule is not rendered as this sentence
   assert.equal(renderGaps([{ key: "a:c", check: "cited", kind: "too-many", field: "x", measured: 30, limit: 25 }]), JSON.stringify(["a:c", "cited", "too-many", "x", 30, 25, null, null, null]));

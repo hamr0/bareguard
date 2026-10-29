@@ -435,7 +435,7 @@ test("rubricVocabulary: every EXISTING rule, the common/bounds/checkpoint blocks
   const common = { ...allCommon, rule: { ...allCommon.rule, enum: allCommon.rule.enum.filter((r) => r !== "carriesAny") } }; // carriesAny (#69) is the one additive enum entry
   // quoteMaxChars and carriesAnyWorkMax are the additive bounds entries (hamr-approved); every earlier bound stays byte-identical
   const { quoteMaxChars, carriesAnyWorkMax, ...bounds } = allBounds;
-  assert.equal(carriesAnyWorkMax, 10_000_000, "bounds.carriesAnyWorkMax is the carriesAny step cap (#69 amendment 1; red too-many { limit })");
+  assert.equal(carriesAnyWorkMax, 403_200_000, "bounds.carriesAnyWorkMax is the carriesAny work cap (#69 amendments 1-2; red too-many { limit })");
   assert.equal(quoteMaxChars, 4000, "bounds.quoteMaxChars is the 4000-char quote cap (red quote-too-long with decides: see the quote-too-long test)");
   // common.rule.enum gained "cells", "table", "diff" (cells-prd.md, additive); nothing else in these blocks changed
   assert.equal(h({ schema, common, bounds, checkpoint, foundational }), "1b8b6b0cb9924bb53c47a6784007d463a47ac4589c708ca128e1fdad418354c9");
