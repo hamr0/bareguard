@@ -18,6 +18,7 @@ import { assertRwxConfig, rwxCheck, matchRwxLetter, resolveAgentLetters, clampLe
 import { looseIdentity } from "./primitives/tool-identity.js";
 import { isPlainObject } from "./primitives/plain-object.js";
 import { clipKey } from "./primitives/clip-key.js";
+import { dropKeysToFit, META_BYTE_CAP } from "./primitives/bound-keys.js";
 import { assertArrayElementTypes, findInvalidIndex, findBlankStringIndex } from "./primitives/config-validate.js";
 import { contentDenyCheck, contentAskCheck } from "./primitives/content.js";
 import { flagsDenyCheck, flagsAskCheck } from "./primitives/flags.js";
@@ -296,9 +297,22 @@ function readAnnotation(fact) {
 }
 
 /**
+ * The annotation buffer's fixed capacity (ruling #71). Deliberately NOT exported:
+ * a published cap would make a future tightening a breaking change.
+ * @type {number}
+ */
+const ANNOTATION_BUFFER_CAP = 256;
+
+/**
  * Bound an annotation `meta` object so an annotate audit line can't exceed the
- * audit's atomic-append cap. Non-objects → null; oversized / unserializable →
- * a small marker that replaces it everywhere downstream (buffer / event / drain).
+ * audit's atomic-append cap. Non-objects → null; unserializable → a small marker.
+ * Over {@link META_BYTE_CAP} (1000 bytes) a plain object loses whole TOP-LEVEL
+ * keys, largest serialized first, until the survivors plus the markers fit
+ * (ruling #71, {@link dropKeysToFit}): the result is the surviving keys +
+ * `_truncated: true` + `bytes` (the original size) + `_droppedKeys` (names).
+ * Strings are never cut. An array `meta`, or one where nothing fits, ends as
+ * `{_truncated, bytes}` alone. A caller key named like a marker is removed first,
+ * so a caller can never forge a "not truncated" result.
  * Under the cap the fact carries a DECOUPLED COPY, not the caller's object — the
  * caller keeps their original and can mutate it freely without moving the bound.
  * @param {*} meta
@@ -309,7 +323,6 @@ function boundMeta(meta) {
   try {
     const json = JSON.stringify(meta);
     const bytes = Buffer.byteLength(json, "utf8");
-    if (bytes > 1000) return { _truncated: true, bytes };
     // DECOUPLE from the caller's object. Returning `meta` itself made the cap
     // undoable: a judge that kept appending evidence to the object it had already
     // handed over grew the drained/event fact past 1000 bytes AFTER the bound ran,
@@ -325,7 +338,9 @@ function boundMeta(meta) {
     const copy = JSON.parse(json, (k, v) => (k === "__proto__" ? undefined : v));
     // A `meta` whose toJSON yields a scalar (e.g. a bare Date) cannot be carried
     // structurally at all; that is the existing total-loss marker, not a new one.
-    return copy !== null && typeof copy === "object" ? copy : { _unserializable: true };
+    if (copy === null || typeof copy !== "object") return { _unserializable: true };
+    // The key drop works on the decoupled copy and reports the ORIGINAL size.
+    return bytes > META_BYTE_CAP ? dropKeysToFit(copy, META_BYTE_CAP, { bytes }) : copy;
   } catch {
     return { _unserializable: true };
   }
@@ -698,6 +713,8 @@ export class Gate {
     // Axis B (§6.6/§8.2): buffered return-time-judge facts awaiting a human ask
     // to ride / an agent-feedback drain. Empty unless the caller calls annotate().
     this._annotations = [];
+    // Cumulative evictions from the bounded buffer (see annotate); never reset by a drain.
+    this._annotationsDropped = 0;
     // §23.21 decision 5: bumped once per successfully-landed `add()` batch.
     // `check()` snapshots this before awaiting a human decision and, if it
     // changed by the time a human "allow" is about to be returned, re-checks
@@ -1480,11 +1497,28 @@ export class Gate {
     }
     const norm = read.norm;
     this._annotations.push(norm);
+    // Bounded buffer (ruling #71): a push past the cap evicts the OLDEST surface:false
+    // fact (a plain "honored" record), or the oldest overall when every buffered fact
+    // surfaces - so a flood of honored facts can never displace a `broke` one. If the
+    // incoming fact is the only surface:false one it is the one evicted. Pure splice:
+    // cannot throw, cannot change a decision.
+    let evicted = false;
+    if (this._annotations.length > ANNOTATION_BUFFER_CAP) {
+      const at = this._annotations.findIndex((a) => a.surface === false);
+      this._annotations.splice(at < 0 ? 0 : at, 1);
+      this._annotationsDropped++;
+      evicted = true;
+    }
     // Sink 1: the fact is recorded even if no ask ever rides it.
     await this.audit.emit({
       phase: "annotate", action: null,
       surface: norm.surface, verdict: norm.verdict, where: norm.where, meta: norm.meta,
     });
+    // Loud but not per-eviction: the first eviction, then once per further 256. `dropped`
+    // is cumulative for the gate's life (drainAnnotations does not reset it).
+    if (evicted && (this._annotationsDropped - 1) % ANNOTATION_BUFFER_CAP === 0) {
+      await this.audit.emit({ phase: "annotate_dropped", action: null, dropped: this._annotationsDropped });
+    }
   }
 
   /**

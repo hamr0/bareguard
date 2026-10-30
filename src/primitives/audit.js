@@ -7,6 +7,7 @@ import { promises as fsp } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import lockfile from "proper-lockfile";
+import { dropKeysToFit, META_BYTE_CAP } from "./bound-keys.js";
 
 const MAX_LINE_BYTES = 3500; // safety margin under PIPE_BUF (4096 on Linux/macOS)
 const FIELD_BYTE_CAP = 200;  // per-field bound inside an oversize line
@@ -476,7 +477,17 @@ export class Audit {
           if (v != null && typeof v === "object") truncated[key] = boundOwnValues(v);
         } else if (v != null && typeof v === "object") { // wholesale
           const bytes = Buffer.byteLength(JSON.stringify(v), "utf8");
-          if (bytes > FIELD_BYTE_CAP) truncated[key] = { _truncated: true, bytes };
+          if (key === "meta") {
+            // Ruling #71: an annotate line keeps the meta keys that fit (the same
+            // helper and the same 1000-byte rule as the source bound in gate.js),
+            // so `meta.id`/`rid`/`agent` survive redaction's expansion. `resume`:
+            // a source-bounded meta already carries `_truncated`/`bytes`/
+            // `_droppedKeys` - keep the original size and the earlier names.
+            // 1000 leaves the line well inside MAX_LINE_BYTES: the other annotate
+            // fields are clipped to ~200 bytes each above, and the fallbacks below
+            // still run if anything else made the line oversize.
+            if (bytes > META_BYTE_CAP) truncated[key] = dropKeysToFit(v, META_BYTE_CAP, { resume: true });
+          } else if (bytes > FIELD_BYTE_CAP) truncated[key] = { _truncated: true, bytes };
         }
       }
       serialized = JSON.stringify(truncated) + "\n";
