@@ -235,3 +235,21 @@ test("a read failing MID-scan does not advance or corrupt the tally", async (t) 
   await same(g); // full rescan from committed offset, no partial double count
   assert.equal((await g.haltContext()).spent.costUsd, 6);
 });
+
+test("concurrent asks share one scan: bytes read stay about one file, not N", async (t) => {
+  const { auditPath, mkGate } = await mk(t);
+  const seed = await mkGate();
+  for (let i = 0; i < 200; i++) await seed.record({ type: "x", n: i, pad: "p".repeat(300) }, { costUsd: 0.01, tokens: 1 });
+  const g = await mkGate();
+  let bytes = 0;
+  const origOpen = fsp.open;
+  fsp.open = async (...a) => {
+    const fh = await origOpen.apply(fsp, a);
+    const r = fh.read.bind(fh);
+    fh.read = async (...b) => { const res = await r(...b); bytes += res.bytesRead; return res; };
+    return fh;
+  };
+  try { await Promise.all(Array.from({ length: 30 }, () => g.haltContext())); } finally { fsp.open = origOpen; }
+  const size = (await fsp.stat(auditPath)).size;
+  assert.ok(bytes <= size + 64 * 1024, `read ${bytes} for a ${size}-byte file`);
+});
