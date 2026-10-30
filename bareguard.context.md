@@ -378,6 +378,10 @@ Likewise, a bash command matching a *universal* `content.denyPatterns`
 default (e.g. `rm -rf /`) denies at step 2 with `rule: "content.denyPatterns"`
 before rwx's own joined-command check ever runs.
 
+### Content safe-defaults still run before rwx
+
+With `rwx` set and no `content` key, the `content` safe-defaults still run (step 2 and step 4, before rwx) over the serialized action, `url` and `method` included. rwx implies nothing about them: even `letters: "rwx"` gets `content.askPatterns` asks on a `PUT`/`PATCH`/`DELETE` `method` (the shipped pattern reads `"method":"DELETE"` etc. in the serialized action) and `content.denyPatterns` denies (`DROP TABLE`, `rm -rf /` anywhere in the action, a `url` too). Verified with `rwx: { tools: { fetch: "x" }, letters: "rwx" }`: `{type:"fetch", url, method:"PUT"}` / `"PATCH"` / `"DELETE"` → `content.askPatterns` (a denying `humanChannel` gives a deny; no `humanChannel` denies), `GET` → `rwx.allow`, `args:{cmd:"DROP TABLE users"}` and `url: "...?q=rm -rf /"` → `content.denyPatterns`. To opt out, set `content: { askPatterns: [], denyPatterns: [] }`: all of those then reach `rwx.allow`.
+
 ### Deny by absence, loudly — the rule ids
 
 An unlisted tool, unlisted command, or unlisted agent is **denied, never
@@ -950,6 +954,7 @@ One JSONL file. Default path: `$XDG_STATE_HOME/bareguard/<root-run-id>.jsonl`. O
 | `topup` | runner / humanChannel raised a cap | `dimension`, `oldCap`, `newCap` |
 | `terminate` | gate terminated (graceful) | `reason` |
 | `annotate` | every well-formed `gate.annotate()` fact | `surface`, `verdict`, `where`, `meta` |
+| `annotate_dropped` | the annotation buffer (256 facts) evicted one: on the first eviction, then once per 256 more. Nothing else changes | `dropped` (cumulative for the gate's life; a drain does not reset it) |
 | `annotate_malformed` | a `gate.annotate()` fact that could not be read (see Axis B below). Nothing buffered; no decision changed | `reason` (`not-an-object` \| `array` \| `missing-surface` \| `unreadable`) |
 
 Every line carries: `ts`, `seq`, `run_id`, `parent_run_id`, `spawn_depth`. Use `parent_run_id` to reconstruct the family tree.
@@ -1262,6 +1267,8 @@ gate.annotate({ verdict, where });            // reason "missing-surface" — `s
 gate.annotate(null);                          // reason "not-an-object"
 gate.annotate(hostileGetterObject);           // reason "unreadable"   — the read itself threw
 ```
+
+**Bounds (ruling #71).** The buffer holds at most **256** facts (internal, not exported). A push past it evicts the oldest `surface:false` fact, else the oldest overall, so a flood of honored facts cannot displace a `broke` one; every fact still gets its `annotate` audit line, and an `annotate_dropped` row (`dropped`, cumulative) is written on the first eviction and then once per 256 more. `meta` is capped at 1000 bytes **partially**: over the cap whole top-level keys are dropped, largest serialized first (ties by name), strings never cut, leaving the surviving keys plus `_truncated: true`, `bytes` (original size) and `_droppedKeys` (names; `_droppedKeysMore` counts any left off). `{ id, rid, agent, url: <5 KB> }` keeps `id`, `rid`, `agent`. The same rule runs again on the audit line after redaction, so those keys also stay on disk. A caller key named `_truncated`/`bytes`/`_droppedKeys`/`_droppedKeysMore` is removed when the bound fires (the markers win); an array `meta` or one where nothing fits becomes `{_truncated, bytes}`.
 
 Rejection changes no decision and never throws because of the fact you passed (an audit
 *write* failure — full disk, unwritable path — still propagates, like every other phase).

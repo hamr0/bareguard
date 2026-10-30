@@ -5,7 +5,18 @@ All notable changes to bareguard are documented here. Format: [Keep a Changelog]
 
 ## [Unreleased]
 
+### Added
+
+- **Annotation buffer cap and the `annotate_dropped` audit phase (ruling #71; a barebox ask).** `gate.annotate` now keeps at most 256 buffered facts (internal, not exported). A push past it evicts the oldest `surface:false` fact, or the oldest overall when none is buffered, so a flood of honored facts cannot displace a `broke` one. Every well-formed fact still gets its `annotate` audit line; `drainAnnotations()` and the ride-the-ask path return what remains. The new `annotate_dropped` phase (`dropped`, the gate's cumulative eviction count, not reset by a drain) is written on the first eviction and then once per 256. On the SemVer surface from 0.30.0: the phase and its `dropped` field.
+
+### Changed
+
+- **`meta` over 1000 bytes now loses whole top-level keys, largest first, instead of everything (ruling #71).** Ties break by key name. The result keeps the surviving keys and adds `_truncated: true`, `bytes` (the original size) and `_droppedKeys` (names, at most 16, each clipped; `_droppedKeysMore` counts any left off). Strings are never cut. An array `meta`, or one where nothing fits, still becomes `{_truncated, bytes}`. A caller key named like a marker is removed when the bound fires, so the markers cannot be forged. Previously an oversized `meta` became `{_truncated, bytes}` and took `id`/`field`/`stated` with it. On the SemVer surface from 0.30.0: `_droppedKeys`, `_droppedKeysMore` and the partial bound.
+- **The audit-line re-bound keeps `meta` keys too.** After redaction expands a line past 3500 bytes, a `meta` over 1000 bytes loses its largest keys by the same rule (one shared helper) instead of being replaced by `{_truncated, bytes}` once it passed 200 bytes, so `meta.id`/`rid`/`agent` stay on disk; the source bound's `bytes` and `_droppedKeys` are carried forward. The 3500-byte line cap, the later fallbacks, and how `action`/`aid` are bounded on `gate`/`record` lines are unchanged.
+
 ### Documentation
+
+- `bareguard.context.md` rwx section: with `rwx` set and no `content` key the content safe-defaults still run before rwx, so even `letters: "rwx"` gets `content.askPatterns` asks on `PUT`/`PATCH`/`DELETE` and `content.denyPatterns` denies; opt out with `content: { askPatterns: [], denyPatterns: [] }`.
 
 - `bareguard.context.md` gotcha #22 and a README fs note: a tool that walks a directory (grep/glob over a root) is gated as one action, so it must check each directory before descending and each file before reading with `gate.allows()` and prune/skip on `false`; otherwise it can read paths under `fs.deny`. `allows()` treats an ask as allowed (fs rules never ask). Docs only, no behaviour change.
 

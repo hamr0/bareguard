@@ -165,7 +165,7 @@ console.log(r.verdict, (await gate.check(advance(r))).outcome); // green allow
 
 ## Facts you computed: `annotate`
 
-`annotate` is transport for a fact you computed (bareguard never decides it): `await gate.annotate({ surface: true, verdict: "broke", where: "..." })`, then `gate.drainAnnotations()`. Reversibility is read from the gated action's type via `axisB.reversible`, never from the fact. Contract: [`bareguard.context.md`](bareguard.context.md#recipe-11-axis-b--surface-a-return-time-judge-fact-on-the-next-approval).
+`annotate` is transport for a fact you computed (bareguard never decides it): `await gate.annotate({ surface: true, verdict: "broke", where: "..." })`, then `gate.drainAnnotations()`. Reversibility is read from the gated action's type via `axisB.reversible`, never from the fact. The gate keeps the newest 256 facts (a flood of `surface:false` facts evicts first; each eviction run is recorded as an `annotate_dropped` audit row), and a `meta` over 1000 bytes loses its largest top-level keys, not all of them (`_truncated`, `bytes` and `_droppedKeys` say what went). Contract: [`bareguard.context.md`](bareguard.context.md#recipe-11-axis-b--surface-a-return-time-judge-fact-on-the-next-approval).
 
 ## The bare ecosystem
 

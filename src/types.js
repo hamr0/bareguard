@@ -112,7 +112,7 @@ export {};
  * `surface` is the one load-bearing field — the caller sets it (e.g. to
  * `verdict !== "honored"`); the rest is carried, not interpreted.
  *
- * FIELD BOUNDS — there are TWO, and sizing to the first does NOT guarantee
+ * FIELD BOUNDS — there are THREE, and sizing to the first does NOT guarantee
  * survival past the second. `annotate()` normalizes and NEVER throws, so every
  * loss below is silent at the call site.
  *
@@ -125,12 +125,24 @@ export {};
  *                 cannot move the bound or split the sinks) with any `__proto__`
  *                 KEY dropped at every depth, so merging the fact into another
  *                 object cannot shift that object's prototype. Capped at
- *                 1000 BYTES serialized, ALL-OR-NOTHING: over the cap the whole
- *                 object is REPLACED by `{_truncated: true, bytes}`, so bulky
- *                 evidence takes `field`/`stated`/`returned` down with it. A
- *                 `meta` that cannot be serialized at all (circular, BigInt)
- *                 becomes `{_unserializable: true}` — a DIFFERENT marker, same
- *                 total loss. Bound free text BEFORE it reaches `meta`.
+ *                 1000 BYTES serialized, PARTIALLY (ruling #71): over the cap whole
+ *                 TOP-LEVEL keys are dropped, LARGEST serialized first (ties: key
+ *                 name ascending), until what is left plus the markers fits in
+ *                 1000 bytes. Strings are never cut. The result is the surviving
+ *                 keys plus `_truncated: true` (a boolean), `bytes` (the original
+ *                 size) and `_droppedKeys` (the dropped names, at most 16 and ~250
+ *                 bytes of them, each clipped to 64 chars + an ellipsis; `_droppedKeysMore` counts any
+ *                 names left off the list). So bulky evidence no longer takes
+ *                 `id`/`field`/`stated` down with it. An array `meta`, or one where
+ *                 nothing fits, ends as `{_truncated, bytes}` alone. The markers
+ *                 always win: a key of yours named `_truncated`, `bytes`,
+ *                 `_droppedKeys` or `_droppedKeysMore` is removed (and listed as
+ *                 dropped) when the bound fires, so it cannot forge "not truncated";
+ *                 under the cap your meta rides unchanged. A `meta` that cannot be
+ *                 serialized at all (circular, BigInt) becomes
+ *                 `{_unserializable: true}` — a DIFFERENT marker, total loss. Keep
+ *                 short identifying keys (`id`, `rid`, `agent`) small and put bulk
+ *                 in its own key; bound free text BEFORE it reaches `meta`.
  *                 The copy is a JSON ROUND-TRIP, so it carries JSON values only
  *                 and drops what JSON cannot express — NO marker, this is the
  *                 one lossy path that is silent by design because the audit row
@@ -144,12 +156,19 @@ export {};
  * Redaction EXPANDS a field (each match becomes a longer `[REDACTED:…]` tag), so
  * a line built from in-budget fields can still exceed the ~3500-byte atomic-append
  * cap. When it does, the row re-bounds: `where` is re-clipped to ~200 bytes WITH a
- * `[TRUNCATED]` suffix and a root `_truncated: true`, and `meta` is replaced by
- * `{_truncated, bytes}` EVEN IF the source `meta` was well under 1000 bytes
- * (measured: a legal 355-byte meta persisted as `{_truncated:true,bytes:6977}`).
- * So under a configured redactor the mechanical fields can survive the drain and
- * still vanish from the audit row. It is this byte-level backstop — not the source
- * caps, which count characters — that actually preserves append atomicity.
+ * `[TRUNCATED]` suffix and a root `_truncated: true`, and a `meta` that redaction
+ * pushed past 1000 bytes loses whole top-level keys by the SAME rule as the source
+ * bound (largest first, markers kept; the source bound's `bytes` and
+ * `_droppedKeys` are carried forward, new names appended). So `meta.id`/`rid`/
+ * `agent` survive on disk while the bulky expanded key does not. It is this
+ * byte-level backstop — not the source caps, which count characters — that
+ * actually preserves append atomicity.
+ *
+ * (3) BUFFER bound (ruling #71): the gate keeps at most 256 buffered facts. A push
+ * past that evicts the OLDEST `surface: false` fact, or the oldest overall when
+ * none is buffered. Every well-formed fact still gets its `annotate` audit line;
+ * an `annotate_dropped` row (`dropped` = cumulative evictions) is written on the
+ * first eviction and then once per 256 more.
  *
  * Unknown keys are dropped.
  *

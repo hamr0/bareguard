@@ -673,6 +673,7 @@ Children inherit via env var `BAREGUARD_AUDIT_PATH` set by the parent. (bareguar
 | `topup` | runner / humanChannel raised a cap | `dimension`, `oldCap`, `newCap` |
 | `terminate` | gate terminated (graceful) | `reason` |
 | `annotate` | (v0.7) every well-formed `gate.annotate()` fact (Part 2 §8.2) | `surface`, `verdict`, `where`, `meta` |
+| `annotate_dropped` | (0.30.0, ruling #71) the annotation buffer evicted a fact: written on the first eviction, then once per 256 more (§12.1). Nothing else changes | `dropped` (cumulative evictions for the gate's life; a drain does not reset it) |
 | `annotate_malformed` | (v0.13) a `gate.annotate()` call whose fact could not be read — no `surface` boolean, or the read itself threw (Part 2 §8.2.1). Nothing buffered; no decision changed | `reason` (`not-an-object` \| `array` \| `missing-surface` \| `unreadable`) |
 
 (bareguard-prd.md:589-614)
@@ -732,6 +733,52 @@ objects onto `gate.audit.entries`; no fs writes, no PIPE_BUF truncation.
 `audit.readAll()` returns the in-memory entries. Intended for unit tests
 that want to assert on the audit stream without stubbing fs. Distinct
 from `audit.path: undefined` which falls through to env var / XDG default. (bareguard-prd.md:665-670)
+
+### 12.1 Annotation buffer cap and the partial `meta` bound (ruling #71)
+
+Ruling #71 (hamr, 2026-10-30; shape agreed with the barebox sandbox, the only live `gate.annotate`
+caller). Full text here; the number is registered in `rubric-prd.md` §12. Two bounds, no change to
+what `annotate` decides (it still decides nothing) and none to any gate decision.
+
+1. **Buffer cap.** The gate buffers at most **256** annotation facts. The number is internal and
+   NOT exported (no `ANNOTATION_LIMITS`: exporting it would make a future tightening breaking).
+   It applies to `surface: true` and `surface: false` alike. A push that would exceed it evicts
+   the OLDEST `surface: false` fact; if none is buffered, the oldest fact overall. (When the
+   buffer is full of `surface: true` facts and the incoming fact is the only `surface: false` one,
+   it is the one evicted.) A flood of honored facts therefore cannot displace a `broke` fact.
+   Sink 1 is unchanged: every well-formed fact still gets its `annotate` audit line, evicted or
+   not. `drainAnnotations()` and ride-the-next-ask return what remains in the buffer, as before.
+2. **`annotate_dropped` audit phase.** Written after the `annotate` line of the fact that caused
+   the eviction: on the first eviction, then once per further 256 (cumulative `dropped` 1, 257,
+   513, ...). Fields: `dropped`, the cumulative count of evictions for the gate's life (a drain
+   does not reset it). Not one line per eviction. An audit write failure propagates, like every
+   other phase; the eviction itself is a plain splice and cannot throw.
+3. **Partial `meta` bound, source.** `meta` is still capped at 1000 bytes serialized, but no longer
+   all-or-nothing. Over the cap, whole TOP-LEVEL keys are dropped, LARGEST serialized pair first
+   (ties: key name ascending, so the result is deterministic), until the surviving keys plus the
+   markers fit in 1000 bytes. Strings are never cut. Result: the surviving keys + `_truncated:
+   true` (stays a boolean) + `bytes` (the original size) + `_droppedKeys` (names; at most 16 and
+   about 250 bytes of them, each clipped to 64 chars + an ellipsis) + `_droppedKeysMore` (only when
+   names were left off the list: how many). An array `meta`, or one where nothing fits beside the
+   markers, ends as `{_truncated, bytes}`. Unserializable stays `{_unserializable: true}`. The
+   decoupled JSON-round-trip copy and `__proto__` stripping at every depth are unchanged.
+4. **Marker collision.** The markers win. When the bound fires, a caller key named `_truncated`,
+   `bytes`, `_droppedKeys` or `_droppedKeysMore` is removed before anything is measured and is
+   listed in `_droppedKeys`, so a caller cannot forge "not truncated". A `meta` under the cap is
+   the caller's own data and rides unchanged, such keys included.
+5. **Partial `meta` bound, audit line.** The re-bound after redaction used to replace `meta`
+   wholesale with `{_truncated, bytes}` once it passed 200 bytes. For `meta` it now applies the
+   same rule with the same 1000-byte cap (one shared helper, `src/primitives/bound-keys.js`):
+   redaction-expanded keys are dropped, short keys (`id`, `rid`, `agent`) stay on disk. The source
+   bound's `bytes` and `_droppedKeys` are carried forward and the new names appended. The 3500-byte
+   line cap and the later fallbacks are untouched, and nothing about `action`/`aid`/`rid`/`tool`
+   on `gate`/`record` lines changes (a long `url` in `action` still clips to 200 bytes).
+   The other wholesale fields (`keys`, `gaps`, `fault`, ...) keep `{_truncated, bytes}`.
+
+**SemVer surface (ships in 0.30.0):** the `annotate_dropped` phase and its `dropped` field; the
+`_droppedKeys` and `_droppedKeysMore` meta markers and the partial `meta` bound (largest key first,
+markers win, `bytes` = original size) at both bound points. The cap value 256 is deliberately not
+on the surface.
 
 ## 13. Shared budget across processes
 

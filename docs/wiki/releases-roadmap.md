@@ -284,7 +284,9 @@ copy that could not read one of the action's fields), `[REDACTED:circular]`, and
 `[REDACTED:depth]` (v0.16), the `gate.annotate` fact contract (`surface` must be an explicit
 boolean — v0.13), the budget file format, and the `humanChannel` event/decision contract (incl.
 the `event.classification`/`event.tier` fields the classifier attaches). The `rwx.askUnheld`
-config key (ruling #70, §23.22) joins this surface when it ships in 0.29.0.
+config key (ruling #70, §23.22) joins this surface when it ships in 0.29.0. Ruling #71 (§12.1) adds,
+when it ships in 0.30.0, the `annotate_dropped` audit phase (`dropped`), the `_droppedKeys`/
+`_droppedKeysMore` `meta` markers and the partial `meta` bound at both bound points.
 
 **Pending/future work index while holding** (so nothing lives only in chat): this section (1.0
 gate) · §19 future candidates above (Budget, Audit, tamper-evident — all demand-gated) ·

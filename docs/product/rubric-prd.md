@@ -2046,3 +2046,7 @@ Status of #30-#47: kept as history. Live and shared with `cited`: #32 (exactly o
 **2026-10-29 (barebox ask; RULED; built on feat/rwx-ask-unheld, unreleased, target 0.29.0)**
 
 70. RULED (hamr, 2026-10-29): `rwx.askUnheld`, an opt-in that asks a human instead of denying `rwx.denied` for a listed unheld letter. Full text in [bareguard-prd.md](bareguard-prd.md) §23.22 (pointer only; the counter lives here). Unreleased, target 0.29.0.
+
+**2026-10-30 (barebox ask; RULED; built on feat/annotate-bounds, unreleased, target 0.30.0)**
+
+71. RULED (hamr, 2026-10-30; shape agreed with barebox): the annotation buffer is capped and `meta` is bounded PARTIALLY. Full text in [bareguard-prd.md](bareguard-prd.md) §12.1 (pointer only; the counter lives here). (1) The gate buffers at most 256 facts (internal, not exported); a push past it evicts the oldest `surface:false` fact, else the oldest overall; every fact still gets its `annotate` audit line. (2) New audit phase `annotate_dropped` with a cumulative `dropped` count, written on the first eviction and then once per 256. (3) Over 1000 bytes, `meta` loses whole top-level keys, largest first (ties by name), keeping the rest plus `_truncated: true`, `bytes` and `_droppedKeys`, at the source bound and again at the audit-line bound after redaction; the markers win over a caller key of the same name. Unreleased, target 0.30.0. **SemVer surface (ships in 0.30.0):** `annotate_dropped` and `dropped`, `_droppedKeys`/`_droppedKeysMore`, and the partial `meta` bound.
