@@ -2223,11 +2223,11 @@ export class Gate {
 
   /** @private Consume newly appended audit lines into the committed tally. */
   async _advanceHaltTally() {
-    const fresh = () => ({ offset: 0, totUsd: 0, totTok: 0, records: 0, last5: [], lines: 0, firstTs: undefined, lastTs: undefined });
+    const fresh = () => ({ offset: 0, totUsd: 0, totTok: 0, records: 0, last5: [], lines: 0, firstTs: undefined, lastTs: undefined, anchor: undefined });
     const base = this._haltTally ?? fresh();
     const attempt = async (from) => {
       const t = { ...from, last5: from.last5.slice() };
-      const res = await this.audit.scanFrom(t.offset, (l) => {
+      const res = await this.audit.scanFrom(t.offset, t.anchor, (l) => {
         if (l.phase === "record") {
           t.totUsd = t.totUsd + (l.result?.costUsd ?? 0);
           t.totTok = t.totTok + (l.result?.tokens ?? 0);
@@ -2241,6 +2241,7 @@ export class Gate {
       });
       if ("truncated" in res) return null;
       t.offset = res.end;
+      t.anchor = res.anchor;
       return t;
     };
     let t = await attempt(base);

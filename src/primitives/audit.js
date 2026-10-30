@@ -620,11 +620,21 @@ export class Audit {
    * visiting anything when the file is now SHORTER than `offset` (rotated /
    * truncated / gone) so the caller can reset and rescan from 0. A throw leaves
    * the caller's offset untouched — it only advances on the returned `end`.
+   *
+   * File identity (file mode): the returned `anchor` is `{dev, ino, tail}` - the
+   * open handle's device/inode and the last <=64 bytes consumed. Passed back on
+   * the next call, a different dev/ino (when both are usable; ino 0 means the
+   * platform gave none) or tail bytes that no longer match at `offset` also
+   * report `truncated`, so a swapped-in larger file, or a copytruncate that
+   * regrew past `offset`, is rescanned from 0. Residual: a file rewritten in
+   * place with the SAME inode whose last 64 bytes before `offset` are identical
+   * is not detected.
    * @param {number} offset
+   * @param {any} anchor  the `anchor` from the previous call (undefined on the first)
    * @param {(line: any) => void} visit
-   * @returns {Promise<{end:number}|{truncated:true}>}
+   * @returns {Promise<{end:number, anchor?:any}|{truncated:true}>}
    */
-  async scanFrom(offset, visit) {
+  async scanFrom(offset, anchor, visit) {
     const { filePath } = this;
     if (filePath === null) {
       if (this.entries.length < offset) return { truncated: true };
@@ -640,8 +650,20 @@ export class Audit {
       throw err;
     }
     try {
-      const { size } = await fh.stat();
+      const st = await fh.stat({ bigint: true });
+      const size = Number(st.size);
       if (size < offset) return { truncated: true };
+      // ino 0n = the platform gave no identity (some Windows filesystems): size + tail only.
+      const usable = st.ino !== 0n;
+      if (anchor && offset > 0) {
+        if (usable && anchor.ino !== 0n && (anchor.ino !== st.ino || anchor.dev !== st.dev)) return { truncated: true };
+        const n = anchor.tail.length;
+        if (n > 0) {
+          const chk = Buffer.allocUnsafe(n);
+          const { bytesRead } = await fh.read(chk, 0, n, offset - n);
+          if (bytesRead !== n || !chk.equals(anchor.tail)) return { truncated: true };
+        }
+      }
       const chunkBytes = this.tailChunkBytes;
       const buf = Buffer.allocUnsafe(chunkBytes);
       /** @type {Buffer[]} */
@@ -665,7 +687,13 @@ export class Audit {
         }
         if (start < bytesRead) carry.push(Buffer.from(buf.subarray(start, bytesRead)));
       }
-      return { end: consumed };
+      const n = Math.min(consumed, 64);
+      const tail = Buffer.allocUnsafe(n);
+      if (n > 0) {
+        const { bytesRead } = await fh.read(tail, 0, n, consumed - n);
+        if (bytesRead !== n) return { end: consumed, anchor: undefined };
+      }
+      return { end: consumed, anchor: { dev: st.dev, ino: st.ino, tail } };
     } finally {
       await fh.close();
     }

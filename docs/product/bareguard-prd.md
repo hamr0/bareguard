@@ -784,7 +784,7 @@ on the surface.
 
 Ruling #72 (2026-10-30; a barebox measurement: 3.68 GB read and a 776 MB heap peak on 16 MB of
 live data, 10 MB shared file, 20 agents, OOM at `--max-old-space-size=48`). A cost fix; **no
-contract change**: `haltContext()` and `event.context` return exactly what they returned.
+contract change**: `haltContext()` and `event.context` return the same shape and, over an append-only audit file, exactly what they returned. A file that is replaced or rewritten is handled as below; one residual is stated.
 
 `haltContext()` ran on every ask/halt and did `audit.readAll()`, so asks over a run were O(n^2)
 and every gate sharing a file slowed the others. Now each gate keeps a small tally (byte offset
@@ -793,8 +793,12 @@ reads only the bytes after its offset, in 64 KiB chunks, consuming complete line
 byte 0x0A; a partial trailing line waits for the next call). Records written by other gates or
 processes on the same file are still counted: the total stays family-wide. Same expressions, same
 file-order float sums. Calls are serialized per gate, so parallel asks neither double-count nor
-re-read; a failed read leaves the tally as it was. File missing: empty. File shorter than the
-offset (rotated/truncated): reset and rescan from 0. A malformed complete line throws, as
+re-read; a failed read leaves the tally as it was. File missing: empty. The tally also keeps the file's
+`dev`/`ino` (from the open handle, read as BigInt) and the last 64 bytes it consumed. Rescan from 0 when the file is
+shorter than the offset, has a different dev/ino (rename rotation, delete+recreate), or does not hold those 64 bytes at
+the offset (copytruncate that regrew past it). If the platform reports ino 0 (some Windows filesystems) only size and
+the 64-byte check apply. Residual, not detected: an in-place rewrite (same inode) whose 64 bytes before the old offset
+are byte-identical to what was consumed. A malformed complete line throws, as
 `readAll` does, and the offset does not pass it. Fileless mode tallies by index into
 `audit.entries`. The new reader is `AuditLog#scanFrom`, internal. Budget and limits state is NOT
 used for the audit-derived fields. `readAll` is unchanged; init and rubric rebuilds, and
