@@ -5,10 +5,12 @@
 
 import { promises as fsp } from "node:fs";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import os from "node:os";
 import lockfile from "proper-lockfile";
 import { dropKeysToFit, META_BYTE_CAP } from "./bound-keys.js";
 
+const ANCHOR_MAX = 4096; // scanFrom's whole-line anchor read-back bound; > MAX_LINE_BYTES + 1 (the newline)
 const MAX_LINE_BYTES = 3500; // safety margin under PIPE_BUF (4096 on Linux/macOS)
 const FIELD_BYTE_CAP = 200;  // per-field bound inside an oversize line
 
@@ -621,14 +623,21 @@ export class Audit {
    * truncated / gone) so the caller can reset and rescan from 0. A throw leaves
    * the caller's offset untouched — it only advances on the returned `end`.
    *
-   * File identity (file mode): the returned `anchor` is `{dev, ino, tail}` - the
-   * open handle's device/inode and the last <=64 bytes consumed. Passed back on
-   * the next call, a different dev/ino (when both are usable; ino 0 means the
-   * platform gave none) or tail bytes that no longer match at `offset` also
-   * report `truncated`, so a swapped-in larger file, or a copytruncate that
-   * regrew past `offset`, is rescanned from 0. Residual: a file rewritten in
-   * place with the SAME inode whose last 64 bytes before `offset` are identical
-   * is not detected.
+   * File identity (file mode): the returned `anchor` is `{dev, ino, len, hash,
+   * atStart, partial}` - the open handle's device/inode and the WHOLE last
+   * complete line consumed (from the byte after the previous `\n`, or from 0,
+   * through its own `\n`), kept as its byte length and a sha256, not as bytes.
+   * Passed back on the next call, a different dev/ino (when both are usable;
+   * ino 0 means the platform gave none), or a file that does not hold a line of
+   * that length with that hash ending at `offset` (and a `\n` just before it,
+   * unless it starts at 0), also reports `truncated`, so a swapped-in larger
+   * file, or a copytruncate that regrew past `offset`, is rescanned from 0.
+   * Lines `emit` writes never exceed MAX_LINE_BYTES + 1, so the read-back is
+   * bounded (ANCHOR_MAX, 4096); a longer line (a foreign writer) is anchored by its last
+   * ANCHOR_MAX bytes only (`partial`), with no line-start check. Residual: a
+   * file rewritten in place (same inode, or a reused one) that holds a
+   * byte-identical whole line - same `ts`, `seq`, `run_id` and fields - ending
+   * at the same offset is not detected.
    * @param {number} offset
    * @param {any} anchor  the `anchor` from the previous call (undefined on the first)
    * @param {(line: any) => void} visit
@@ -657,18 +666,22 @@ export class Audit {
       const usable = st.ino !== 0n;
       if (anchor && offset > 0) {
         if (usable && anchor.ino !== 0n && (anchor.ino !== st.ino || anchor.dev !== st.dev)) return { truncated: true };
-        const n = anchor.tail.length;
-        if (n > 0) {
-          const chk = Buffer.allocUnsafe(n);
-          const { bytesRead } = await fh.read(chk, 0, n, offset - n);
-          if (bytesRead !== n || !chk.equals(anchor.tail)) return { truncated: true };
-        }
+        const n = anchor.len;
+        const start = offset - n;
+        if (start < 0) return { truncated: true };
+        const lead = start > 0 && !anchor.partial ? 1 : 0; // the byte before the line must be '\n'
+        const chk = Buffer.allocUnsafe(n + lead);
+        const { bytesRead } = await fh.read(chk, 0, n + lead, start - lead);
+        if (bytesRead !== n + lead) return { truncated: true };
+        if (lead && chk[0] !== 0x0a) return { truncated: true };
+        if (createHash("sha256").update(chk.subarray(lead)).digest("hex") !== anchor.hash) return { truncated: true };
       }
       const chunkBytes = this.tailChunkBytes;
       const buf = Buffer.allocUnsafe(chunkBytes);
       /** @type {Buffer[]} */
       let carry = [];           // bytes of the current unfinished line
       let consumed = offset;
+      let lastLine = null;      // content (no newline) of the last complete line consumed this call
       let pos = offset;
       for (;;) {
         const { bytesRead } = await fh.read(buf, 0, chunkBytes, pos);
@@ -679,21 +692,24 @@ export class Audit {
           const nl = buf.indexOf(0x0a, start);
           if (nl === -1 || nl >= bytesRead) break;
           carry.push(Buffer.from(buf.subarray(start, nl)));
-          const text = (carry.length === 1 ? carry[0] : Buffer.concat(carry)).toString("utf8");
+          const lineBytes = carry.length === 1 ? carry[0] : Buffer.concat(carry);
+          const text = lineBytes.toString("utf8");
           carry = [];
+          lastLine = lineBytes;
           if (text) visit(JSON.parse(text)); // empty line skipped, as readAll's filter(Boolean)
           start = nl + 1;
           consumed = pos - bytesRead + start;
         }
         if (start < bytesRead) carry.push(Buffer.from(buf.subarray(start, bytesRead)));
       }
-      const n = Math.min(consumed, 64);
-      const tail = Buffer.allocUnsafe(n);
-      if (n > 0) {
-        const { bytesRead } = await fh.read(tail, 0, n, consumed - n);
-        if (bytesRead !== n) return { end: consumed, anchor: undefined };
-      }
-      return { end: consumed, anchor: { dev: st.dev, ino: st.ino, tail } };
+      if (anchor && offset > 0 && consumed === offset) return { end: consumed, anchor: { ...anchor, dev: st.dev, ino: st.ino } }; // verified above, nothing new
+      if (lastLine === null) return { end: consumed, anchor: undefined };
+      // The anchor: the whole last complete line consumed (content + its '\n'), kept as length + hash.
+      const whole = Buffer.concat([lastLine, Buffer.from("\n")]);
+      const partial = whole.length > ANCHOR_MAX;
+      const kept = partial ? whole.subarray(whole.length - ANCHOR_MAX) : whole;
+      const atStart = !partial && consumed === whole.length;
+      return { end: consumed, anchor: { dev: st.dev, ino: st.ino, len: kept.length, hash: createHash("sha256").update(kept).digest("hex"), atStart, partial } };
     } finally {
       await fh.close();
     }

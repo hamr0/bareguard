@@ -794,11 +794,20 @@ byte 0x0A; a partial trailing line waits for the next call). Records written by 
 processes on the same file are still counted: the total stays family-wide. Same expressions, same
 file-order float sums. Calls are serialized per gate, so parallel asks neither double-count nor
 re-read; a failed read leaves the tally as it was. File missing: empty. The tally also keeps the file's
-`dev`/`ino` (from the open handle, read as BigInt) and the last 64 bytes it consumed. Rescan from 0 when the file is
-shorter than the offset, has a different dev/ino (rename rotation, delete+recreate), or does not hold those 64 bytes at
-the offset (copytruncate that regrew past it). If the platform reports ino 0 (some Windows filesystems) only size and
-the 64-byte check apply. Residual, not detected: an in-place rewrite (same inode) whose 64 bytes before the old offset
-are byte-identical to what was consumed. A malformed complete line throws, as
+`dev`/`ino` (from the open handle, read as BigInt) and the WHOLE last complete line it consumed (from the byte after the
+previous newline, or from 0, through its own newline), stored as its byte length and a SHA-256, not as bytes. Before
+reading on, the scan reads that many bytes back ending at the offset, compares the hash, and requires a newline just
+before them (or the start of the file). Rescan from 0 when the file is shorter than the offset, has a different dev/ino
+(rename rotation, delete+recreate), or does not hold that line there (copytruncate or an in-place rewrite that regrew
+past it, including a reused inode number). If the platform reports ino 0 (some Windows filesystems) only size and the
+line check apply. Bounded: every line `emit` writes is at most MAX_LINE_BYTES + 1 (3501) bytes, including each
+fallback down to the bare `_dropped_core` marker, so the read-back is bounded; a longer line from a foreign writer is
+anchored by its last 4096 bytes only (no line-start check). Residual, not detected: a file rewritten in place (or
+recreated with a reused inode) that holds a byte-identical whole line ending at the old offset. Every audit line
+carries `ts` (ms), `seq` and `run_id` (a random UUID unless a stable `runId` is configured); lines written inside
+`check`/`record` (gate, halt, approval, topup, record, unpriced, budget_warn) also carry a random `aid`. Phases without
+`aid` (annotate*, rubric*, rwx.*, terminate, the direct topup) still carry `ts`+`seq`+`run_id`, so a false match needs the
+same run's same line at the same position (a replay or a hand-built file). A malformed complete line throws, as
 `readAll` does, and the offset does not pass it. Fileless mode tallies by index into
 `audit.entries`. The new reader is `AuditLog#scanFrom`, internal. Budget and limits state is NOT
 used for the audit-derived fields. `readAll` is unchanged; init and rubric rebuilds, and

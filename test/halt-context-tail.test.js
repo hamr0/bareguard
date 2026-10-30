@@ -254,7 +254,7 @@ test("concurrent asks share one scan: bytes read stay about one file, not N", as
   assert.ok(bytes <= size + 64 * 1024, `read ${bytes} for a ${size}-byte file`);
 });
 
-// ── File identity: swaps and in-place rewrites (dev/ino + last-64-bytes anchor) ──
+// ── File identity: swaps and in-place rewrites (dev/ino + whole-last-line anchor) ──
 const TS = "2026-10-30T00:00:00.000Z";
 const rec = (cost, tok, pad = "z".repeat(100)) => JSON.stringify({ phase: "record", ts: TS, result: { costUsd: cost, tokens: tok }, pad }) + "\n";
 const lineSet = (n, cost, tok = 1) => Array.from({ length: n }, () => rec(cost, tok)).join("");
@@ -292,19 +292,83 @@ test("identity: file replaced by a SMALLER file is rescanned", async (t) => {
   assert.deepEqual(spent, await fullReread(g));
 });
 
-test("identity: delete + recreate + regrow past the offset is rescanned (even if the inode number is reused)", async (t) => {
+// Lines built by a real gate, so they carry ts / seq / run_id / aid like production lines.
+async function realLines(t, n, cost) {
+  const { auditPath, mkGate } = await mk(t);
+  const g = await mkGate();
+  for (let i = 0; i < n; i++) await g.record({ type: "x", n: i }, { costUsd: cost, tokens: 1 });
+  return fsp.readFile(auditPath, "utf8");
+}
+// Make every open() report the given dev/ino, as a filesystem that reuses an inode number would.
+function pinIdentity(dev, ino) {
+  const origOpen = fsp.open;
+  fsp.open = async (...a) => {
+    const fh = await origOpen.apply(fsp, a);
+    const st = fh.stat.bind(fh);
+    fh.stat = async (...b) => { const x = await st(...b); return b[0]?.bigint ? Object.assign(x, { dev, ino }) : x; };
+    return fh;
+  };
+  return () => { fsp.open = origOpen; };
+}
+
+test("identity: delete + recreate + regrow past the offset is rescanned even when the inode number is reused (real gate lines)", async (t) => {
+  const { auditPath, mkGate } = await mk(t);
+  await fsp.writeFile(auditPath, await realLines(t, 10, 1));
+  const g = await mkGate();
+  assert.deepEqual((await g.haltContext()).spent, { costUsd: 10, tokens: 10 });
+  const { dev, ino } = g._haltTally.anchor;
+  await fsp.rm(auditPath);
+  await fsp.writeFile(auditPath, await realLines(t, 30, 3));
+  const restore = pinIdentity(dev, ino); // simulate inode reuse on any OS: identity cannot help here
+  try {
+    const spent = (await g.haltContext()).spent;
+    assert.deepEqual(spent, { costUsd: 90, tokens: 30 });
+    assert.deepEqual(spent, await fullReread(g));
+  } finally { restore(); }
+});
+
+test("identity: same-shaped lines that differ only EARLY in the line (past a 64-byte tail) are told apart", async (t) => {
   const { auditPath, mkGate } = await mk(t);
   await fsp.writeFile(auditPath, lineSet(10, 1));
   const g = await mkGate();
   await g.haltContext();
+  const { dev, ino } = g._haltTally.anchor;
   await fsp.rm(auditPath);
-  await fsp.writeFile(auditPath, lineSet(30, 3));
+  await fsp.writeFile(auditPath, lineSet(30, 3)); // every line ends in the same 100 'z' + tail
+  const restore = pinIdentity(dev, ino);
+  try {
+    const spent = (await g.haltContext()).spent;
+    assert.deepEqual(spent, { costUsd: 90, tokens: 30 });
+    assert.deepEqual(spent, await fullReread(g));
+  } finally { restore(); }
+});
+
+test("identity: the byte before the anchored line must be a newline (scanFrom, direct)", async (t) => {
+  const { auditPath, mkGate } = await mk(t);
+  await fsp.writeFile(auditPath, lineSet(5, 1));
+  const g = await mkGate();
+  const first = await g.audit.scanFrom(0, undefined, () => {});
+  const buf = await fsp.readFile(auditPath);
+  assert.deepEqual(await g.audit.scanFrom(first.end, first.anchor, () => {}), { end: first.end, anchor: first.anchor });
+  buf[first.end - first.anchor.len - 1] = 0x20; // the line's bytes are intact; the byte before is no longer '\n'
+  await fsp.writeFile(auditPath, buf);
+  assert.deepEqual(await g.audit.scanFrom(first.end, first.anchor, () => {}), { truncated: true });
+});
+
+test("identity: a foreign line longer than the anchor bound is anchored by its last bytes and a rewrite of them is rescanned", async (t) => {
+  const { auditPath, mkGate } = await mk(t);
+  const longLine = (c) => JSON.stringify({ phase: "record", ts: TS, result: { costUsd: 1, tokens: 1 }, pad: c.repeat(6000) }) + "\n";
+  await fsp.writeFile(auditPath, longLine("a"));
+  const g = await mkGate();
+  await g.haltContext();
+  assert.equal(g._haltTally.anchor.partial, true);
+  await fsp.writeFile(auditPath, longLine("b") + lineSet(3, 2)); // in place, same inode, bigger
   const spent = (await g.haltContext()).spent;
-  assert.deepEqual(spent, { costUsd: 90, tokens: 30 });
+  assert.deepEqual(spent, { costUsd: 1 + 6, tokens: 4 });
   assert.deepEqual(spent, await fullReread(g));
 });
 
-test("identity: copytruncate (same inode, truncated then regrown past the offset) is rescanned via the tail anchor", async (t) => {
+test("identity: copytruncate (same inode, truncated then regrown past the offset) is rescanned via the line anchor", async (t) => {
   const { auditPath, mkGate } = await mk(t);
   await fsp.writeFile(auditPath, lineSet(10, 1));
   const g = await mkGate();
@@ -317,7 +381,7 @@ test("identity: copytruncate (same inode, truncated then regrown past the offset
   assert.deepEqual(spent, await fullReread(g));
 });
 
-test("identity: documented residual - same inode AND identical last 64 bytes before the offset is NOT detected", async (t) => {
+test("identity: documented residual - same inode AND a byte-identical whole last line ending at the same offset is NOT detected", async (t) => {
   const { auditPath, mkGate } = await mk(t);
   // A: nine cost-1 lines then a marker line; B: nine cost-2 lines, the SAME marker line, then 20 more.
   const marker = rec(1, 1, "m".repeat(100));
@@ -330,7 +394,7 @@ test("identity: documented residual - same inode AND identical last 64 bytes bef
   assert.notDeepEqual(spent, await fullReread(g), "this is the residual the docs state");
 });
 
-test("identity: unusable inode (0) falls back to size + tail anchor; growth by append is NOT a rescan", async (t) => {
+test("identity: unusable inode (0) falls back to size + line anchor; growth by append is NOT a rescan", async (t) => {
   const { auditPath, mkGate } = await mk(t);
   await fsp.writeFile(auditPath, lineSet(10, 1));
   const g = await mkGate();
@@ -342,5 +406,5 @@ test("identity: unusable inode (0) falls back to size + tail anchor; growth by a
   const origOpen = fsp.open;
   fsp.open = async (...a) => { const fh = await origOpen.apply(fsp, a); const r = fh.read.bind(fh); fh.read = async (...b) => { const x = await r(...b); bytes += x.bytesRead; return x; }; return fh; };
   try { await g.haltContext(); } finally { fsp.open = origOpen; }
-  assert.ok(bytes <= 128, `an unchanged file costs only the anchor reads, got ${bytes}`);
+  assert.ok(bytes <= 3502, `an unchanged file costs only the one bounded anchor read-back, got ${bytes}`);
 });
