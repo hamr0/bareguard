@@ -382,6 +382,7 @@ export class Audit {
       : (filePath ?? defaultAuditPath(this.rootRunId));
     this.fileless = this.filePath === null;
     this.entries = [];                 // populated only in fileless mode
+    this.tailChunkBytes = 64 * 1024;   // scanFrom read size (tests may lower it)
     this.seq = 0;
     this._clock = clock ?? (() => Date.now());
   }
@@ -604,6 +605,69 @@ export class Audit {
     } catch (err) {
       if (err.code === "ENOENT") return [];
       throw err;
+    }
+  }
+
+  /**
+   * Stream the COMPLETE lines at or after byte `offset` (file mode) or entry
+   * index `offset` (fileless) to `visit(parsedLine)`, reading in bounded chunks
+   * (`tailChunkBytes`, default 64 KiB) — never the whole file at once. A
+   * trailing line without its `\n` is left unconsumed (a concurrent writer may
+   * be mid-append; atomic appends make this rare, but it is not assumed away).
+   * Splits on the byte 0x0A, so a multi-byte UTF-8 sequence cut by a chunk edge
+   * is decoded whole. A malformed complete line throws, exactly as `readAll`
+   * does. Returns `{ end }` (the new offset), or `{ truncated: true }` without
+   * visiting anything when the file is now SHORTER than `offset` (rotated /
+   * truncated / gone) so the caller can reset and rescan from 0. A throw leaves
+   * the caller's offset untouched — it only advances on the returned `end`.
+   * @param {number} offset
+   * @param {(line: any) => void} visit
+   * @returns {Promise<{end:number}|{truncated:true}>}
+   */
+  async scanFrom(offset, visit) {
+    const { filePath } = this;
+    if (filePath === null) {
+      if (this.entries.length < offset) return { truncated: true };
+      const n = this.entries.length;
+      for (let i = offset; i < n; i++) visit(this.entries[i]);
+      return { end: n };
+    }
+    let fh;
+    try {
+      fh = await fsp.open(filePath, "r");
+    } catch (err) {
+      if (err.code === "ENOENT") return offset > 0 ? { truncated: true } : { end: 0 };
+      throw err;
+    }
+    try {
+      const { size } = await fh.stat();
+      if (size < offset) return { truncated: true };
+      const chunkBytes = this.tailChunkBytes;
+      const buf = Buffer.allocUnsafe(chunkBytes);
+      /** @type {Buffer[]} */
+      let carry = [];           // bytes of the current unfinished line
+      let consumed = offset;
+      let pos = offset;
+      for (;;) {
+        const { bytesRead } = await fh.read(buf, 0, chunkBytes, pos);
+        if (bytesRead === 0) break;
+        pos += bytesRead;
+        let start = 0;
+        for (;;) {
+          const nl = buf.indexOf(0x0a, start);
+          if (nl === -1 || nl >= bytesRead) break;
+          carry.push(Buffer.from(buf.subarray(start, nl)));
+          const text = (carry.length === 1 ? carry[0] : Buffer.concat(carry)).toString("utf8");
+          carry = [];
+          if (text) visit(JSON.parse(text)); // empty line skipped, as readAll's filter(Boolean)
+          start = nl + 1;
+          consumed = pos - bytesRead + start;
+        }
+        if (start < bytesRead) carry.push(Buffer.from(buf.subarray(start, bytesRead)));
+      }
+      return { end: consumed };
+    } finally {
+      await fh.close();
     }
   }
 }

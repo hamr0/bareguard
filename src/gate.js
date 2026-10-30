@@ -2194,26 +2194,58 @@ export class Gate {
    */
   async haltContext() {
     if (!this._initialized) await this.init();
-    const lines = await this.audit.readAll();
-    const records = lines.filter(l => l.phase === "record");
-    const totUsd = records.reduce((a, r) => a + (r.result?.costUsd ?? 0), 0);
-    const totTok = records.reduce((a, r) => a + (r.result?.tokens ?? 0), 0);
-    const last5 = records.slice(-5).map(r => r.result?.costUsd ?? 0);
+    // Incremental (ruling #72): one tally per gate, advanced by reading only the
+    // bytes appended since the last call (any writer's — the total is family-wide).
+    // Calls are serialized so parallel asks never double-count; a throw leaves
+    // the committed tally untouched.
+    const run = (this._haltTallyChain ??= Promise.resolve()).then(() => this._advanceHaltTally());
+    this._haltTallyChain = run.catch(() => {});
+    const t = await run;
+    const earliestTs = t.firstTs ? Date.parse(t.firstTs) : null;
+    const latestTs = t.lastTs ? Date.parse(t.lastTs) : null;
+    const last5 = t.last5.slice();
     const avg = arr => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
-    const earliestTs = lines[0]?.ts ? Date.parse(lines[0].ts) : null;
-    const latestTs = lines.at(-1)?.ts ? Date.parse(lines.at(-1).ts) : null;
     return {
-      spent:    { costUsd: totUsd, tokens: totTok },
+      spent:    { costUsd: t.totUsd, tokens: t.totTok },
       cap:      { costUsd: this.budget.capUsd, tokens: this.budget.capTokens },
       turns:    this.limits.turns,
       maxTurns: this.limits.maxTurns,
       timeElapsedMs: (earliestTs && latestTs) ? (latestTs - earliestTs) : 0,
       spendRate: {
-        avgPerTurn: records.length ? totUsd / records.length : 0,
+        avgPerTurn: t.records ? t.totUsd / t.records : 0,
         last5Avg:   avg(last5),
         last5,
       },
     };
+  }
+
+  /** @private Consume newly appended audit lines into the committed tally. */
+  async _advanceHaltTally() {
+    const fresh = () => ({ offset: 0, totUsd: 0, totTok: 0, records: 0, last5: [], lines: 0, firstTs: undefined, lastTs: undefined });
+    const base = this._haltTally ?? fresh();
+    const attempt = async (from) => {
+      const t = { ...from, last5: from.last5.slice() };
+      const res = await this.audit.scanFrom(t.offset, (l) => {
+        if (l.phase === "record") {
+          t.totUsd = t.totUsd + (l.result?.costUsd ?? 0);
+          t.totTok = t.totTok + (l.result?.tokens ?? 0);
+          t.records++;
+          t.last5.push(l.result?.costUsd ?? 0);
+          if (t.last5.length > 5) t.last5.shift();
+        }
+        if (t.lines === 0) t.firstTs = l?.ts;
+        t.lastTs = l?.ts;
+        t.lines++;
+      });
+      if ("truncated" in res) return null;
+      t.offset = res.end;
+      return t;
+    };
+    let t = await attempt(base);
+    if (t === null) t = await attempt(fresh()); // file shrank / rotated: rescan from 0
+    if (t === null) t = fresh();                 // gone again mid-rescan: empty
+    this._haltTally = t;
+    return t;
   }
 
   // Generic resource halts carry rule `budget.resource.<name>` (OQ3); map them
