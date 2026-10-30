@@ -1503,10 +1503,12 @@ export class Gate {
     // incoming fact is the only surface:false one it is the one evicted. Pure splice:
     // cannot throw, cannot change a decision.
     let evicted = false;
+    let droppedN = 0;
     if (this._annotations.length > ANNOTATION_BUFFER_CAP) {
       const at = this._annotations.findIndex((a) => a.surface === false);
       this._annotations.splice(at < 0 ? 0 : at, 1);
-      this._annotationsDropped++;
+      // Captured synchronously: the awaits below must not see a concurrent annotate's bump.
+      droppedN = ++this._annotationsDropped;
       evicted = true;
     }
     // Sink 1: the fact is recorded even if no ask ever rides it.
@@ -1516,8 +1518,8 @@ export class Gate {
     });
     // Loud but not per-eviction: the first eviction, then once per further 256. `dropped`
     // is cumulative for the gate's life (drainAnnotations does not reset it).
-    if (evicted && (this._annotationsDropped - 1) % ANNOTATION_BUFFER_CAP === 0) {
-      await this.audit.emit({ phase: "annotate_dropped", action: null, dropped: this._annotationsDropped });
+    if (evicted && (droppedN - 1) % ANNOTATION_BUFFER_CAP === 0) {
+      await this.audit.emit({ phase: "annotate_dropped", action: null, dropped: droppedN });
     }
   }
 

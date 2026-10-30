@@ -104,6 +104,28 @@ test("annotate_dropped: first line at the first eviction, the next 256 evictions
   assert.deepEqual(dropped.map((l) => l.dropped), [1, 257, 513]);
 });
 
+test("annotate_dropped under concurrency: one row per trigger value (1, 257, 513), fileless and file mode", async () => {
+  const dir = await makeTmpDir();
+  try {
+    const { auditPath } = uniquePaths(dir);
+    const fileGate = new Gate({ audit: { path: auditPath }, content: PURE });
+    await fileGate.init();
+    for (const [mode, g] of [["fileless", await fresh()], ["file", fileGate]]) {
+      for (let i = 0; i < 256; i++) await g.annotate({ surface: true, verdict: `${mode}-fill${i}` });
+      const batch = (n, tag) => Promise.all(Array.from({ length: n }, (_, i) => g.annotate({ surface: true, verdict: `${mode}-${tag}${i}` })));
+      await batch(10, "a");                       // evictions 1..10 in flight together
+      assert.deepEqual((await lines(g, "annotate_dropped")).map((l) => l.dropped), [1], `${mode}: first row once`);
+      await batch(247, "b");                      // evictions 11..257
+      assert.deepEqual((await lines(g, "annotate_dropped")).map((l) => l.dropped), [1, 257], `${mode}: 257 once`);
+      await batch(256, "c");                      // evictions 258..513
+      assert.deepEqual((await lines(g, "annotate_dropped")).map((l) => l.dropped), [1, 257, 513], `${mode}: 513 once`);
+      assert.equal((await lines(g, "annotate")).length, 256 + 10 + 247 + 256);
+    }
+    const onDisk = (await fileLines(auditPath)).filter((l) => l.row.phase === "annotate_dropped");
+    assert.deepEqual(onDisk.map((l) => l.row.dropped), [1, 257, 513]);
+  } finally { await cleanup(dir); }
+});
+
 test("annotate_dropped reaches the real file as a small intact line; a full buffer still rides an ask", async () => {
   const dir = await makeTmpDir();
   try {
