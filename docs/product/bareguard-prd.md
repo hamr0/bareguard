@@ -780,6 +780,26 @@ what `annotate` decides (it still decides nothing) and none to any gate decision
 markers win, `bytes` = original size) at both bound points. The cap value 256 is deliberately not
 on the surface.
 
+### 12.2 `haltContext()` reads the audit tail, not the whole file (ruling #72)
+
+Ruling #72 (2026-10-30; a barebox measurement: 3.68 GB read and a 776 MB heap peak on 16 MB of
+live data, 10 MB shared file, 20 agents, OOM at `--max-old-space-size=48`). A cost fix; **no
+contract change**: `haltContext()` and `event.context` return exactly what they returned.
+
+`haltContext()` ran on every ask/halt and did `audit.readAll()`, so asks over a run were O(n^2)
+and every gate sharing a file slowed the others. Now each gate keeps a small tally (byte offset
+consumed, summed cost and tokens, record count, last five `costUsd`, first and last `ts`) and
+reads only the bytes after its offset, in 64 KiB chunks, consuming complete lines only (split on
+byte 0x0A; a partial trailing line waits for the next call). Records written by other gates or
+processes on the same file are still counted: the total stays family-wide. Same expressions, same
+file-order float sums. Calls are serialized per gate, so parallel asks neither double-count nor
+re-read; a failed read leaves the tally as it was. File missing: empty. File shorter than the
+offset (rotated/truncated): reset and rescan from 0. A malformed complete line throws, as
+`readAll` does, and the offset does not pass it. Fileless mode tallies by index into
+`audit.entries`. The new reader is `AuditLog#scanFrom`, internal. Budget and limits state is NOT
+used for the audit-derived fields. `readAll` is unchanged; init and rubric rebuilds, and
+`countAuditWindow`, still read in full (once at construction or by window, not per ask).
+
 ## 13. Shared budget across processes
 
 When a parent spawns a child and both should draw from the same budget

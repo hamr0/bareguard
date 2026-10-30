@@ -2189,7 +2189,7 @@ export class Gate {
   }
 
   /**
-   * Build the spend/turns/spend-rate context summary attached to ask/halt events.
+   * Build the spend/turns/spend-rate context summary attached to ask/halt events. Cost: an incremental tally reads only audit bytes appended since the last call (ruling #72).
    * @returns {Promise<import("./types.js").HaltContext>}
    */
   async haltContext() {

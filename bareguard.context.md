@@ -58,7 +58,7 @@ One entry point:
 | Pre-filter MCP catalog by what the agent CAN call | `await gate.allows(action)` — pure boolean, no audit, no budget delta |
 | One-shot wrapper: check + execute + record | `await gate.run(action, executor)` |
 | Stop the run cleanly with a paper trail | `await gate.terminate(reason)` |
-| Get deterministic stats at halt time | `await gate.haltContext()` — spend, turns, rate over audit log |
+| Get deterministic stats at halt time | `await gate.haltContext()` — spend, turns, rate over audit log (incremental; reads only new bytes) |
 | Run tests without temp files | `audit: { path: null }` — in-memory `gate.audit.entries` (v0.4) |
 | Halt BEFORE overspend (not after) | `budget: { strict: true }` — pre-flight halt via trailing-avg projection (v0.4, opt-in) |
 | Route halt prompts in multi-tenant | `event.action._ctx` is preserved verbatim on halt events (v0.4) |
