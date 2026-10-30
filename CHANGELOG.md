@@ -20,6 +20,8 @@ All notable changes to bareguard are documented here. Format: [Keep a Changelog]
 
 ### Documentation
 
+- `bareguard.context.md` gotcha #11 and `docs/product/bareguard-prd.md`: the Windows audit lock fallback is no longer described as simply "correct"; each emit retries the lock for about 1.5 s, so with more than about 10 emitters in flight against one audit file some `check()`/`record()`/`annotate()` calls throw "Lock file is already being held". Bound concurrent emits per audit file on Windows, or give each high-concurrency gate its own file. POSIX is unaffected. Docs only.
+
 - `bareguard.context.md` rwx section: with `rwx` set and no `content` key the content safe-defaults still run before rwx, so even `letters: "rwx"` gets `content.askPatterns` asks on `PUT`/`PATCH`/`DELETE` and `content.denyPatterns` denies; opt out with `content: { askPatterns: [], denyPatterns: [] }`.
 
 - `bareguard.context.md` gotcha #22 and a README fs note: a tool that walks a directory (grep/glob over a root) is gated as one action, so it must check each directory before descending and each file before reading with `gate.allows()` and prune/skip on `false`; otherwise it can read paths under `fs.deny`. `allows()` treats an ask as allowed (fs rules never ask). Docs only, no behaviour change.
