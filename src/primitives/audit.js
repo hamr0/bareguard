@@ -5,9 +5,12 @@
 
 import { promises as fsp } from "node:fs";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import os from "node:os";
 import lockfile from "proper-lockfile";
+import { dropKeysToFit, META_BYTE_CAP } from "./bound-keys.js";
 
+const ANCHOR_MAX = 4096; // scanFrom's whole-line anchor read-back bound; > MAX_LINE_BYTES + 1 (the newline)
 const MAX_LINE_BYTES = 3500; // safety margin under PIPE_BUF (4096 on Linux/macOS)
 const FIELD_BYTE_CAP = 200;  // per-field bound inside an oversize line
 
@@ -381,6 +384,7 @@ export class Audit {
       : (filePath ?? defaultAuditPath(this.rootRunId));
     this.fileless = this.filePath === null;
     this.entries = [];                 // populated only in fileless mode
+    this.tailChunkBytes = 64 * 1024;   // scanFrom read size (tests may lower it)
     this.seq = 0;
     this._clock = clock ?? (() => Date.now());
   }
@@ -476,7 +480,17 @@ export class Audit {
           if (v != null && typeof v === "object") truncated[key] = boundOwnValues(v);
         } else if (v != null && typeof v === "object") { // wholesale
           const bytes = Buffer.byteLength(JSON.stringify(v), "utf8");
-          if (bytes > FIELD_BYTE_CAP) truncated[key] = { _truncated: true, bytes };
+          if (key === "meta") {
+            // Ruling #71: an annotate line keeps the meta keys that fit (the same
+            // helper and the same 1000-byte rule as the source bound in gate.js),
+            // so `meta.id`/`rid`/`agent` survive redaction's expansion. `resume`:
+            // a source-bounded meta already carries `_truncated`/`bytes`/
+            // `_droppedKeys` - keep the original size and the earlier names.
+            // 1000 leaves the line well inside MAX_LINE_BYTES: the other annotate
+            // fields are clipped to ~200 bytes each above, and the fallbacks below
+            // still run if anything else made the line oversize.
+            if (bytes > META_BYTE_CAP) truncated[key] = dropKeysToFit(v, META_BYTE_CAP, { resume: true });
+          } else if (bytes > FIELD_BYTE_CAP) truncated[key] = { _truncated: true, bytes };
         }
       }
       serialized = JSON.stringify(truncated) + "\n";
@@ -593,6 +607,111 @@ export class Audit {
     } catch (err) {
       if (err.code === "ENOENT") return [];
       throw err;
+    }
+  }
+
+  /**
+   * Stream the COMPLETE lines at or after byte `offset` (file mode) or entry
+   * index `offset` (fileless) to `visit(parsedLine)`, reading in bounded chunks
+   * (`tailChunkBytes`, default 64 KiB) — never the whole file at once. A
+   * trailing line without its `\n` is left unconsumed (a concurrent writer may
+   * be mid-append; atomic appends make this rare, but it is not assumed away).
+   * Splits on the byte 0x0A, so a multi-byte UTF-8 sequence cut by a chunk edge
+   * is decoded whole. A malformed complete line throws, exactly as `readAll`
+   * does. Returns `{ end }` (the new offset), or `{ truncated: true }` without
+   * visiting anything when the file is now SHORTER than `offset` (rotated /
+   * truncated / gone) so the caller can reset and rescan from 0. A throw leaves
+   * the caller's offset untouched — it only advances on the returned `end`.
+   *
+   * File identity (file mode): the returned `anchor` is `{dev, ino, len, hash,
+   * atStart, partial}` - the open handle's device/inode and the WHOLE last
+   * complete line consumed (from the byte after the previous `\n`, or from 0,
+   * through its own `\n`), kept as its byte length and a sha256, not as bytes.
+   * Passed back on the next call, a different dev/ino (when both are usable;
+   * ino 0 means the platform gave none), or a file that does not hold a line of
+   * that length with that hash ending at `offset` (and a `\n` just before it,
+   * unless it starts at 0), also reports `truncated`, so a swapped-in larger
+   * file, or a copytruncate that regrew past `offset`, is rescanned from 0.
+   * Lines `emit` writes never exceed MAX_LINE_BYTES + 1, so the read-back is
+   * bounded (ANCHOR_MAX, 4096); a longer line (a foreign writer) is anchored by its last
+   * ANCHOR_MAX bytes only (`partial`), with no line-start check. Residual: a
+   * file rewritten in place (same inode, or a reused one) that holds a
+   * byte-identical whole line - same `ts`, `seq`, `run_id` and fields - ending
+   * at the same offset is not detected.
+   * @param {number} offset
+   * @param {any} anchor  the `anchor` from the previous call (undefined on the first)
+   * @param {(line: any) => void} visit
+   * @returns {Promise<{end:number, anchor?:any}|{truncated:true}>}
+   */
+  async scanFrom(offset, anchor, visit) {
+    const { filePath } = this;
+    if (filePath === null) {
+      if (this.entries.length < offset) return { truncated: true };
+      const n = this.entries.length;
+      for (let i = offset; i < n; i++) visit(this.entries[i]);
+      return { end: n };
+    }
+    let fh;
+    try {
+      fh = await fsp.open(filePath, "r");
+    } catch (err) {
+      if (err.code === "ENOENT") return offset > 0 ? { truncated: true } : { end: 0 };
+      throw err;
+    }
+    try {
+      const st = await fh.stat({ bigint: true });
+      const size = Number(st.size);
+      if (size < offset) return { truncated: true };
+      // ino 0n = the platform gave no identity (some Windows filesystems): size + tail only.
+      const usable = st.ino !== 0n;
+      if (anchor && offset > 0) {
+        if (usable && anchor.ino !== 0n && (anchor.ino !== st.ino || anchor.dev !== st.dev)) return { truncated: true };
+        const n = anchor.len;
+        const start = offset - n;
+        if (start < 0) return { truncated: true };
+        const lead = start > 0 && !anchor.partial ? 1 : 0; // the byte before the line must be '\n'
+        const chk = Buffer.allocUnsafe(n + lead);
+        const { bytesRead } = await fh.read(chk, 0, n + lead, start - lead);
+        if (bytesRead !== n + lead) return { truncated: true };
+        if (lead && chk[0] !== 0x0a) return { truncated: true };
+        if (createHash("sha256").update(chk.subarray(lead)).digest("hex") !== anchor.hash) return { truncated: true };
+      }
+      const chunkBytes = this.tailChunkBytes;
+      const buf = Buffer.allocUnsafe(chunkBytes);
+      /** @type {Buffer[]} */
+      let carry = [];           // bytes of the current unfinished line
+      let consumed = offset;
+      let lastLine = null;      // content (no newline) of the last complete line consumed this call
+      let pos = offset;
+      for (;;) {
+        const { bytesRead } = await fh.read(buf, 0, chunkBytes, pos);
+        if (bytesRead === 0) break;
+        pos += bytesRead;
+        let start = 0;
+        for (;;) {
+          const nl = buf.indexOf(0x0a, start);
+          if (nl === -1 || nl >= bytesRead) break;
+          carry.push(Buffer.from(buf.subarray(start, nl)));
+          const lineBytes = carry.length === 1 ? carry[0] : Buffer.concat(carry);
+          const text = lineBytes.toString("utf8");
+          carry = [];
+          lastLine = lineBytes;
+          if (text) visit(JSON.parse(text)); // empty line skipped, as readAll's filter(Boolean)
+          start = nl + 1;
+          consumed = pos - bytesRead + start;
+        }
+        if (start < bytesRead) carry.push(Buffer.from(buf.subarray(start, bytesRead)));
+      }
+      if (anchor && offset > 0 && consumed === offset) return { end: consumed, anchor: { ...anchor, dev: st.dev, ino: st.ino } }; // verified above, nothing new
+      if (lastLine === null) return { end: consumed, anchor: undefined };
+      // The anchor: the whole last complete line consumed (content + its '\n'), kept as length + hash.
+      const whole = Buffer.concat([lastLine, Buffer.from("\n")]);
+      const partial = whole.length > ANCHOR_MAX;
+      const kept = partial ? whole.subarray(whole.length - ANCHOR_MAX) : whole;
+      const atStart = !partial && consumed === whole.length;
+      return { end: consumed, anchor: { dev: st.dev, ino: st.ino, len: kept.length, hash: createHash("sha256").update(kept).digest("hex"), atStart, partial } };
+    } finally {
+      await fh.close();
     }
   }
 }

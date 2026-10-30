@@ -58,7 +58,7 @@ One entry point:
 | Pre-filter MCP catalog by what the agent CAN call | `await gate.allows(action)` — pure boolean, no audit, no budget delta |
 | One-shot wrapper: check + execute + record | `await gate.run(action, executor)` |
 | Stop the run cleanly with a paper trail | `await gate.terminate(reason)` |
-| Get deterministic stats at halt time | `await gate.haltContext()` — spend, turns, rate over audit log |
+| Get deterministic stats at halt time | `await gate.haltContext()` — spend, turns, rate over audit log (incremental; reads only new bytes) |
 | Run tests without temp files | `audit: { path: null }` — in-memory `gate.audit.entries` (v0.4) |
 | Halt BEFORE overspend (not after) | `budget: { strict: true }` — pre-flight halt via trailing-avg projection (v0.4, opt-in) |
 | Route halt prompts in multi-tenant | `event.action._ctx` is preserved verbatim on halt events (v0.4) |
@@ -173,7 +173,7 @@ await childGate.init();
 ```
 
 The child writes to the same audit file via `O_APPEND` atomicity (POSIX
-guarantees < 4KB; Windows uses lock fallback automatically). Reconstruct the
+guarantees < 4KB; Windows uses a lock fallback automatically, with a concurrency limit: gotcha 11). Reconstruct the
 family tree with one grep:
 
 ```bash
@@ -377,6 +377,10 @@ agent holds `w` for `write` in its rwx grant — rwx never gets evaluated.
 Likewise, a bash command matching a *universal* `content.denyPatterns`
 default (e.g. `rm -rf /`) denies at step 2 with `rule: "content.denyPatterns"`
 before rwx's own joined-command check ever runs.
+
+### Content safe-defaults still run before rwx
+
+With `rwx` set and no `content` key, the `content` safe-defaults still run (step 2 and step 4, before rwx) over the serialized action, `url` and `method` included. rwx implies nothing about them: even `letters: "rwx"` gets `content.askPatterns` asks on a `PUT`/`PATCH`/`DELETE` `method` (the shipped pattern reads `"method":"DELETE"` etc. in the serialized action) and `content.denyPatterns` denies (`DROP TABLE`, `rm -rf /` anywhere in the action, a `url` too). Verified with `rwx: { tools: { fetch: "x" }, letters: "rwx" }`: `{type:"fetch", url, method:"PUT"}` / `"PATCH"` / `"DELETE"` → `content.askPatterns` (a denying `humanChannel` gives a deny; no `humanChannel` denies), `GET` → `rwx.allow`, `args:{cmd:"DROP TABLE users"}` and `url: "...?q=rm -rf /"` → `content.denyPatterns`. To opt out, set `content: { askPatterns: [], denyPatterns: [] }`: all of those then reach `rwx.allow`.
 
 ### Deny by absence, loudly — the rule ids
 
@@ -950,6 +954,7 @@ One JSONL file. Default path: `$XDG_STATE_HOME/bareguard/<root-run-id>.jsonl`. O
 | `topup` | runner / humanChannel raised a cap | `dimension`, `oldCap`, `newCap` |
 | `terminate` | gate terminated (graceful) | `reason` |
 | `annotate` | every well-formed `gate.annotate()` fact | `surface`, `verdict`, `where`, `meta` |
+| `annotate_dropped` | the annotation buffer (256 facts) evicted one: on the first eviction, then once per 256 more. Nothing else changes | `dropped` (cumulative for the gate's life; a drain does not reset it) |
 | `annotate_malformed` | a `gate.annotate()` fact that could not be read (see Axis B below). Nothing buffered; no decision changed | `reason` (`not-an-object` \| `array` \| `missing-surface` \| `unreadable`) |
 
 Every line carries: `ts`, `seq`, `run_id`, `parent_run_id`, `spawn_depth`. Use `parent_run_id` to reconstruct the family tree.
@@ -1000,7 +1005,7 @@ These are deliberately NOT in bareguard. Don't look for them — build them or u
 8. **Topup loop max 5 iterations.** If humanChannel returns topup but the new cap still halts, bareguard re-calls humanChannel up to 5 times before forcing a deny+halt with reason `"topup loop exceeded 5 iterations"`. Defensive guard against runaway humans.
 9. **Children inherit the audit file via env, not config.** Set `BAREGUARD_AUDIT_PATH` (and `BAREGUARD_BUDGET_FILE`, `BAREGUARD_PARENT_RUN_ID`, `BAREGUARD_SPAWN_DEPTH`) when spawning. The child's `new Gate({})` picks them up automatically.
 10. **`gate.terminate()` is sticky.** Once called, every subsequent `gate.check` returns deny+halt with `rule: "gate.terminated"`. Your runner's loop should exit cleanly on this rule.
-11. **Windows uses a lock fallback for audit.** `process.platform === "win32"` triggers `proper-lockfile` around audit appends. Slower than the POSIX `O_APPEND` fast path but correct.
+11. **Windows uses a lock fallback for audit.** `process.platform === "win32"` triggers `proper-lockfile` around audit appends. Slower than the POSIX `O_APPEND` fast path, and it has a concurrency limit: each emit retries the lock for about 1.5 s (10 retries, 20-200 ms apart), so with more than about 10 emitters in flight at once against one audit file, some `check()`/`record()`/`annotate()` calls throw "Lock file is already being held". Seen on Linux with the same lock options, not reproduced on a real Windows harness. On Windows, bound how many emits run at once per audit file, or give each high-concurrency gate its own audit file. POSIX takes no lock and is not affected.
 12. **`limits.maxTurns` counts every `gate.record` call, not "LLM rounds".** One LLM record + one tool record per round means 1 round = 2 turns. For a "tool-calling-rounds" budget use **`limits.maxToolRounds: N`** (v0.4.2) — sibling halt counter that ticks only on records where `action.type !== "llm"`. Name your LLM records `type: "llm"` to opt in.
 13. **bash / fs / net primitives accept either flat or nested action shape** (v0.4.1). `{type: "bash", cmd}` and `{type: "bash", args: {cmd | command}}` both work; same for fs (`path`) and net (`url`). Flat wins when both are set. Makes wireGate-style `{type, args, _ctx}` adapters compose without a translation layer.
 14. **`fs` is deny-by-default and symlink-resolved (0.19.0, BREAKING — see CHANGELOG).** `fs.readScope`/`fs.writeScope` are unset-or-`[]` = deny everything for that action kind; there is no more "unconfigured = no opinion" for `read`/`write`/`edit`. A folder listed only in `writeScope` is not readable (no crossover either direction) — list it in both to grant both. `fs.deny` is an optional extra layer *inside* whatever the scopes already allow; a malformed `fs.deny`/`readScope`/`writeScope` (bad shape or element) denies via the matching released `fs.<key>.invalid` rule. Entries accept absolute paths or `~`/`~/x` (expanded once via `os.homedir()` at construct); `~user`, relative, empty, and non-string entries throw at construct. Agent-supplied paths are NEVER canonicalized by the gate — missing (`action.path`/`action.args.path` both absent or `null`), non-string, empty, `~`-prefixed, or relative all deny outright via one rule, `fs.invalidPath` (the reason string says which); canonicalize before you pass a path in if your caller might send one relative to a cwd. Symlink/resolved-path checking is ON by default with **no opt-out**: `.`/`..` segments are collapsed AND every symlink on the walk (the checked path, and every scope/deny root, resolved fresh on every call) is followed via `realpath` — root-aware on Windows (a drive letter or UNC share terminates the walk, not just `/`) — a symlink *inside* an allowed scope that points outside it now denies (`<scope>.symlinkEscape`), a dangling symlink anywhere on the walk denies (`<scope>.danglingSymlink`), and a genuine symlink cycle denies (`<scope>.resolveError`, ELOOP). A brand-new file/dir that doesn't exist yet still checks cleanly (nearest-existing-ancestor + tail). Costs ~100–150µs/check for an existing target with one shallow (depth ~4) scope root, ~300–360µs at root depth ~13, ~550–650µs with 20 roots (measured, machine-dependent, N=5000, single-threaded Linux dev box; pre-0.19.2 it was ~75–150 / ~230–300 / ~75–100µs). Cost grows with scope roots × path depth: every check lstat-walks every component of every root in the relevant scope, uncached by design so a swap is caught. (Pre-0.19's lexical-only check was ~1–2µs; the ~75–80µs not-yet-created figure predates 0.19.2 and is unre-measured.) **Scope roots must not be symlinks (0.19.2, BREAKING security fix):** a `readScope`/`writeScope` entry that is a symlink, is dangling, or has a symlink in ANY path component throws at `Gate` construction (list the real resolved path — the error names it); every check re-verifies all roots of the relevant scope and denies `<scope>.symlinkRoot` (`fs.readScope.symlinkRoot` / `fs.writeScope.symlinkRoot`) if one has since become a symlink, including on a direct `fsCheck()` call. The re-verification is check-time only: a root swapped between an allowed `check()` and the harness's actual write is not caught — closing that window (e.g. `openat`/`O_NOFOLLOW`, or writing in a dir the agent can't modify) is the harness's job. Previously a symlinked root was realpath'd, silently moving the scope to the link's target. A scope entry that doesn't exist yet (no symlink above it) is unchanged. `fs.deny` roots are exempt (a moved deny root only narrows). **macOS:** `os.tmpdir()` (`/var`->`/private/var`), `/tmp` and `/etc` are symlinks — use `fs.realpathSync(...)` for scope roots.
@@ -1262,6 +1267,8 @@ gate.annotate({ verdict, where });            // reason "missing-surface" — `s
 gate.annotate(null);                          // reason "not-an-object"
 gate.annotate(hostileGetterObject);           // reason "unreadable"   — the read itself threw
 ```
+
+**Bounds (ruling #71).** The buffer holds at most **256** facts (internal, not exported). A push past it evicts the oldest `surface:false` fact, else the oldest overall, so a flood of honored facts cannot displace a `broke` one; every fact still gets its `annotate` audit line, and an `annotate_dropped` row (`dropped`, cumulative) is written on the first eviction and then once per 256 more. `meta` is capped at 1000 bytes **partially**: over the cap whole top-level keys are dropped, largest serialized first (ties by name), strings never cut, leaving the surviving keys plus `_truncated: true`, `bytes` (original size) and `_droppedKeys` (names; `_droppedKeysMore` counts any left off). `{ id, rid, agent, url: <5 KB> }` keeps `id`, `rid`, `agent`. The same rule runs again on the audit line after redaction, so those keys also stay on disk. A caller key named `_truncated`/`bytes`/`_droppedKeys`/`_droppedKeysMore` is removed when the bound fires (the markers win); an array `meta` or one where nothing fits becomes `{_truncated, bytes}`.
 
 Rejection changes no decision and never throws because of the fact you passed (an audit
 *write* failure — full disk, unwritable path — still propagates, like every other phase).

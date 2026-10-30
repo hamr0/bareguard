@@ -284,7 +284,9 @@ copy that could not read one of the action's fields), `[REDACTED:circular]`, and
 `[REDACTED:depth]` (v0.16), the `gate.annotate` fact contract (`surface` must be an explicit
 boolean — v0.13), the budget file format, and the `humanChannel` event/decision contract (incl.
 the `event.classification`/`event.tier` fields the classifier attaches). The `rwx.askUnheld`
-config key (ruling #70, §23.22) joins this surface when it ships in 0.29.0.
+config key (ruling #70, §23.22) joined this surface when it shipped in 0.29.0. Ruling #71 (§12.1) added,
+when it shipped in 0.30.0, the `annotate_dropped` audit phase (`dropped`), the `_droppedKeys`/
+`_droppedKeysMore` `meta` markers and the partial `meta` bound at both bound points.
 
 **Pending/future work index while holding** (so nothing lives only in chat): this section (1.0
 gate) · §19 future candidates above (Budget, Audit, tamper-evident — all demand-gated) ·
@@ -443,7 +445,7 @@ definitions (shared verbatim with rwxmap's D87), the `bareguard.rwx.json` file f
 absence, enforcement, bash matching, delegation/count-cap rules, the rwxmap alignment, the six
 2026-09-22 implementation decisions, the POC evidence, rejected alternatives, known limits, the
 1.0-surface status, the two open questions that remain, and the marker-carrying-entries +
-`rwx.askOn` extension settled with rwxmap's D103 (2026-09-24), and `rwx.askUnheld` (ruling #70, §23.22; unreleased, target 0.29.0) — is Part 1 §23
+`rwx.askOn` extension settled with rwxmap's D103 (2026-09-24), and `rwx.askUnheld` (ruling #70, §23.22; shipped in 0.29.0) — is Part 1 §23
 (`bareguard-prd.md`, §23.1-§23.22).
 
 ## §20 POC retrospective (what we built, why)

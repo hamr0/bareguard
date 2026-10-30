@@ -257,7 +257,7 @@ halt-vs-action distinction). (bareguard-prd.md:207-209)
 | 6  | **approval**         | n/a      | Routes ask events to the runner's `humanChannel` callback. No callback storage in v0.6. |
 | 7  | **tools**            | action   | Tool name allowlist / denylist (glob-matched) + per-tool `denyArgPatterns` (regex over args). Allowlist is **scope-only** — does NOT silence asks. **`action.tool` (v0.19)**, agreed with bare-agent: an optional identity separate from `action.type`. Allow-side lookups (allowlist, `denyArgPatterns`' key, the rwx tools-map row) use `action.tool ?? action.type`; deny-side checks (`denylist`, `denyArgPatterns`) match on EITHER key, so `tool` can only widen deny surface. An invalid `tool` (present, not a non-empty string) denies fail-closed; `tool: null` is treated as absent. |
 | 8  | **secrets**          | n/a      | Redaction of `action` / `result` / `reason` on every audit line at write time — eval runs on the *unredacted* action so matching is never weakened; redaction is non-mutating (the caller's object is untouched). Three layers: **key-aware** (BG-1, **default-on**) blanks a field by *name* → `[REDACTED:key=<name>]` (narrow default `apiKey`/`api_key`/`authorization` + value patterns `Bearer …`/`sk-…`; extend via `secrets.keys`, disable via `secrets.redactKeys:false`); **env-var** values → `[REDACTED:VAR_NAME]`; **pattern** matches → `[REDACTED:pattern=<short prefix>...]` (both opt-in via `secrets.envVars`/`secrets.patterns`, v0.4.5). `redact()` also exported for ad-hoc use. |
-| 9  | **audit**            | n/a      | Append-only JSONL of every gated decision. **One file per agent family** via POSIX `O_APPEND` atomicity (Windows uses lock fallback). Includes `parent_run_id` and `spawn_depth` for multi-agent stitching. |
+| 9  | **audit**            | n/a      | Append-only JSONL of every gated decision. **One file per agent family** via POSIX `O_APPEND` atomicity (Windows uses a lock fallback with a concurrency limit, see the audit section below). Includes `parent_run_id` and `spawn_depth` for multi-agent stitching. |
 | 10 | **defer-rate**       | action   | _(v0.2)_ Caps `defer()` calls per minute. Re-validates the deferred action's gate decision on emit AND on fire (defense in depth). |
 | 11 | **spawn-rate**       | action   | _(v0.2)_ Caps `spawn()` calls per minute and per parent's lifetime. Composed with `limits.maxChildren` and `limits.maxDepth`. |
 | 12 | **content**          | mixed    | Pattern-matches over `JSON.stringify(action)`. `denyPatterns` block (action). `askPatterns` escalate to human (action). Generic mechanism that catches dangerous *shapes* across all tools. **Safe defaults shipped (§11).** |
@@ -637,7 +637,7 @@ The audit log is bareguard's spine. **One file per agent family** — parent +
 children + grandchildren all `appendFile` the same path. POSIX `O_APPEND`
 guarantees atomicity for writes < `PIPE_BUF` (4KB on Linux/macOS); same
 mechanism nginx access logs use. Windows uses a `proper-lockfile` fallback
-(auto-detected via `process.platform`). (bareguard-prd.md:574-578)
+(auto-detected via `process.platform`). Each Windows emit retries the lock for about 1.5 s (`retries: 10`, 20-200 ms apart), so with more than about 10 emitters in flight at once against one audit file, some `check`/`record`/`annotate` calls throw "Lock file is already being held" (seen on Linux with the same options; not reproduced on a real Windows harness). On Windows, bound concurrent emits per audit file, or give each high-concurrency gate its own audit file. POSIX takes no lock and is unaffected. (bareguard-prd.md:574-578)
 
 **Format:** JSONL, one line per gated event, append-only.
 
@@ -673,6 +673,7 @@ Children inherit via env var `BAREGUARD_AUDIT_PATH` set by the parent. (bareguar
 | `topup` | runner / humanChannel raised a cap | `dimension`, `oldCap`, `newCap` |
 | `terminate` | gate terminated (graceful) | `reason` |
 | `annotate` | (v0.7) every well-formed `gate.annotate()` fact (Part 2 §8.2) | `surface`, `verdict`, `where`, `meta` |
+| `annotate_dropped` | (0.30.0, ruling #71) the annotation buffer evicted a fact: written on the first eviction, then once per 256 more (§12.1). Nothing else changes | `dropped` (cumulative evictions for the gate's life; a drain does not reset it) |
 | `annotate_malformed` | (v0.13) a `gate.annotate()` call whose fact could not be read — no `surface` boolean, or the read itself threw (Part 2 §8.2.1). Nothing buffered; no decision changed | `reason` (`not-an-object` \| `array` \| `missing-surface` \| `unreadable`) |
 
 (bareguard-prd.md:589-614)
@@ -732,6 +733,85 @@ objects onto `gate.audit.entries`; no fs writes, no PIPE_BUF truncation.
 `audit.readAll()` returns the in-memory entries. Intended for unit tests
 that want to assert on the audit stream without stubbing fs. Distinct
 from `audit.path: undefined` which falls through to env var / XDG default. (bareguard-prd.md:665-670)
+
+### 12.1 Annotation buffer cap and the partial `meta` bound (ruling #71)
+
+Ruling #71 (hamr, 2026-10-30; shape agreed with the barebox sandbox, the only live `gate.annotate`
+caller). Full text here; the number is registered in `rubric-prd.md` §12. Two bounds, no change to
+what `annotate` decides (it still decides nothing) and none to any gate decision.
+
+1. **Buffer cap.** The gate buffers at most **256** annotation facts. The number is internal and
+   NOT exported (no `ANNOTATION_LIMITS`: exporting it would make a future tightening breaking).
+   It applies to `surface: true` and `surface: false` alike. A push that would exceed it evicts
+   the OLDEST `surface: false` fact; if none is buffered, the oldest fact overall. (When the
+   buffer is full of `surface: true` facts and the incoming fact is the only `surface: false` one,
+   it is the one evicted.) A flood of honored facts therefore cannot displace a `broke` fact.
+   Sink 1 is unchanged: every well-formed fact still gets its `annotate` audit line, evicted or
+   not. `drainAnnotations()` and ride-the-next-ask return what remains in the buffer, as before.
+2. **`annotate_dropped` audit phase.** Written after the `annotate` line of the fact that caused
+   the eviction: on the first eviction, then once per further 256 (cumulative `dropped` 1, 257,
+   513, ...). Fields: `dropped`, the cumulative count of evictions for the gate's life (a drain
+   does not reset it). Not one line per eviction. An audit write failure propagates, like every
+   other phase; the eviction itself is a plain splice and cannot throw.
+3. **Partial `meta` bound, source.** `meta` is still capped at 1000 bytes serialized, but no longer
+   all-or-nothing. Over the cap, whole TOP-LEVEL keys are dropped, LARGEST serialized pair first
+   (ties: key name ascending, so the result is deterministic), until the surviving keys plus the
+   markers fit in 1000 bytes. Strings are never cut. Result: the surviving keys + `_truncated:
+   true` (stays a boolean) + `bytes` (the original size) + `_droppedKeys` (names; at most 16 and
+   about 250 bytes of them, each clipped to 64 chars + an ellipsis) + `_droppedKeysMore` (only when
+   names were left off the list: how many). An array `meta`, or one where nothing fits beside the
+   markers, ends as `{_truncated, bytes}`. Unserializable stays `{_unserializable: true}`. The
+   decoupled JSON-round-trip copy and `__proto__` stripping at every depth are unchanged.
+4. **Marker collision.** The markers win. When the bound fires, a caller key named `_truncated`,
+   `bytes`, `_droppedKeys` or `_droppedKeysMore` is removed before anything is measured and is
+   listed in `_droppedKeys`, so a caller cannot forge "not truncated". A `meta` under the cap is
+   the caller's own data and rides unchanged, such keys included.
+5. **Partial `meta` bound, audit line.** The re-bound after redaction used to replace `meta`
+   wholesale with `{_truncated, bytes}` once it passed 200 bytes. For `meta` it now applies the
+   same rule with the same 1000-byte cap (one shared helper, `src/primitives/bound-keys.js`):
+   redaction-expanded keys are dropped, short keys (`id`, `rid`, `agent`) stay on disk. The source
+   bound's `bytes` and `_droppedKeys` are carried forward and the new names appended. The 3500-byte
+   line cap and the later fallbacks are untouched, and nothing about `action`/`aid`/`rid`/`tool`
+   on `gate`/`record` lines changes (a long `url` in `action` still clips to 200 bytes).
+   The other wholesale fields (`keys`, `gaps`, `fault`, ...) keep `{_truncated, bytes}`.
+
+**SemVer surface (shipped in 0.30.0):** the `annotate_dropped` phase and its `dropped` field; the
+`_droppedKeys` and `_droppedKeysMore` meta markers and the partial `meta` bound (largest key first,
+markers win, `bytes` = original size) at both bound points. The cap value 256 is deliberately not
+on the surface.
+
+### 12.2 `haltContext()` reads the audit tail, not the whole file (ruling #72)
+
+Ruling #72 (2026-10-30; a barebox measurement: 3.68 GB read and a 776 MB heap peak on 16 MB of
+live data, 10 MB shared file, 20 agents, OOM at `--max-old-space-size=48`). A cost fix; **no
+contract change**: `haltContext()` and `event.context` return the same shape and, over an append-only audit file, exactly what they returned. A file that is replaced or rewritten is handled as below; one residual is stated.
+
+`haltContext()` ran on every ask/halt and did `audit.readAll()`, so asks over a run were O(n^2)
+and every gate sharing a file slowed the others. Now each gate keeps a small tally (byte offset
+consumed, summed cost and tokens, record count, last five `costUsd`, first and last `ts`) and
+reads only the bytes after its offset, in 64 KiB chunks, consuming complete lines only (split on
+byte 0x0A; a partial trailing line waits for the next call). Records written by other gates or
+processes on the same file are still counted: the total stays family-wide. Same expressions, same
+file-order float sums. Calls are serialized per gate, so parallel asks neither double-count nor
+re-read; a failed read leaves the tally as it was. File missing: empty. The tally also keeps the file's
+`dev`/`ino` (from the open handle, read as BigInt) and the WHOLE last complete line it consumed (from the byte after the
+previous newline, or from 0, through its own newline), stored as its byte length and a SHA-256, not as bytes. Before
+reading on, the scan reads that many bytes back ending at the offset, compares the hash, and requires a newline just
+before them (or the start of the file). Rescan from 0 when the file is shorter than the offset, has a different dev/ino
+(rename rotation, delete+recreate), or does not hold that line there (copytruncate or an in-place rewrite that regrew
+past it, including a reused inode number). If the platform reports ino 0 (some Windows filesystems) only size and the
+line check apply. Bounded: every line `emit` writes is at most MAX_LINE_BYTES + 1 (3501) bytes, including each
+fallback down to the bare `_dropped_core` marker, so the read-back is bounded; a longer line from a foreign writer is
+anchored by its last 4096 bytes only (no line-start check). Residual, not detected: a file rewritten in place (or
+recreated with a reused inode) that holds a byte-identical whole line ending at the old offset. Every audit line
+carries `ts` (ms), `seq` and `run_id` (a random UUID unless a stable `runId` is configured); lines written inside
+`check`/`record` (gate, halt, approval, topup, record, unpriced, budget_warn) also carry a random `aid`. Phases without
+`aid` (annotate*, rubric*, rwx.*, terminate, the direct topup) still carry `ts`+`seq`+`run_id`, so a false match needs the
+same run's same line at the same position (a replay or a hand-built file). A malformed complete line throws, as
+`readAll` does, and the offset does not pass it. Fileless mode tallies by index into
+`audit.entries`. The new reader is `AuditLog#scanFrom`, internal. Budget and limits state is NOT
+used for the audit-derived fields. `readAll` is unchanged; init and rubric rebuilds, and
+`countAuditWindow`, still read in full (once at construction or by window, not per ask).
 
 ## 13. Shared budget across processes
 
@@ -1655,7 +1735,7 @@ join the 1.0 SemVer surface (§23.17). Built on `main`'s `feat/rwx-add` branch a
 
 ### 23.22 `rwx.askUnheld`: ask instead of deny for a letter the agent does not hold (ruling #70)
 
-**RULED (hamr, 2026-10-29; requested by the barebox sandbox). Target 0.29.0, not yet released.**
+**RULED (hamr, 2026-10-29; requested by the barebox sandbox). Shipped in 0.29.0.**
 Today an action whose matched entry's letter is not in the agent's grant is a flat `rwx.denied`
 (§23.4, §23.20). barebox needs an opt-in to ask a human instead, for chosen letters only. New
 optional config key `rwx.askUnheld`: a list of distinct letters from `"r"`, `"w"`, `"x"`. Default
@@ -1687,6 +1767,6 @@ release.
 only ask is `askOn:"loose"` on a held letter, but only for letters the operator lists in
 `askUnheld`. Nothing is inferred: an unlisted letter keeps the deny.
 
-**SemVer surface (ships in 0.29.0):** the config key `rwx.askUnheld` and its validation messages,
+**SemVer surface (shipped in 0.29.0):** the config key `rwx.askUnheld` and its validation messages,
 and its use of the existing `rwx.ask` rule and the `rwxLetters`/`rwxLetter`/`rwxMarker` ask and
 audit fields.

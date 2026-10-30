@@ -3,9 +3,26 @@
 All notable changes to bareguard are documented here. Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [SemVer](https://semver.org/).
 
 
-## [Unreleased]
+## [0.30.0] - 2026-10-30
+
+### Added
+
+- **Annotation buffer cap and the `annotate_dropped` audit phase (ruling #71; a barebox ask).** `gate.annotate` now keeps at most 256 buffered facts (internal, not exported). A push past it evicts the oldest `surface:false` fact, or the oldest overall when none is buffered, so a flood of honored facts cannot displace a `broke` one. Every well-formed fact still gets its `annotate` audit line; `drainAnnotations()` and the ride-the-ask path return what remains. The new `annotate_dropped` phase (`dropped`, the gate's cumulative eviction count, not reset by a drain) is written on the first eviction and then once per 256. On the SemVer surface from 0.30.0: the phase and its `dropped` field.
+
+### Changed
+
+- **`meta` over 1000 bytes now loses whole top-level keys, largest first, instead of everything (ruling #71).** Ties break by key name. The result keeps the surviving keys and adds `_truncated: true`, `bytes` (the original size) and `_droppedKeys` (names, at most 16, each clipped; `_droppedKeysMore` counts any left off). Strings are never cut. An array `meta`, or one where nothing fits, still becomes `{_truncated, bytes}`. A caller key named like a marker is removed when the bound fires, so the markers cannot be forged. Previously an oversized `meta` became `{_truncated, bytes}` and took `id`/`field`/`stated` with it. On the SemVer surface from 0.30.0: `_droppedKeys`, `_droppedKeysMore` and the partial bound.
+- **The audit-line re-bound keeps `meta` keys too.** After redaction expands a line past 3500 bytes, a `meta` over 1000 bytes loses its largest keys by the same rule (one shared helper) instead of being replaced by `{_truncated, bytes}` once it passed 200 bytes, so `meta.id`/`rid`/`agent` stay on disk; the source bound's `bytes` and `_droppedKeys` are carried forward. The 3500-byte line cap, the later fallbacks, and how `action`/`aid` are bounded on `gate`/`record` lines are unchanged.
+
+### Fixed
+
+- **`haltContext()` (and so every ask/halt `event.context`) no longer re-reads the whole audit file (ruling #72; a barebox measurement).** Each gate keeps a small tally and reads only the bytes appended since its last call, in 64 KiB chunks, so a run's asks cost about one pass over the file instead of one pass per ask, and gates sharing a file no longer multiply each other's reads. Results are identical for an append-only audit file, including lines written by other gates or processes; concurrent asks share one scan. The tally remembers the file's device/inode and the whole last complete line it consumed (as its length and a SHA-256, not the bytes), and rescans from the start when the file is shorter than the offset, is gone, has a different device/inode (rotation by rename, or delete and recreate), or no longer holds that exact line, preceded by a newline, ending at the offset (copytruncate or an in-place rewrite that regrew past the offset, including a reused inode number). Lines the audit writes are bounded, so the check re-reads at most about 3.5 KB; a longer line from a foreign writer is anchored by its last 4096 bytes only. Where the platform reports no inode (0), only the size and the line check apply. Residual, not detected: a file rewritten in place (or recreated with a reused inode) whose line ending at the old offset is byte-identical to the one consumed - every audit line carries `ts` (ms), `seq` and `run_id`, and most carry a random `aid`, so this takes a replay of the same run's line at the same position, or a hand-built file. Fixes a wrong total, and a permanent SyntaxError on misaligned content, after a swap to a larger file. No change to the return shape.
 
 ### Documentation
+
+- `bareguard.context.md` gotcha #11 and `docs/product/bareguard-prd.md`: the Windows audit lock fallback is no longer described as simply "correct"; each emit retries the lock for about 1.5 s, so with more than about 10 emitters in flight against one audit file some `check()`/`record()`/`annotate()` calls throw "Lock file is already being held". Bound concurrent emits per audit file on Windows, or give each high-concurrency gate its own file. POSIX is unaffected. Docs only.
+
+- `bareguard.context.md` rwx section: with `rwx` set and no `content` key the content safe-defaults still run before rwx, so even `letters: "rwx"` gets `content.askPatterns` asks on `PUT`/`PATCH`/`DELETE` and `content.denyPatterns` denies; opt out with `content: { askPatterns: [], denyPatterns: [] }`.
 
 - `bareguard.context.md` gotcha #22 and a README fs note: a tool that walks a directory (grep/glob over a root) is gated as one action, so it must check each directory before descending and each file before reading with `gate.allows()` and prune/skip on `false`; otherwise it can read paths under `fs.deny`. `allows()` treats an ask as allowed (fs rules never ask). Docs only, no behaviour change.
 

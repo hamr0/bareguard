@@ -213,9 +213,10 @@ test("the source caps count CHARACTERS, not bytes (300 CJK chars = 900 bytes)", 
 });
 
 // The SECOND bound, and the one a judge author gets burned by: redaction EXPANDS
-// fields, so an in-budget meta can still be replaced wholesale in the persisted
-// row. Sizing to the source cap does NOT guarantee field/stated/returned survive.
-test("the audit sink re-bounds AFTER redaction: a LEGAL meta is still replaced in the row", async () => {
+// fields, so an in-budget meta can still LOSE KEYS in the persisted row (ruling #71:
+// the bulky expanded key goes, the short mechanical keys stay). Sizing to the source
+// cap does NOT guarantee every key survives.
+test("the audit sink re-bounds AFTER redaction: a LEGAL meta loses its expanded key in the row", async () => {
   const dir = await makeTmpDir();
   try {
     const { auditPath } = uniquePaths(dir);
@@ -226,8 +227,10 @@ test("the audit sink re-bounds AFTER redaction: a LEGAL meta is still replaced i
     await gate.annotate({ surface: true, verdict: "broke", where: "a".repeat(250), meta });
     const raw = await readFile(auditPath, "utf8");
     const row = raw.split("\n").filter(Boolean).map((l) => JSON.parse(l)).find((l) => l.phase === "annotate");
-    assert.equal(row.meta._truncated, true, "a source-legal meta is replaced in the persisted row");
-    assert.equal(row.meta.field, undefined, "the mechanical fields do not survive the audit bound");
+    assert.equal(row.meta._truncated, true, "a source-legal meta is bounded in the persisted row");
+    assert.equal(row.meta.field, "price", "the short mechanical fields survive the audit bound (ruling #71)");
+    assert.equal(row.meta.note, undefined, "the expanded key is what went");
+    assert.deepEqual(row.meta._droppedKeys, ["note"]);
     assert.ok(row.where.endsWith("[TRUNCATED]"), "the AUDIT clip DOES carry a marker (unlike the source clip)");
     assert.equal(row._truncated, true, "and flags the row");
     assert.ok(Buffer.byteLength(JSON.stringify(row), "utf8") < 3500, "still atomic");
@@ -250,10 +253,10 @@ test("an unserializable meta becomes {_unserializable}, a DIFFERENT marker", asy
   assert.equal(meta.field, undefined, "same total loss of the mechanical fields");
 });
 
-// `meta` is ALL-OR-NOTHING: over the cap the WHOLE object is replaced, so bulky
-// evidence takes field/stated/returned down with it. This is the clause BA-20's
-// judge contract depends on; the boundary is asserted from both sides.
-test("meta over the cap loses EVERY key, not just the bulky one", async () => {
+// `meta` is bounded PARTIALLY (ruling #71): over the cap whole top-level keys are
+// dropped, largest first, so bulky evidence no longer takes field/stated/returned
+// down with it. The boundary is asserted from both sides.
+test("meta over the cap loses the BULKY key, not every key", async () => {
   const gate = new Gate({ audit: { path: null } });
   await gate.init();
   await gate.annotate({
@@ -261,13 +264,15 @@ test("meta over the cap loses EVERY key, not just the bulky one", async () => {
     meta: { field: "price", stated: 300, returned: 400, evidence: "x".repeat(1200) },
   });
   const fact = gate.drainAnnotations()[0];
-  assert.equal(fact.meta._truncated, true, "replaced by a marker (loud, unlike where)");
-  assert.equal(fact.meta.field, undefined, "the mechanical fields are collateral damage");
-  assert.equal(fact.meta.stated, undefined);
-  assert.equal(fact.meta.returned, undefined);
+  assert.equal(fact.meta._truncated, true, "marked (loud, unlike where)");
+  assert.equal(fact.meta.field, "price", "the mechanical fields survive");
+  assert.equal(fact.meta.stated, 300);
+  assert.equal(fact.meta.returned, 400);
+  assert.equal(fact.meta.evidence, undefined);
+  assert.deepEqual(fact.meta._droppedKeys, ["evidence"]);
 });
 
-test("the meta cap boundary: at 1000 bytes it survives, one byte over loses everything", async () => {
+test("the meta cap boundary: at 1000 bytes it survives, one byte over drops the only (bulky) key", async () => {
   const gate = new Gate({ audit: { path: null } });
   await gate.init();
   const sized = (bytes) => {
@@ -279,7 +284,8 @@ test("the meta cap boundary: at 1000 bytes it survives, one byte over loses ever
   await gate.annotate({ surface: true, meta: sized(1001) });
   const [at, over] = gate.drainAnnotations();
   assert.equal(at.meta._truncated, undefined, "exactly at the cap rides intact");
-  assert.equal(over.meta._truncated, true, "one byte over is replaced wholesale");
+  assert.equal(over.meta._truncated, true, "one byte over drops its single key (markers only)");
+  assert.equal(over.meta.e, undefined);
 });
 
 // ── The malformed contract (§6.7) ───────────────────────────────────────────

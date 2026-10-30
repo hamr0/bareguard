@@ -18,6 +18,7 @@ import { assertRwxConfig, rwxCheck, matchRwxLetter, resolveAgentLetters, clampLe
 import { looseIdentity } from "./primitives/tool-identity.js";
 import { isPlainObject } from "./primitives/plain-object.js";
 import { clipKey } from "./primitives/clip-key.js";
+import { dropKeysToFit, META_BYTE_CAP } from "./primitives/bound-keys.js";
 import { assertArrayElementTypes, findInvalidIndex, findBlankStringIndex } from "./primitives/config-validate.js";
 import { contentDenyCheck, contentAskCheck } from "./primitives/content.js";
 import { flagsDenyCheck, flagsAskCheck } from "./primitives/flags.js";
@@ -296,9 +297,22 @@ function readAnnotation(fact) {
 }
 
 /**
+ * The annotation buffer's fixed capacity (ruling #71). Deliberately NOT exported:
+ * a published cap would make a future tightening a breaking change.
+ * @type {number}
+ */
+const ANNOTATION_BUFFER_CAP = 256;
+
+/**
  * Bound an annotation `meta` object so an annotate audit line can't exceed the
- * audit's atomic-append cap. Non-objects → null; oversized / unserializable →
- * a small marker that replaces it everywhere downstream (buffer / event / drain).
+ * audit's atomic-append cap. Non-objects → null; unserializable → a small marker.
+ * Over {@link META_BYTE_CAP} (1000 bytes) a plain object loses whole TOP-LEVEL
+ * keys, largest serialized first, until the survivors plus the markers fit
+ * (ruling #71, {@link dropKeysToFit}): the result is the surviving keys +
+ * `_truncated: true` + `bytes` (the original size) + `_droppedKeys` (names).
+ * Strings are never cut. An array `meta`, or one where nothing fits, ends as
+ * `{_truncated, bytes}` alone. A caller key named like a marker is removed first,
+ * so a caller can never forge a "not truncated" result.
  * Under the cap the fact carries a DECOUPLED COPY, not the caller's object — the
  * caller keeps their original and can mutate it freely without moving the bound.
  * @param {*} meta
@@ -309,7 +323,6 @@ function boundMeta(meta) {
   try {
     const json = JSON.stringify(meta);
     const bytes = Buffer.byteLength(json, "utf8");
-    if (bytes > 1000) return { _truncated: true, bytes };
     // DECOUPLE from the caller's object. Returning `meta` itself made the cap
     // undoable: a judge that kept appending evidence to the object it had already
     // handed over grew the drained/event fact past 1000 bytes AFTER the bound ran,
@@ -325,7 +338,9 @@ function boundMeta(meta) {
     const copy = JSON.parse(json, (k, v) => (k === "__proto__" ? undefined : v));
     // A `meta` whose toJSON yields a scalar (e.g. a bare Date) cannot be carried
     // structurally at all; that is the existing total-loss marker, not a new one.
-    return copy !== null && typeof copy === "object" ? copy : { _unserializable: true };
+    if (copy === null || typeof copy !== "object") return { _unserializable: true };
+    // The key drop works on the decoupled copy and reports the ORIGINAL size.
+    return bytes > META_BYTE_CAP ? dropKeysToFit(copy, META_BYTE_CAP, { bytes }) : copy;
   } catch {
     return { _unserializable: true };
   }
@@ -698,6 +713,8 @@ export class Gate {
     // Axis B (§6.6/§8.2): buffered return-time-judge facts awaiting a human ask
     // to ride / an agent-feedback drain. Empty unless the caller calls annotate().
     this._annotations = [];
+    // Cumulative evictions from the bounded buffer (see annotate); never reset by a drain.
+    this._annotationsDropped = 0;
     // §23.21 decision 5: bumped once per successfully-landed `add()` batch.
     // `check()` snapshots this before awaiting a human decision and, if it
     // changed by the time a human "allow" is about to be returned, re-checks
@@ -1480,11 +1497,30 @@ export class Gate {
     }
     const norm = read.norm;
     this._annotations.push(norm);
+    // Bounded buffer (ruling #71): a push past the cap evicts the OLDEST surface:false
+    // fact (a plain "honored" record), or the oldest overall when every buffered fact
+    // surfaces - so a flood of honored facts can never displace a `broke` one. If the
+    // incoming fact is the only surface:false one it is the one evicted. Pure splice:
+    // cannot throw, cannot change a decision.
+    let evicted = false;
+    let droppedN = 0;
+    if (this._annotations.length > ANNOTATION_BUFFER_CAP) {
+      const at = this._annotations.findIndex((a) => a.surface === false);
+      this._annotations.splice(at < 0 ? 0 : at, 1);
+      // Captured synchronously: the awaits below must not see a concurrent annotate's bump.
+      droppedN = ++this._annotationsDropped;
+      evicted = true;
+    }
     // Sink 1: the fact is recorded even if no ask ever rides it.
     await this.audit.emit({
       phase: "annotate", action: null,
       surface: norm.surface, verdict: norm.verdict, where: norm.where, meta: norm.meta,
     });
+    // Loud but not per-eviction: the first eviction, then once per further 256. `dropped`
+    // is cumulative for the gate's life (drainAnnotations does not reset it).
+    if (evicted && (droppedN - 1) % ANNOTATION_BUFFER_CAP === 0) {
+      await this.audit.emit({ phase: "annotate_dropped", action: null, dropped: droppedN });
+    }
   }
 
   /**
@@ -2155,31 +2191,64 @@ export class Gate {
   }
 
   /**
-   * Build the spend/turns/spend-rate context summary attached to ask/halt events.
+   * Build the spend/turns/spend-rate context summary attached to ask/halt events. Cost: an incremental tally reads only audit bytes appended since the last call (ruling #72).
    * @returns {Promise<import("./types.js").HaltContext>}
    */
   async haltContext() {
     if (!this._initialized) await this.init();
-    const lines = await this.audit.readAll();
-    const records = lines.filter(l => l.phase === "record");
-    const totUsd = records.reduce((a, r) => a + (r.result?.costUsd ?? 0), 0);
-    const totTok = records.reduce((a, r) => a + (r.result?.tokens ?? 0), 0);
-    const last5 = records.slice(-5).map(r => r.result?.costUsd ?? 0);
+    // Incremental (ruling #72): one tally per gate, advanced by reading only the
+    // bytes appended since the last call (any writer's — the total is family-wide).
+    // Calls are serialized so parallel asks never double-count; a throw leaves
+    // the committed tally untouched.
+    const run = (this._haltTallyChain ??= Promise.resolve()).then(() => this._advanceHaltTally());
+    this._haltTallyChain = run.catch(() => {});
+    const t = await run;
+    const earliestTs = t.firstTs ? Date.parse(t.firstTs) : null;
+    const latestTs = t.lastTs ? Date.parse(t.lastTs) : null;
+    const last5 = t.last5.slice();
     const avg = arr => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
-    const earliestTs = lines[0]?.ts ? Date.parse(lines[0].ts) : null;
-    const latestTs = lines.at(-1)?.ts ? Date.parse(lines.at(-1).ts) : null;
     return {
-      spent:    { costUsd: totUsd, tokens: totTok },
+      spent:    { costUsd: t.totUsd, tokens: t.totTok },
       cap:      { costUsd: this.budget.capUsd, tokens: this.budget.capTokens },
       turns:    this.limits.turns,
       maxTurns: this.limits.maxTurns,
       timeElapsedMs: (earliestTs && latestTs) ? (latestTs - earliestTs) : 0,
       spendRate: {
-        avgPerTurn: records.length ? totUsd / records.length : 0,
+        avgPerTurn: t.records ? t.totUsd / t.records : 0,
         last5Avg:   avg(last5),
         last5,
       },
     };
+  }
+
+  /** @private Consume newly appended audit lines into the committed tally. */
+  async _advanceHaltTally() {
+    const fresh = () => ({ offset: 0, totUsd: 0, totTok: 0, records: 0, last5: [], lines: 0, firstTs: undefined, lastTs: undefined, anchor: undefined });
+    const base = this._haltTally ?? fresh();
+    const attempt = async (from) => {
+      const t = { ...from, last5: from.last5.slice() };
+      const res = await this.audit.scanFrom(t.offset, t.anchor, (l) => {
+        if (l.phase === "record") {
+          t.totUsd = t.totUsd + (l.result?.costUsd ?? 0);
+          t.totTok = t.totTok + (l.result?.tokens ?? 0);
+          t.records++;
+          t.last5.push(l.result?.costUsd ?? 0);
+          if (t.last5.length > 5) t.last5.shift();
+        }
+        if (t.lines === 0) t.firstTs = l?.ts;
+        t.lastTs = l?.ts;
+        t.lines++;
+      });
+      if ("truncated" in res) return null;
+      t.offset = res.end;
+      t.anchor = res.anchor;
+      return t;
+    };
+    let t = await attempt(base);
+    if (t === null) t = await attempt(fresh()); // file shrank / rotated: rescan from 0
+    if (t === null) t = fresh();                 // gone again mid-rescan: empty
+    this._haltTally = t;
+    return t;
   }
 
   // Generic resource halts carry rule `budget.resource.<name>` (OQ3); map them
