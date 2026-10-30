@@ -775,7 +775,7 @@ what `annotate` decides (it still decides nothing) and none to any gate decision
    on `gate`/`record` lines changes (a long `url` in `action` still clips to 200 bytes).
    The other wholesale fields (`keys`, `gaps`, `fault`, ...) keep `{_truncated, bytes}`.
 
-**SemVer surface (ships in 0.30.0):** the `annotate_dropped` phase and its `dropped` field; the
+**SemVer surface (shipped in 0.30.0):** the `annotate_dropped` phase and its `dropped` field; the
 `_droppedKeys` and `_droppedKeysMore` meta markers and the partial `meta` bound (largest key first,
 markers win, `bytes` = original size) at both bound points. The cap value 256 is deliberately not
 on the surface.
@@ -1735,7 +1735,7 @@ join the 1.0 SemVer surface (§23.17). Built on `main`'s `feat/rwx-add` branch a
 
 ### 23.22 `rwx.askUnheld`: ask instead of deny for a letter the agent does not hold (ruling #70)
 
-**RULED (hamr, 2026-10-29; requested by the barebox sandbox). Target 0.29.0, not yet released.**
+**RULED (hamr, 2026-10-29; requested by the barebox sandbox). Shipped in 0.29.0.**
 Today an action whose matched entry's letter is not in the agent's grant is a flat `rwx.denied`
 (§23.4, §23.20). barebox needs an opt-in to ask a human instead, for chosen letters only. New
 optional config key `rwx.askUnheld`: a list of distinct letters from `"r"`, `"w"`, `"x"`. Default
@@ -1767,6 +1767,6 @@ release.
 only ask is `askOn:"loose"` on a held letter, but only for letters the operator lists in
 `askUnheld`. Nothing is inferred: an unlisted letter keeps the deny.
 
-**SemVer surface (ships in 0.29.0):** the config key `rwx.askUnheld` and its validation messages,
+**SemVer surface (shipped in 0.29.0):** the config key `rwx.askUnheld` and its validation messages,
 and its use of the existing `rwx.ask` rule and the `rwxLetters`/`rwxLetter`/`rwxMarker` ask and
 audit fields.
