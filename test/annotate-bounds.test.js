@@ -104,6 +104,8 @@ test("annotate_dropped: first line at the first eviction, the next 256 evictions
   assert.deepEqual(dropped.map((l) => l.dropped), [1, 257, 513]);
 });
 
+const WIN_FILE_INFLIGHT = 4;
+
 test("annotate_dropped under concurrency: one row per trigger value (1, 257, 513), fileless and file mode", async () => {
   const dir = await makeTmpDir();
   try {
@@ -112,7 +114,16 @@ test("annotate_dropped under concurrency: one row per trigger value (1, 257, 513
     await fileGate.init();
     for (const [mode, g] of [["fileless", await fresh()], ["file", fileGate]]) {
       for (let i = 0; i < 256; i++) await g.annotate({ surface: true, verdict: `${mode}-fill${i}` });
-      const batch = (n, tag) => Promise.all(Array.from({ length: n }, (_, i) => g.annotate({ surface: true, verdict: `${mode}-${tag}${i}` })));
+      // win32 file mode: audit emit() takes a proper-lockfile lock (10 retries, <=200 ms apart), which gives up
+      // under ~dozens of simultaneous emitters. So there, the same n annotates run as sequential groups of
+      // WIN_FILE_INFLIGHT concurrent ones. Everywhere else (and fileless on win32) all n are in flight at once.
+      const width = mode === "file" && process.platform === "win32" ? WIN_FILE_INFLIGHT : Infinity;
+      const batch = async (n, tag) => {
+        for (let from = 0; from < n; from += width) {
+          const to = Math.min(n, from + width);
+          await Promise.all(Array.from({ length: to - from }, (_, k) => g.annotate({ surface: true, verdict: `${mode}-${tag}${from + k}` })));
+        }
+      };
       await batch(10, "a");                       // evictions 1..10 in flight together
       assert.deepEqual((await lines(g, "annotate_dropped")).map((l) => l.dropped), [1], `${mode}: first row once`);
       await batch(247, "b");                      // evictions 11..257

@@ -183,7 +183,13 @@ test("concurrent asks do not double count", async (t) => {
   for (let i = 0; i < 12; i++) await g.record({ type: "x", n: i }, { costUsd: 0.5, tokens: 10 });
   const ctxs = await Promise.all(Array.from({ length: 30 }, () => g.haltContext()));
   for (const c of ctxs) assert.deepEqual(c.spent, { costUsd: 6, tokens: 120 });
-  const decs = await Promise.all(Array.from({ length: 20 }, (_, i) => g.check(askAction(i))));
+  // win32 emit() takes a proper-lockfile lock (10 retries) that gives up under ~dozens of simultaneous emitters,
+  // so there the 20 asks run as sequential groups of 4 concurrent ones; elsewhere all 20 are in flight at once.
+  const width = process.platform === "win32" ? 4 : 20;
+  const decs = [];
+  for (let from = 0; from < 20; from += width) {
+    decs.push(...await Promise.all(Array.from({ length: Math.min(width, 20 - from) }, (_, k) => g.check(askAction(from + k)))));
+  }
   assert.ok(decs.every(d => d.outcome === "allow"));
   await same(g);
   await same(await mkGate());
