@@ -129,7 +129,7 @@ Three roles:
 | Kind | Rule | Checks |
 |---|---|---|
 | Always on | `happened` | The output exists: non-empty text, or an object with a key. |
-| Size | `nonEmpty`, `maxWords`/`minWords`, `maxLines` | Field has content; word count or line count within a bound. |
+| Size | `nonEmpty`, `maxWords`/`minWords`, `maxLines`, `listItems` | Field has content; word count or line count within a bound; exactly N outer list items. |
 | Shape | `sections`, `sectionOrder`, `sectionWords`, `allowedKeys` | Headings present and in order; words per section; no unlisted object keys. |
 | Words | `mustCarry`, `carriesAny`, `blockLines`, `in`/`notIn`, `atMost` | All phrases carried; at least one phrase on word edges; per-block phrases; value in or out of a list; rank cap. |
 | Numbers | `max`/`min` | A number field is at most, or at least, a bound. |

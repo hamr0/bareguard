@@ -93,6 +93,7 @@ end -> human ACCEPT
 - `nonEmpty`: field has content.
 - `maxWords` / `minWords`: word count bound.
 - `maxLines`: non-empty line count bound.
+- `listItems`: the field holds exactly `value` outer list items (RULED #73).
 - `sections`: each named heading is present. `sectionOrder`: headings present and in order.
 - `sectionWords`: each listed section's own word count is within +-20% of `wordsPerSection` (ported from fwdloop, RULED 2026-10-08 #25).
 - `allowedKeys`: an object output has no own key outside a signed list (ported from fwdloop, RULED 2026-10-08 #26).
@@ -223,6 +224,7 @@ keys.
 | `nonEmpty` | `field` | non-empty string / array / object with >=1 own key |
 | `maxWords` / `minWords` | `field`, `value`, `strict?` | word count <= / >= value |
 | `maxLines` | `field`, `value` | non-empty line count <= value |
+| `listItems` | `field`, `value` | exactly `value` outer list items (RULED #73) |
 | `sections` | `field`, `names:[...]`, `strict?` | every name matches some heading line |
 | `sectionOrder` | `field`, `names:[...]`, `strict?` | every name matches a heading line, in that order |
 | `sectionWords` | `field`, `names:[...]`, `wordsPerSection` | each found section's words are within `[ceil(N*0.8), floor(N*1.2)]` inclusive (no `strict`) |
@@ -286,6 +288,9 @@ keys.
   "text"` (several allowed keys: `"text", "note"` in the three places). Each key is `JSON.stringify`-escaped
   (`"a\"b\nc"`); when `itemsTotal` exceeds the keys shown, ` and N more` follows the key list. A `sectionWords`
   cut at 20 gaps puts ` and N more` (`itemsTotal` minus the sentences shown) on the last section sentence. Typed gaps unchanged.
+- **`listItems`** (RULED #73): green when the field holds exactly `value` outer list items (no `strict`). Item lines, outer
+  indent and the mixed tab/space caveat are in ruling #73 (§12). Red `under` (`at-least`) / `over` (`at-most`) with `measured`
+  and `limit`; a missing, unreadable or non-string field carries `limit` only, no `direction`. Cost: one linear pass.
 - **`mustCarry`**: every phrase in `phrases` is a case-insensitive substring of the field; a red
   gap lists the missing phrases (bounded).
 - **`carriesAny`** (RULED #69): green when at least ONE phrase in `phrases` appears in the field on word edges (the
@@ -326,7 +331,7 @@ and line rules, `size`, `reads`, `maxReds`) are integers >= 1 with no maximum; s
 non-empty strings; a whitespace-only string is refused.
 
 **Gap fields** (§7): every gap for an ordered rule (`maxWords`, `minWords`, `maxLines`, `max`,
-`min`, `atMost`) carries `direction`: `"at-most"` or `"at-least"`. `notWorse` carries its signed
+`min`, `atMost`) carries `direction`: `"at-most"` or `"at-least"`. `listItems` (#73) is an exact count: its `under`/`over` gaps carry the matching direction, its `missing`/`unreadable`/`wrong-type` gaps carry `limit` only. `notWorse` carries its signed
 `direction`.
 
 **`cited`: zero claims is RED** (RULED 2026-10-08 #13). A non-empty output whose `claims` list is
@@ -2051,3 +2056,7 @@ Status of #30-#47: kept as history. Live and shared with `cited`: #32 (exactly o
 
 71. RULED (hamr, 2026-10-30; shape agreed with barebox): the annotation buffer is capped and `meta` is bounded PARTIALLY. Full text in [bareguard-prd.md](bareguard-prd.md) §12.1 (pointer only; the counter lives here). (1) The gate buffers at most 256 facts (internal, not exported); a push past it evicts the oldest `surface:false` fact, else the oldest overall; every fact still gets its `annotate` audit line. (2) New audit phase `annotate_dropped` with a cumulative `dropped` count, written on the first eviction and then once per 256. (3) Over 1000 bytes, `meta` loses whole top-level keys, largest first (ties by name), keeping the rest plus `_truncated: true`, `bytes` and `_droppedKeys`, at the source bound and again at the audit-line bound after redaction; the markers win over a caller key of the same name. Shipped in 0.30.0. **SemVer surface (shipped in 0.30.0):** `annotate_dropped` and `dropped`, `_droppedKeys`/`_droppedKeysMore`, and the partial `meta` bound.
 72. RULED (2026-10-30; a barebox measurement): `haltContext()` stops re-reading the whole audit file on every ask and keeps an incremental per-gate tally over the appended bytes (other writers' lines still counted). A cost fix with no contract change and no SemVer-surface change. Full text in [bareguard-prd.md](bareguard-prd.md) §12.2.
+
+**2026-11-03 (fwdloop ask; RULED; built on feat/list-items, not released)**
+
+73. RULED (hamr, 2026-11-03; requested by fwdloop; spec settled with fwdloop): `listItems`, an EXACT outer-list-item count. `{ id, rule: "listItems", field, value }`, `field` as `maxLines` (FIELD), `value` a COUNT (integer >= 1); NO `strict`. (1) ITEM LINE: split the field with the shared line splitter, trim each line at both ends; it is an item when it starts with `-`, `*`, `+` or `•` (U+2022), then one or more spaces or tabs, then non-empty text; OR with ASCII digits, then `.` or `)`, then one or more spaces or tabs, then non-empty text (the same ordered shape `stripListMarker` accepts, reused). Not items: plain lines, `**bold**`, `---`, `***`, `-x`, a lone `-`, `1.5 x`, `1.Work`, `2024 results`, `1.`, `a) X`. Bullet and number marks are treated alike. (2) OUTER: indent = `line.length - line.trimStart().length` (space, tab and NBSP each count 1; tabs are NOT expanded); outer items are the item lines whose indent equals the SMALLEST indent among all item lines; a non-item line never affects that indent. measured = number of outer items (0 items = 0). MIXED TAB/SPACE CAVEAT: indents compare by character count, so `"\t- a\n  - b"` is 1 (tab = 1 < 2 spaces); deterministic, not a nesting reader. (3) VERDICT: green when measured equals `value`; `measured < value` = red `under` `{measured, limit: value, direction: "at-least"}`; `measured > value` = red `over` `{measured, limit: value, direction: "at-most"}`. A missing, unreadable or non-string field is `missing` / `unreadable` / `wrong-type` with `limit` only and NO `direction` (an exact count is neither bound). (4) COST: one pass, each line trimmed once and its start examined at fixed length; no regex on the text, no rescan: linear in the field length. No cap. (5) LIMITS (documented, not changed): it reads lines, not markdown, so a marker line inside a ``` fence counts as an item and a block-quote line (`> - a`) is not one; `value` is an integer >= 1, so "exactly 0 items" cannot be signed (`createRubric` throws); only a space or tab after the mark counts, so a no-break space (U+00A0) after it is not an item; the shared line splitter breaks on `\n` and `\r\n` only, so a lone `\r` is not a line break. A new rule leaves every existing `rubricSha` unchanged. Built, not released.

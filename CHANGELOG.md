@@ -3,6 +3,12 @@
 All notable changes to bareguard are documented here. Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [SemVer](https://semver.org/).
 
 
+## [0.31.0] - 2026-11-03
+
+### Added
+
+- **`listItems`, an exact outer-list-item count (ruling #73; a fwdloop ask).** `{ id, rule: "listItems", field, value }` is green when the field holds exactly `value` outer list items. An item line (after trimming both ends) starts with `-`, `*`, `+` or `•` then a space or tab then text, or with digits then `.` or `)` then a space or tab then text. Outer = the item lines at the smallest indent among all item lines (leading characters `trimStart` removes; tabs not expanded, so mixed tab/space indents compare by character count). Red is `under` (`direction: "at-least"`) or `over` (`direction: "at-most"`) with `measured` and `limit`; a missing, unreadable or non-string field gives `limit` only, no `direction`. No `strict`. One linear pass; every existing `rubricSha` is unchanged. Limits: it reads lines, not markdown, so marker lines inside a ``` fence count and `> - a` block-quote lines do not; `value` is an integer >= 1 ("exactly 0" cannot be signed; `createRubric` refuses it); a no-break space after the mark is not an item (only a space or tab may follow); lines break on `\n` and `\r\n` only, so a lone `\r` joins lines. On the SemVer surface from 0.31.0: the rule name and its fields.
+
 ## [0.30.0] - 2026-10-30
 
 ### Added
