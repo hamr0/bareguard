@@ -404,6 +404,41 @@ function stripListMarker(s) {
   return s.slice(i);
 }
 
+/**
+ * Is ONE line, trimmed at both ends, a list item (RULED #73)? A bullet ('-', '*', '+' or U+2022), then at least one
+ * space/tab, then non-empty text; or an ordered marker `stripListMarker` accepts. The ordered shape is
+ * `stripListMarker`'s own (no second reader). Constant work per line.
+ */
+function isListItem(s) {
+  if (s.length < 3) return false;
+  const c = s.charCodeAt(0);
+  if (c === 45 || c === 42 || c === 43 || c === 0x2022) {
+    const w = s.charCodeAt(1);
+    return w === 32 || w === 9; // `s` is trimmed at both ends, so text follows the blank run
+  }
+  return stripListMarker(s) !== s;
+}
+
+/**
+ * Outer list items (RULED #73): the item lines whose indent (`length - trimStart().length`, tabs not expanded)
+ * equals the smallest indent among all item lines. Non-item lines never set that indent. One pass over the lines,
+ * no regex on the text, no per-line rescan.
+ */
+function countOuterListItems(text) {
+  let min = Infinity;
+  let n = 0;
+  for (const line of splitLines(text)) {
+    const lead = line.trimStart();
+    if (!isListItem(lead.trimEnd())) continue;
+    const indent = line.length - lead.length;
+    if (indent < min) {
+      min = indent;
+      n = 1;
+    } else if (indent === min) n++;
+  }
+  return n;
+}
+
 /** Forgiving heading line (PRD §4.1): '#'-run, trailing ':' stripped, trimmed, lowercased. "" = not a heading. */
 function forgivingHeading(line) {
   let s = stripLeadingHashes(line).trimEnd();
@@ -750,6 +785,15 @@ function runCountRule(measure, dir, over) {
     const n = measure(t.text, c.strict === true);
     return over(n, c.value) ? red(dir === "at-most" ? "over" : "under", { measured: n, limit: c.value, direction: dir }) : OK;
   };
+}
+
+/** `listItems` (RULED #73): EXACTLY `value` outer list items. The missing-field gap carries `limit` only (neither direction is honest for an exact count). */
+function runListItems(ctx, c) {
+  const t = textField(ctx, c.field, { limit: c.value });
+  if (t.gap) return t;
+  const n = countOuterListItems(t.text);
+  if (n === c.value) return OK;
+  return n < c.value ? red("under", { measured: n, limit: c.value, direction: "at-least" }) : red("over", { measured: n, limit: c.value, direction: "at-most" });
 }
 
 function runNonEmpty(ctx, c) {
@@ -1237,6 +1281,7 @@ const RULES = {
   maxWords: { fields: { field: FIELD, value: COUNT, strict: STRICT }, run: runCountRule((t, strict) => countWords(t, strict), "at-most", (n, v) => n > v) },
   minWords: { fields: { field: FIELD, value: COUNT, strict: STRICT }, run: runCountRule((t) => countWords(t, false), "at-least", (n, v) => n < v) },
   maxLines: { fields: { field: FIELD, value: COUNT }, run: runCountRule(countNonEmptyLines, "at-most", (n, v) => n > v) },
+  listItems: { fields: { field: FIELD, value: COUNT }, run: runListItems },
   sections: { fields: { field: FIELD, names: LIST, strict: STRICT }, run: runSections },
   sectionOrder: { fields: { field: FIELD, names: LIST, strict: STRICT }, run: runSectionOrder },
   sectionWords: { fields: { field: FIELD, names: LIST, wordsPerSection: COUNT }, run: runSectionWords },

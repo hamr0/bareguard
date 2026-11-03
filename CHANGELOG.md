@@ -3,6 +3,12 @@
 All notable changes to bareguard are documented here. Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [SemVer](https://semver.org/).
 
 
+## [Unreleased]
+
+### Added
+
+- **`listItems`, an exact outer-list-item count (ruling #73; a fwdloop ask).** `{ id, rule: "listItems", field, value }` is green when the field holds exactly `value` outer list items. An item line (after trimming both ends) starts with `-`, `*`, `+` or `•` then a space or tab then text, or with digits then `.` or `)` then a space or tab then text. Outer = the item lines at the smallest indent among all item lines (leading characters `trimStart` removes; tabs not expanded, so mixed tab/space indents compare by character count). Red is `under` (`direction: "at-least"`) or `over` (`direction: "at-most"`) with `measured` and `limit`; a missing, unreadable or non-string field gives `limit` only, no `direction`. No `strict`. One linear pass; every existing `rubricSha` is unchanged.
+
 ## [0.30.0] - 2026-10-30
 
 ### Added

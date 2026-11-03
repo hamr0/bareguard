@@ -40,6 +40,15 @@ Non-empty line count is at most `value`.
 - Example: `{ id: "brief", rule: "maxLines", field: "text", value: 10 }`
 - Red: `over`; also `missing`, `unreadable`, `wrong-type`.
 
+### `listItems`
+The field holds EXACTLY `value` outer list items (ruling #73; a fwdloop ask). No `strict`.
+- Fields: `field`, `value`.
+- Item line: the text is split into lines, each line trimmed at both ends. It is an item when it starts with `-`, `*`, `+` or `•`, then one or more spaces or tabs, then non-empty text; or with ASCII digits, then `.` or `)`, then one or more spaces or tabs, then non-empty text (the same ordered shape the forgiving heading match accepts). Not items: plain lines, `**bold**`, `---`, `***`, `-x`, a lone `-`, `1.5 x`, `1.Work`, `2024 results`, `1.`, `a) X`. Bullet and number marks count alike.
+- Outer: indent is the number of leading characters JS `trimStart` removes (space, tab and NBSP each count 1; tabs are not expanded). The outer items are the item lines whose indent equals the smallest indent among all item lines; a line that is not an item never sets that indent. So `"\t- a\n  - b"` is 1 (indent 1 is smaller than 2), deterministic but mixed tab/space lists are best avoided. `1. Job\n   - detail` is 1.
+- Example: `{ id: "jobs", rule: "listItems", field: "text", value: 3 }`
+- Red: `under` (`measured` < `limit`, `direction: "at-least"`) and `over` (`measured` > `limit`, `direction: "at-most"`); 0 items is `under` with `measured: 0`. A missing, unreadable or non-string field is `missing`, `unreadable`, `wrong-type` with `limit` only and NO `direction` (an exact count is neither bound).
+- Cost: one pass over the lines; each line is trimmed once and examined by a fixed-length look at its start. No regex on the text and no rescan, so the work grows in proportion to the field length.
+
 ## Shape
 
 ### `sections`

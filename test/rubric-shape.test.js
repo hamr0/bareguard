@@ -412,3 +412,42 @@ test("empty / whitespace-only output is red happened:empty BEFORE any check runs
     assert.deepEqual(r.gaps.map((g) => `${g.check}:${g.kind}`), ["happened:empty"], JSON.stringify(out));
   }
 });
+
+// --- listItems (ruling #73) --------------------------------------------------
+
+test("listItems: the settled cases (outer items, exact count)", async () => {
+  const n = async (t, v = 1) => {
+    const r = await one("listItems", { value: v }, t);
+    return r.verdict === "green" ? v : gap(r).measured;
+  };
+  const jobs = "Jobs this week:\n- Prune the apple tree\n  - before the frost\n- Turn the compost bin\n- Fix the tap";
+  assert.equal((await one("listItems", { value: 3 }, jobs)).verdict, "green");
+  assert.equal((await one("listItems", { value: 3 }, "Lead-in:\n- a\n- b\n- c")).verdict, "green");
+  const under = gap(await one("listItems", { value: 3 }, "Lead-in:\n- a\n- b"));
+  assert.deepEqual([under.kind, under.measured, under.limit, under.direction], ["under", 2, 3, "at-least"]);
+  const noMarks = gap(await one("listItems", { value: 3 }, "Prune the tree, turn the compost bin and fix the tap."));
+  assert.deepEqual([noMarks.measured, noMarks.limit, noMarks.direction], [0, 3, "at-least"]);
+  const over = gap(await one("listItems", { value: 3 }, "- a\n- b\n- c\n- d"));
+  assert.deepEqual([over.measured, over.limit, over.direction], [4, 3, "at-most"]);
+  assert.equal(await n("1. Job\n   - detail", 1), 1);
+  assert.equal(await n("  - a\n  - b\n  - c", 3), 3, "the whole list indented 2 counts");
+  assert.equal(await n("  - a\n- b\n- c", 2), 2);
+  assert.equal(await n("\t- a\n  - b", 1), 1, "mixed tab/space: tab indent 1 < space indent 2");
+  for (const t of ["1.5 x", "1.Work", "2024 results", "1.", "a) X", "plain line", "**bold**", "---", "***", "-x", "-", "- ", "* ", "•x"]) {
+    assert.equal(await n(t, 99), 0, JSON.stringify(t));
+  }
+  for (const t of ["• a", "+ a", "* a", "1) a", "- a", "12. a", "-\ta"]) assert.equal(await n(t, 1), 1, JSON.stringify(t));
+  assert.equal(await n("- a\r\n- b\r\n- c\r\n", 3), 3, "CRLF");
+  assert.equal(await n("- a\n- b\n\nThese tasks are all due soon.", 2), 2, "trailing prose is not counted");
+  assert.equal(await n("prose\n    - deep\n- shallow", 1), 1, "non-items never set the smallest indent");
+});
+
+test("listItems: a missing or non-string field carries limit only (no direction), like the other count rules otherwise", async () => {
+  const r = await run([{ id: "k", rule: "listItems", field: "nope", value: 3 }], { text: "x" });
+  const g = r.gaps[0];
+  assert.equal(g.kind, "missing");
+  assert.equal(g.limit, 3);
+  assert.equal(g.direction, undefined);
+  const w = (await run([{ id: "k", rule: "listItems", field: "f", value: 3 }], { f: 5 })).gaps[0];
+  assert.deepEqual([w.kind, w.measured, w.limit, w.direction], ["wrong-type", "type:number", 3, undefined]);
+});
