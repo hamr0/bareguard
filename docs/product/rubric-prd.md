@@ -93,6 +93,7 @@ end -> human ACCEPT
 - `nonEmpty`: field has content.
 - `maxWords` / `minWords`: word count bound.
 - `maxLines`: non-empty line count bound.
+- `listItems`: the field holds exactly `value` outer list items (RULED #73).
 - `sections`: each named heading is present. `sectionOrder`: headings present and in order.
 - `sectionWords`: each listed section's own word count is within +-20% of `wordsPerSection` (ported from fwdloop, RULED 2026-10-08 #25).
 - `allowedKeys`: an object output has no own key outside a signed list (ported from fwdloop, RULED 2026-10-08 #26).
