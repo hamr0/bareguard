@@ -2121,7 +2121,7 @@ Status of #30-#47: kept as history. Live and shared with `cited`: #32 (exactly o
 
 **2026-11-09 (bareloop ask; RULED; built on feat/four-rules, not released)**
 
-75. RULED (hamr, 2026-11-09; requested by bareloop): `jsonValid`, `{ id, rule: "jsonValid", field }`. Green when `JSON.parse(text)` succeeds on the string field (any JSON value). Any throw, including deep nesting (RangeError), is red `not-json` with NO field text in the gap. A missing, unreadable or non-string field is `missing` / `unreadable` / `wrong-type`. Fields: `field` only. Built.
+75. RULED (hamr, 2026-11-09; requested by bareloop): `jsonValid`, `{ id, rule: "jsonValid", field }`. Green when `JSON.parse(text)` succeeds on the string field (any JSON value). Red `not-json` when it throws, with NO field text in the gap; no depth cap of its own, so deeply nested valid JSON is green. A missing, unreadable or non-string field is `missing` / `unreadable` / `wrong-type`. Fields: `field` only. Built.
 
 76. RULED (hamr, 2026-11-09; requested by bareloop): `carriesNone`, `{ id, rule: "carriesNone", field, phrases, strict? }`. Exactly `carriesAny`'s matcher, normalization and phrase-list validation (word edges, case-insensitive, strict adds case, linear normalize-once plus KMP, no work cap), with the inverse verdict: green when NO phrase is found. Red `present` with `measured` (phrases found), `limit: 0` and the found signed phrases as bounded `items` (`itemsTotal` when cut). Built.
 

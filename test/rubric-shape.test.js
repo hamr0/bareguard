@@ -479,7 +479,7 @@ test("jsonValid: empty string is red; CRLF ok; 100k-deep nesting is red, no cras
   assert.equal(gap(r).kind, "not-json");
   const closed = "[".repeat(100_000) + "]".repeat(100_000);
   const r2 = await one("jsonValid", {}, closed);
-  assert.ok(r2.verdict === "green" || gap(r2).kind === "not-json", "deep but balanced: no crash");
+  assert.equal(r2.verdict, "green", "deep balanced JSON parses: no depth cap");
 });
 
 test("jsonValid: missing / wrong-type / non-string fields", async () => {

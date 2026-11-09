@@ -844,7 +844,7 @@ function runMaxLineWords(ctx, c) {
   return worst > c.value ? red("over", { measured: worst, limit: c.value, direction: "at-most" }) : OK;
 }
 
-/** `jsonValid` (RULED #75): green when `JSON.parse` accepts the string field. Any throw (syntax, RangeError on deep nesting) is red `not-json`; the gap carries no field text. */
+/** `jsonValid` (RULED #75): green when `JSON.parse` accepts the string field. Red `not-json` when it throws; the gap carries no field text. No depth cap of its own: deeply nested valid JSON is green. */
 function runJsonValid(ctx, c) {
   const t = textField(ctx, c.field);
   if (t.gap) return t;
