@@ -1447,6 +1447,52 @@ be specified further as real pages come in (the first, bareloop's Google Flights
   page count per label (F1 makes several per URL normal); what counts as "the same host" (redirects, subdomains); whether the registration
   call is a new gate method (harness-only, like `recordAccept`). None of this is decided.
 
+### 5.4 mailproof email approval: `ignoreCase` on `in`/`notIn` (PARKED until mailproof delivers; NOT built; shape may change)
+
+Requirements captured from mailproof, a peer project. Nothing here is built. The shape may change after mailproof delivers (see "Gate to build").
+
+**Who.** mailproof is an npm package (2.2.0). It shadows a mailbox over IMAP and records every email in and out: DKIM-signed headers, the archived signer key, DMARC/SPF/ARC verdicts and attachment hashes. It re-verifies offline. It never sends email.
+
+**The flow (decided by hamr with mailproof).**
+
+- Whoever starts the exchange (an agent, or bareguard's humanChannel) sends the question email with its own tools and its own Message-ID.
+- The humanChannel implementation is harness-side; mailproof documents the recipe. It polls mailproof's planned `replyFacts({ messageId })`, which returns a flat fact bundle or null.
+- It runs `checkStep` on the bundle against a user-signed rubric. Green maps to `{decision:"allow"}`. Anything else maps to deny.
+- The agent never decides. bareguard never reads mail and never touches the network.
+
+**The fact bundle (mailproof's; names are indicative and final at their build).** Flat top-level keys, string values only, flags from closed sets, claimed and proven values as sibling keys:
+
+`messageId`, `recordId`, `commit`, `trail`, `from`, `fromDkimAligned` ("pass" | "fail" | "none"), `to`, `cc`, `date`, `subject`, `dkim`, `dmarc`, `spf`, `arc`, `live`, `portable`, `link` ("signed" | "unsigned" | "none"), `text`, `firstLine`, `bodyProven` ("proven" | "unproven"), `quote` ("found" | "not-found" | "inline"), `attachments` (one string).
+
+Why flat strings: rubric rules read only own top-level keys (no dotted paths), and no rule reads a boolean.
+
+**The `firstLine` contract (mailproof's).** The new reply text with quoted history removed, split on `\r\n`, `\n` or `\r`. It is the first line that is non-empty after trim, trimmed with `String.prototype.trim`. No case folding, no Unicode normalisation. `""` if none. When the text is unproven, the fields are still supplied, with `bodyProven` "unproven".
+
+**The approval rule (hamr's pick, option 1).** An EXACT approval word chosen by the user, on the reply's first line, checked with `in`. bareguard never reads meaning, so "I do not approve" fails, and so does any non-listed value. Example checks:
+
+- `in` `firstLine` [the approval word(s)]
+- `in` `from` [the allowed addresses]
+- `in` `fromDkimAligned` ["pass"]
+- `in` `bodyProven` ["proven"]
+- `in` `link` ["signed"]
+
+Replay protection comes from `link` "signed": the request's Message-ID sits in a DKIM-signed In-Reply-To/References. Rejected: a one-time per-ask code, because it cannot live in a signed spec.
+
+**The bareguard ask (PARKED).** `in` and `notIn` compare exactly and case-sensitively. So "Ana@Company.com" against a signed "ana@company.com" is red `not-in`, and a genuine approval is denied. Planned: an opt-in field (working name `ignoreCase: true`) on `in`/`notIn`.
+
+- The default is unchanged, so every already-signed rubric keeps its verdicts.
+- It is still a whole-value match.
+- The exact case-fold method, the field name and the `rubricSha` effect are settled at build.
+
+**Known limits (decided by hamr on mailproof's side, recorded here).**
+
+- Microsoft (outlook.com, msn.com, Microsoft 365) does not sign In-Reply-To/References. A genuine Microsoft reply gets `link` "unsigned". A strict rubric rejects it. A relaxed one (["signed","unsigned"]) loses replay protection.
+- Mail received at a Microsoft mailbox has altered bodies (`bodyProven` "unproven"). Approvals should be received at a non-Microsoft mailbox.
+
+**Audit proof reference: no bareguard change.** The approval audit line records only `{phase:"approval", action, decision, reason, newCap}`. Extra keys in the reply are dropped. A proof reference rides in `reason` ("mailproof:<recordId>@<commit>") and/or in `gate.annotate({surface:false, …, meta})`. The humanChannel event carries no `aid`. Open, only if mailproof asks: a first-class proof-ref field, and an `aid` on the event.
+
+**Gate to build.** mailproof delivers `replyFacts` and its POC. It then sends (a) a real bundle sample, (b) the POC results, (c) which fields need case-insensitive matching. Then: settle the shape with mailproof, build, mailproof tests the branch, release. See ruling #74 (§12).
+
 ## 6. Verdicts, the advance and the human moments
 
 **Four verdicts:**
@@ -2060,3 +2106,7 @@ Status of #30-#47: kept as history. Live and shared with `cited`: #32 (exactly o
 **2026-11-03 (fwdloop ask; RULED; built on feat/list-items, not released)**
 
 73. RULED (hamr, 2026-11-03; requested by fwdloop; spec settled with fwdloop): `listItems`, an EXACT outer-list-item count. `{ id, rule: "listItems", field, value }`, `field` as `maxLines` (FIELD), `value` a COUNT (integer >= 1); NO `strict`. (1) ITEM LINE: split the field with the shared line splitter, trim each line at both ends; it is an item when it starts with `-`, `*`, `+` or `•` (U+2022), then one or more spaces or tabs, then non-empty text; OR with ASCII digits, then `.` or `)`, then one or more spaces or tabs, then non-empty text (the same ordered shape `stripListMarker` accepts, reused). Not items: plain lines, `**bold**`, `---`, `***`, `-x`, a lone `-`, `1.5 x`, `1.Work`, `2024 results`, `1.`, `a) X`. Bullet and number marks are treated alike. (2) OUTER: indent = `line.length - line.trimStart().length` (space, tab and NBSP each count 1; tabs are NOT expanded); outer items are the item lines whose indent equals the SMALLEST indent among all item lines; a non-item line never affects that indent. measured = number of outer items (0 items = 0). MIXED TAB/SPACE CAVEAT: indents compare by character count, so `"\t- a\n  - b"` is 1 (tab = 1 < 2 spaces); deterministic, not a nesting reader. (3) VERDICT: green when measured equals `value`; `measured < value` = red `under` `{measured, limit: value, direction: "at-least"}`; `measured > value` = red `over` `{measured, limit: value, direction: "at-most"}`. A missing, unreadable or non-string field is `missing` / `unreadable` / `wrong-type` with `limit` only and NO `direction` (an exact count is neither bound). (4) COST: one pass, each line trimmed once and its start examined at fixed length; no regex on the text, no rescan: linear in the field length. No cap. (5) LIMITS (documented, not changed): it reads lines, not markdown, so a marker line inside a ``` fence counts as an item and a block-quote line (`> - a`) is not one; `value` is an integer >= 1, so "exactly 0 items" cannot be signed (`createRubric` throws); only a space or tab after the mark counts, so a no-break space (U+00A0) after it is not an item; the shared line splitter breaks on `\n` and `\r\n` only, so a lone `\r` is not a line break. A new rule leaves every existing `rubricSha` unchanged. Built, not released.
+
+**2026-11-09 (mailproof ask; RULED; PARKED, not built)**
+
+74. RULED (hamr, 2026-11-09; requested by mailproof): opt-in `ignoreCase` on `in`/`notIn`, default unchanged. PARKED: built only after mailproof ships `replyFacts` and its POC. The field name, the case-fold method and the `rubricSha` effect are settled at build. Requirements in §5.4.
