@@ -94,6 +94,8 @@ end -> human ACCEPT
 - `maxWords` / `minWords`: word count bound.
 - `maxLines`: non-empty line count bound.
 - `listItems`: the field holds exactly `value` outer list items (RULED #73).
+- `maxParagraphs`: at most `value` paragraphs, a paragraph being a run of non-blank lines (RULED #77). `maxLineWords`: no non-blank line over `value` words, a leading list marker not a word, a `#` run after it not a word either (RULED #78).
+- `carriesNone`: the inverse of `carriesAny`, green when no phrase is present (RULED #76). `jsonValid`: the string field parses as JSON (RULED #75).
 - `sections`: each named heading is present. `sectionOrder`: headings present and in order.
 - `sectionWords`: each listed section's own word count is within +-20% of `wordsPerSection` (ported from fwdloop, RULED 2026-10-08 #25).
 - `allowedKeys`: an object output has no own key outside a signed list (ported from fwdloop, RULED 2026-10-08 #26).
@@ -225,12 +227,16 @@ keys.
 | `maxWords` / `minWords` | `field`, `value`, `strict?` | word count <= / >= value |
 | `maxLines` | `field`, `value` | non-empty line count <= value |
 | `listItems` | `field`, `value` | exactly `value` outer list items (RULED #73) |
+| `maxParagraphs` | `field`, `value` | paragraph count <= value (RULED #77) |
+| `maxLineWords` | `field`, `value` | every non-blank line has <= value words, one leading list marker not a word (RULED #78) |
+| `jsonValid` | `field` | `JSON.parse` accepts the string field (RULED #75) |
 | `sections` | `field`, `names:[...]`, `strict?` | every name matches some heading line |
 | `sectionOrder` | `field`, `names:[...]`, `strict?` | every name matches a heading line, in that order |
 | `sectionWords` | `field`, `names:[...]`, `wordsPerSection` | each found section's words are within `[ceil(N*0.8), floor(N*1.2)]` inclusive (no `strict`) |
 | `allowedKeys` | `keys:[...]` | the output has no own key outside `keys` |
 | `mustCarry` | `field`, `phrases:[...]`, `strict?` | every listed phrase is present |
 | `carriesAny` | `field`, `phrases:[...]`, `strict?` | at least ONE listed phrase is present on word edges (RULED #69) |
+| `carriesNone` | `field`, `phrases:[...]`, `strict?` | NO listed phrase is present on word edges (RULED #76) |
 | `blockLines` | `field`, `size`, `phrases:[...]`, `strict?` | see below |
 | `in` / `notIn` | `field`, `values:[...]` | value `===` one of / none of |
 | `atMost` | `field`, `value`, `order:[...]` | ordered-enum rank <= value's |
@@ -291,6 +297,8 @@ keys.
 - **`listItems`** (RULED #73): green when the field holds exactly `value` outer list items (no `strict`). Item lines, outer
   indent and the mixed tab/space caveat are in ruling #73 (§12). Red `under` (`at-least`) / `over` (`at-most`) with `measured`
   and `limit`; a missing, unreadable or non-string field carries `limit` only, no `direction`. Cost: one linear pass.
+- **`maxParagraphs`** (RULED #77), **`maxLineWords`** (RULED #78): red `over` with `measured`, `limit`, `direction: "at-most"` (`maxLineWords` measures the worst line and carries no line text); a missing, unreadable or non-string field carries `limit` and `direction`, like `maxLines`. One linear pass each.
+- **`jsonValid`** (RULED #75): red `not-json`, no field text in the gap. **`carriesNone`** (RULED #76): red `present` with `measured`, `limit: 0` and the found signed phrases in `items` (bounded, `itemsTotal` when cut); same matcher and cost as `carriesAny`.
 - **`mustCarry`**: every phrase in `phrases` is a case-insensitive substring of the field; a red
   gap lists the missing phrases (bounded).
 - **`carriesAny`** (RULED #69): green when at least ONE phrase in `phrases` appears in the field on word edges (the
@@ -331,7 +339,7 @@ and line rules, `size`, `reads`, `maxReds`) are integers >= 1 with no maximum; s
 non-empty strings; a whitespace-only string is refused.
 
 **Gap fields** (§7): every gap for an ordered rule (`maxWords`, `minWords`, `maxLines`, `max`,
-`min`, `atMost`) carries `direction`: `"at-most"` or `"at-least"`. `listItems` (#73) is an exact count: its `under`/`over` gaps carry the matching direction, its `missing`/`unreadable`/`wrong-type` gaps carry `limit` only. `notWorse` carries its signed
+`min`, `atMost`) carries `direction`: `"at-most"` or `"at-least"`. `maxParagraphs` and `maxLineWords` (#77, #78) carry `"at-most"`. `listItems` (#73) is an exact count: its `under`/`over` gaps carry the matching direction, its `missing`/`unreadable`/`wrong-type` gaps carry `limit` only. `notWorse` carries its signed
 `direction`.
 
 **`cited`: zero claims is RED** (RULED 2026-10-08 #13). A non-empty output whose `claims` list is
@@ -1447,6 +1455,52 @@ be specified further as real pages come in (the first, bareloop's Google Flights
   page count per label (F1 makes several per URL normal); what counts as "the same host" (redirects, subdomains); whether the registration
   call is a new gate method (harness-only, like `recordAccept`). None of this is decided.
 
+### 5.4 mailproof email approval: `ignoreCase` on `in`/`notIn` (PARKED until mailproof delivers; NOT built; shape may change)
+
+Requirements captured from mailproof, a peer project. Nothing here is built. The shape may change after mailproof delivers (see "Gate to build").
+
+**Who.** mailproof is an npm package (2.2.0). It shadows a mailbox over IMAP and records every email in and out: DKIM-signed headers, the archived signer key, DMARC/SPF/ARC verdicts and attachment hashes. It re-verifies offline. It never sends email.
+
+**The flow (decided by hamr with mailproof).**
+
+- Whoever starts the exchange (an agent, or bareguard's humanChannel) sends the question email with its own tools and its own Message-ID.
+- The humanChannel implementation is harness-side; mailproof documents the recipe. It polls mailproof's planned `replyFacts({ messageId })`, which returns a flat fact bundle or null.
+- It runs `checkStep` on the bundle against a user-signed rubric. Green maps to `{decision:"allow"}`. Anything else maps to deny.
+- The agent never decides. bareguard never reads mail and never touches the network.
+
+**The fact bundle (mailproof's; names are indicative and final at their build).** Flat top-level keys, string values only, flags from closed sets, claimed and proven values as sibling keys:
+
+`messageId`, `recordId`, `commit`, `trail`, `from`, `fromDkimAligned` ("pass" | "fail" | "none"), `to`, `cc`, `date`, `subject`, `dkim`, `dmarc`, `spf`, `arc`, `live`, `portable`, `link` ("signed" | "unsigned" | "none"), `text`, `firstLine`, `bodyProven` ("proven" | "unproven"), `quote` ("found" | "not-found" | "inline"), `attachments` (one string).
+
+Why flat strings: rubric rules read only own top-level keys (no dotted paths), and no rule reads a boolean.
+
+**The `firstLine` contract (mailproof's).** The new reply text with quoted history removed, split on `\r\n`, `\n` or `\r`. It is the first line that is non-empty after trim, trimmed with `String.prototype.trim`. No case folding, no Unicode normalisation. `""` if none. When the text is unproven, the fields are still supplied, with `bodyProven` "unproven".
+
+**The approval rule (hamr's pick, option 1).** An EXACT approval word chosen by the user, on the reply's first line, checked with `in`. bareguard never reads meaning, so "I do not approve" fails, and so does any non-listed value. Example checks:
+
+- `in` `firstLine` [the approval word(s)]
+- `in` `from` [the allowed addresses]
+- `in` `fromDkimAligned` ["pass"]
+- `in` `bodyProven` ["proven"]
+- `in` `link` ["signed"]
+
+Replay protection comes from `link` "signed": the request's Message-ID sits in a DKIM-signed In-Reply-To/References. Rejected: a one-time per-ask code, because it cannot live in a signed spec.
+
+**The bareguard ask (PARKED).** `in` and `notIn` compare exactly and case-sensitively. So "Ana@Company.com" against a signed "ana@company.com" is red `not-in`, and a genuine approval is denied. Planned: an opt-in field (working name `ignoreCase: true`) on `in`/`notIn`.
+
+- The default is unchanged, so every already-signed rubric keeps its verdicts.
+- It is still a whole-value match.
+- The exact case-fold method, the field name and the `rubricSha` effect are settled at build.
+
+**Known limits (decided by hamr on mailproof's side, recorded here).**
+
+- Microsoft (outlook.com, msn.com, Microsoft 365) does not sign In-Reply-To/References. A genuine Microsoft reply gets `link` "unsigned". A strict rubric rejects it. A relaxed one (["signed","unsigned"]) loses replay protection.
+- Mail received at a Microsoft mailbox has altered bodies (`bodyProven` "unproven"). Approvals should be received at a non-Microsoft mailbox.
+
+**Audit proof reference: no bareguard change.** The approval audit line records only `{phase:"approval", action, decision, reason, newCap}`. Extra keys in the reply are dropped. A proof reference rides in `reason` ("mailproof:<recordId>@<commit>") and/or in `gate.annotate({surface:false, …, meta})`. The humanChannel event carries no `aid`. Open, only if mailproof asks: a first-class proof-ref field, and an `aid` on the event.
+
+**Gate to build.** mailproof delivers `replyFacts` and its POC. It then sends (a) a real bundle sample, (b) the POC results, (c) which fields need case-insensitive matching. Then: settle the shape with mailproof, build, mailproof tests the branch, release. See ruling #74 (§12).
+
 ## 6. Verdicts, the advance and the human moments
 
 **Four verdicts:**
@@ -2060,3 +2114,17 @@ Status of #30-#47: kept as history. Live and shared with `cited`: #32 (exactly o
 **2026-11-03 (fwdloop ask; RULED; built on feat/list-items, not released)**
 
 73. RULED (hamr, 2026-11-03; requested by fwdloop; spec settled with fwdloop): `listItems`, an EXACT outer-list-item count. `{ id, rule: "listItems", field, value }`, `field` as `maxLines` (FIELD), `value` a COUNT (integer >= 1); NO `strict`. (1) ITEM LINE: split the field with the shared line splitter, trim each line at both ends; it is an item when it starts with `-`, `*`, `+` or `•` (U+2022), then one or more spaces or tabs, then non-empty text; OR with ASCII digits, then `.` or `)`, then one or more spaces or tabs, then non-empty text (the same ordered shape `stripListMarker` accepts, reused). Not items: plain lines, `**bold**`, `---`, `***`, `-x`, a lone `-`, `1.5 x`, `1.Work`, `2024 results`, `1.`, `a) X`. Bullet and number marks are treated alike. (2) OUTER: indent = `line.length - line.trimStart().length` (space, tab and NBSP each count 1; tabs are NOT expanded); outer items are the item lines whose indent equals the SMALLEST indent among all item lines; a non-item line never affects that indent. measured = number of outer items (0 items = 0). MIXED TAB/SPACE CAVEAT: indents compare by character count, so `"\t- a\n  - b"` is 1 (tab = 1 < 2 spaces); deterministic, not a nesting reader. (3) VERDICT: green when measured equals `value`; `measured < value` = red `under` `{measured, limit: value, direction: "at-least"}`; `measured > value` = red `over` `{measured, limit: value, direction: "at-most"}`. A missing, unreadable or non-string field is `missing` / `unreadable` / `wrong-type` with `limit` only and NO `direction` (an exact count is neither bound). (4) COST: one pass, each line trimmed once and its start examined at fixed length; no regex on the text, no rescan: linear in the field length. No cap. (5) LIMITS (documented, not changed): it reads lines, not markdown, so a marker line inside a ``` fence counts as an item and a block-quote line (`> - a`) is not one; `value` is an integer >= 1, so "exactly 0 items" cannot be signed (`createRubric` throws); only a space or tab after the mark counts, so a no-break space (U+00A0) after it is not an item; the shared line splitter breaks on `\n` and `\r\n` only, so a lone `\r` is not a line break. A new rule leaves every existing `rubricSha` unchanged. Built, not released.
+
+**2026-11-09 (mailproof ask; RULED; PARKED, not built)**
+
+74. RULED (hamr, 2026-11-09; requested by mailproof): opt-in `ignoreCase` on `in`/`notIn`, default unchanged. PARKED: built only after mailproof ships `replyFacts` and its POC. The field name, the case-fold method and the `rubricSha` effect are settled at build. Requirements in §5.4.
+
+**2026-11-09 (bareloop ask; RULED; built on feat/four-rules, not released)**
+
+75. RULED (hamr, 2026-11-09; requested by bareloop): `jsonValid`, `{ id, rule: "jsonValid", field }`. Green when `JSON.parse(text)` succeeds on the string field (any JSON value). Red `not-json` when it throws, with NO field text in the gap; no depth cap of its own, so deeply nested valid JSON is green. A missing, unreadable or non-string field is `missing` / `unreadable` / `wrong-type`. Fields: `field` only. Built.
+
+76. RULED (hamr, 2026-11-09; requested by bareloop): `carriesNone`, `{ id, rule: "carriesNone", field, phrases, strict? }`. Exactly `carriesAny`'s matcher, normalization and phrase-list validation (word edges, case-insensitive, strict adds case, linear normalize-once plus KMP, no work cap), with the inverse verdict: green when NO phrase is found. Red `present` with `measured` (phrases found), `limit: 0` and the found signed phrases as bounded `items` (`itemsTotal` when cut). Built.
+
+77. RULED (hamr, 2026-11-09; requested by bareloop): `maxParagraphs`, `{ id, rule: "maxParagraphs", field, value }`, `value` a COUNT (>= 1). Lines come from the shared line splitter; a line is blank when `trim() === ""`; a paragraph is a maximal run of non-blank lines. Red `over` `{ measured, limit, direction: "at-most" }` when the count exceeds `value`. One linear pass. Built.
+
+78. RULED (hamr, 2026-11-09; requested by bareloop): `maxLineWords`, `{ id, rule: "maxLineWords", field, value }`, `value` a COUNT (>= 1), no `strict`. Per non-blank line, the default (non-strict) `maxWords` count, except that one leading list marker (the `listItems` item shape: a bullet then a space or tab, or an ordered marker) is not a word. Order (self-review 20d34e3): strip one marker at the line start, then count the rest as a line start, so a `#` run after the marker is not a word (`- ## a b` = 2); a marker after a `#` run stays a word (`## - a b` = 3). Lines break on `\n` and `\r\n` only. Red `over` `{ measured: the worst line's count, limit, direction: "at-most" }`, no line text. One linear pass. Built.

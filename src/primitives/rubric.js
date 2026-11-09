@@ -736,26 +736,39 @@ function carriesOnEdges(t, phrase) {
  * pass: about (2 + 2 x phrases) x field length in the worst case, whatever the input (whitespace floods, near-miss phrases,
  * repeated letters, and `İ` all included). Strict re-scans the raw text for phrases the forgiving pass found, so it can take up to about twice as long when phrases are found. Each candidate match whose edge characters are non-ASCII (e.g. `İ`, accented letters) costs more to check than an ASCII edge. Bounding the field (output) size is the harness's job, because `gate.checkStep` holds the gate's ordering lock while it runs.
  */
-function runCarriesAny(ctx, c) {
-  const t = textField(ctx, c.field);
-  if (t.gap) return t;
+function carriedPhrases(text, c) {
   const strict = c.strict === true;
-  const lower = collapseWs(t.text.toLowerCase());
+  const lower = collapseWs(text.toLowerCase());
   let raw = null; // collapsed raw text, built once and only when a strict pass needs it
   const found = [];
   for (const p of c.phrases) {
     if (!carriesOnEdges(lower, p.toLowerCase())) continue;
     if (strict) {
-      raw ??= collapseWs(t.text);
+      raw ??= collapseWs(text);
       if (!carriesOnEdges(raw, p)) continue;
     }
     found.push(p);
   }
+  return found;
+}
+
+function runCarriesAny(ctx, c) {
+  const t = textField(ctx, c.field);
+  if (t.gap) return t;
+  const found = carriedPhrases(t.text, c);
   if (found.length === 0) {
     const { items, itemsTotal } = boundItems(c.phrases, true);
     return red("none-found", { phrases: items, ...(itemsTotal !== undefined ? { itemsTotal } : {}) });
   }
   return { matched: { check: c.id, phrases: found.slice(0, MAX_ITEMS), ...(found.length > MAX_ITEMS ? { phrasesTotal: found.length } : {}) } };
+}
+
+/** `carriesNone` (RULED #76): the inverse of `carriesAny`, the same matcher. Green when no signed phrase is on word edges; red `present` lists the found signed phrases. */
+function runCarriesNone(ctx, c) {
+  const t = textField(ctx, c.field);
+  if (t.gap) return t;
+  const found = carriedPhrases(t.text, c);
+  return found.length === 0 ? OK : red("present", { measured: found.length, limit: 0, ...boundItems(found, true) });
 }
 
 function runBlockLines(ctx, c) {
@@ -794,6 +807,53 @@ function runListItems(ctx, c) {
   const n = countOuterListItems(t.text);
   if (n === c.value) return OK;
   return n < c.value ? red("under", { measured: n, limit: c.value, direction: "at-least" }) : red("over", { measured: n, limit: c.value, direction: "at-most" });
+}
+
+/** `maxParagraphs` (RULED #77): a paragraph is a maximal run of non-blank lines (blank = `trim() === ""`). One pass. */
+function runMaxParagraphs(ctx, c) {
+  const t = textField(ctx, c.field, { limit: c.value, direction: "at-most" });
+  if (t.gap) return t;
+  let n = 0;
+  let inPara = false;
+  for (const line of splitLines(t.text)) {
+    if (line.trim() === "") inPara = false;
+    else if (!inPara) {
+      inPara = true;
+      n++;
+    }
+  }
+  return n > c.value ? red("over", { measured: n, limit: c.value, direction: "at-most" }) : OK;
+}
+
+/** Words on ONE line without a single leading list marker (bullet or ordered, the `listItems` predicate), then as `lineWords` on the rest read as a line start (so a `#` run after the marker is not a word either). */
+function lineWordsNoMarker(line) {
+  const s = line.trim();
+  if (isListItem(s)) return lineWords((s.charCodeAt(0) >= 48 && s.charCodeAt(0) <= 57 ? stripListMarker(s) : s.slice(1)).trimStart());
+  return lineWords(s);
+}
+
+/** `maxLineWords` (RULED #78): the worst non-blank line's words (forgiving count, one leading list marker not a word). One pass. */
+function runMaxLineWords(ctx, c) {
+  const t = textField(ctx, c.field, { limit: c.value, direction: "at-most" });
+  if (t.gap) return t;
+  let worst = 0;
+  for (const line of splitLines(t.text)) {
+    const w = lineWordsNoMarker(line);
+    if (w > worst) worst = w;
+  }
+  return worst > c.value ? red("over", { measured: worst, limit: c.value, direction: "at-most" }) : OK;
+}
+
+/** `jsonValid` (RULED #75): green when `JSON.parse` accepts the string field. Red `not-json` when it throws; the gap carries no field text. No depth cap of its own: deeply nested valid JSON is green. */
+function runJsonValid(ctx, c) {
+  const t = textField(ctx, c.field);
+  if (t.gap) return t;
+  try {
+    JSON.parse(t.text);
+  } catch {
+    return red("not-json");
+  }
+  return OK;
 }
 
 function runNonEmpty(ctx, c) {
@@ -1282,12 +1342,16 @@ const RULES = {
   minWords: { fields: { field: FIELD, value: COUNT, strict: STRICT }, run: runCountRule((t) => countWords(t, false), "at-least", (n, v) => n < v) },
   maxLines: { fields: { field: FIELD, value: COUNT }, run: runCountRule(countNonEmptyLines, "at-most", (n, v) => n > v) },
   listItems: { fields: { field: FIELD, value: COUNT }, run: runListItems },
+  maxParagraphs: { fields: { field: FIELD, value: COUNT }, run: runMaxParagraphs },
+  maxLineWords: { fields: { field: FIELD, value: COUNT }, run: runMaxLineWords },
+  jsonValid: { fields: { field: FIELD }, run: runJsonValid },
   sections: { fields: { field: FIELD, names: LIST, strict: STRICT }, run: runSections },
   sectionOrder: { fields: { field: FIELD, names: LIST, strict: STRICT }, run: runSectionOrder },
   sectionWords: { fields: { field: FIELD, names: LIST, wordsPerSection: COUNT }, run: runSectionWords },
   allowedKeys: { fields: { keys: LIST }, run: runAllowedKeys },
   mustCarry: { fields: { field: FIELD, phrases: LIST, strict: STRICT }, run: runMustCarry },
   carriesAny: { fields: { field: FIELD, phrases: CARRY_PHRASES, strict: STRICT }, run: runCarriesAny },
+  carriesNone: { fields: { field: FIELD, phrases: CARRY_PHRASES, strict: STRICT }, run: runCarriesNone },
   blockLines: { fields: { field: FIELD, size: COUNT, phrases: LIST, strict: STRICT }, run: runBlockLines },
   in: { fields: { field: FIELD, values: LIST }, run: runIn(true) },
   notIn: { fields: { field: FIELD, values: LIST }, run: runIn(false) },

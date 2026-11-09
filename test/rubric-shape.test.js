@@ -451,3 +451,158 @@ test("listItems: a missing or non-string field carries limit only (no direction)
   const w = (await run([{ id: "k", rule: "listItems", field: "f", value: 3 }], { f: 5 })).gaps[0];
   assert.deepEqual([w.kind, w.measured, w.limit, w.direction], ["wrong-type", "type:number", 3, undefined]);
 });
+
+// --- jsonValid / carriesNone / maxParagraphs / maxLineWords (rulings #75-#78) ----------------
+
+const kinds = (r) => r.gaps.map((g) => g.kind);
+
+test("jsonValid: valid and invalid texts; the gap carries no field text", async () => {
+  for (const t of ['{"a":1}', "[1,2]", "1", '"x"', "null", '  {"k":[true]}\n']) assert.equal((await one("jsonValid", {}, t)).verdict, "green", JSON.stringify(t));
+  for (const t of ["{", '{"a":1} x', "{'a':1}", "[1,]", "undefined", "Sure! {\"a\":1}"]) {
+    const r = await one("jsonValid", {}, t);
+    assert.equal(r.verdict, "red", JSON.stringify(t));
+    assert.deepEqual(r.gaps[0], { key: "cp:k", checkpoint: "cp", check: "jsonValid", id: "k", field: "text", kind: "not-json" });
+  }
+  assert.equal(JSON.stringify(gap(await one("jsonValid", {}, "SECRET {"))).includes("SECRET"), false);
+});
+
+test("jsonValid: empty string is red; CRLF ok; unbalanced 100k-deep '[' is red, balanced 100k-deep is green, no crash", async () => {
+  const e = await run([{ id: "k", rule: "jsonValid", field: "text" }], { text: "" });
+  assert.equal(e.verdict, "red");
+  assert.equal(e.gaps[0].kind, "not-json", "an empty string field is not JSON");
+  const inner = await run([{ id: "k", rule: "jsonValid", field: "f" }, { id: "z", rule: "nonEmpty", field: "g" }], { f: "", g: "x" });
+  assert.deepEqual(inner.gaps.map((g) => `${g.check}:${g.kind}`), ["jsonValid:not-json"], "an empty field is not JSON");
+  assert.equal((await one("jsonValid", {}, '{\r\n"a": 1\r\n}')).verdict, "green");
+  const deep = "[".repeat(100_000);
+  const r = await one("jsonValid", {}, deep);
+  assert.equal(r.verdict, "red");
+  assert.equal(gap(r).kind, "not-json");
+  const closed = "[".repeat(100_000) + "]".repeat(100_000);
+  const r2 = await one("jsonValid", {}, closed);
+  assert.equal(r2.verdict, "green", "deep balanced JSON parses: no depth cap");
+});
+
+test("jsonValid: missing / wrong-type / non-string fields", async () => {
+  assert.equal((await run([{ id: "k", rule: "jsonValid", field: "nope" }], { text: "x" })).gaps[0].kind, "missing");
+  const w = (await run([{ id: "k", rule: "jsonValid", field: "f" }], { f: { a: 1 } })).gaps[0];
+  assert.deepEqual([w.kind, w.measured], ["wrong-type", "type:object"]);
+});
+
+const none = (phrases, text, extra) => one("carriesNone", { phrases, ...extra }, text);
+
+test("carriesNone: word edges, case, strict, multi-word, items", async () => {
+  assert.equal((await none(["hang"], "unchanged and changing")).verdict, "green");
+  const r = await none(["hang"], "Hang!");
+  assert.equal(r.verdict, "red");
+  assert.deepEqual([gap(r).kind, gap(r).measured, gap(r).limit, gap(r).items], ["present", 1, 0, ["hang"]]);
+  assert.equal((await none(["hang"], "Hang!", { strict: true })).verdict, "green", "strict adds case");
+  assert.equal((await none(["Hang"], "Hang!", { strict: true })).verdict, "red");
+  assert.equal((await none(["out of memory"], "ran OUT   of\nmemory today")).verdict, "red", "multi-word across whitespace runs");
+  assert.equal((await none(["out of memory"], "out of the memory")).verdict, "green");
+  const many = await none(["crash", "Hang", "zzz", "ANR"], "a crash, a hang, an anr");
+  assert.deepEqual(gap(many).items, ["crash", "Hang", "ANR"], "signed phrases, signed order");
+  assert.equal(gap(many).measured, 3);
+  assert.equal((await none(["hang"], "x\r\nhang-up\r\n")).verdict, "red", "CRLF");
+});
+
+test("carriesNone: items are bounded with itemsTotal; missing / wrong-type fields; NBSP flood", async () => {
+  const ph = Array.from({ length: 50 }, (_, i) => `word${i}`);
+  const g = gap(await none(ph, ph.join(" ")));
+  assert.equal(g.measured, 50);
+  assert.equal(g.itemsTotal, 50);
+  assert.ok(g.items.length < 50 && g.items.length > 0);
+  assert.equal((await run([{ id: "k", rule: "carriesNone", field: "nope", phrases: ["a"] }], { text: "x" })).gaps[0].kind, "missing");
+  assert.equal((await run([{ id: "k", rule: "carriesNone", field: "f", phrases: ["a"] }], { f: 3 })).gaps[0].kind, "wrong-type");
+  const flood = "a" + " ".repeat(300_000) + "b";
+  assert.equal((await none(["a b", "x y"], flood)).verdict, "red", "NBSP is whitespace: 'a b' found across the flood");
+  assert.equal((await none(["x y"], flood)).verdict, "green");
+  assert.throws(() => createRubric({ schema: 1, goal: "g", checkpoints: { cp: { gating: true, checks: [{ id: "k", rule: "carriesNone", field: "text", phrases: ["a\tb"] }] } } }), /single ASCII spaces/);
+  assert.throws(() => createRubric({ schema: 1, goal: "g", checkpoints: { cp: { gating: true, checks: [{ id: "k", rule: "carriesNone", field: "text", phrases: [] }] } } }));
+});
+
+test("maxParagraphs: AT / UNDER / OVER, blank handling, CRLF", async () => {
+  const P = async (t, v) => {
+    const r = await one("maxParagraphs", { value: v }, t);
+    return r.verdict === "green" ? "ok" : gap(r);
+  };
+  assert.equal(await P("# Title\ntext line", 1), "ok", "a heading attached to text is one paragraph");
+  const two = await P("# Title\n\ntext", 1);
+  assert.deepEqual([two.kind, two.measured, two.limit, two.direction], ["over", 2, 1, "at-most"]);
+  assert.equal(await P("# Title\n\ntext", 2), "ok");
+  assert.equal(await P("a\n\nb\n\nc", 3), "ok");
+  assert.equal((await P("a\n\nb\n\nc", 2)).measured, 3);
+  assert.equal(await P("\n\n\na\nb\n\n\n", 1), "ok", "leading and trailing blanks");
+  assert.equal(await P("a\n \t \nb", 1) === "ok", false, "whitespace-only line separates");
+  assert.equal((await P("a\n \t \nb", 1)).measured, 2);
+  assert.equal(await P("a\n\n\n\n\nb", 2), "ok", "a blank run is one separator");
+  assert.equal(await P("a\r\nb\r\n\r\nc\r\n", 2), "ok", "CRLF");
+  assert.equal((await P("a\r\n\r\nb\r\n\r\nc", 2)).measured, 3);
+  assert.equal(await P("a\n \nb", 1) === "ok", false, "NBSP-only line is blank (trim strips NBSP)");
+  assert.equal((await run([{ id: "k", rule: "maxParagraphs", field: "text", value: 1 }], { text: "x" })).verdict, "green");
+});
+
+test("maxParagraphs: empty string is 0 paragraphs; missing / wrong-type carry limit and direction", async () => {
+  // an empty whole output is red happened:empty before checks; a field that is "" inside an object reaches the rule
+  const r = await run([{ id: "k", rule: "maxParagraphs", field: "f", value: 1 }, { id: "z", rule: "nonEmpty", field: "g" }], { f: "", g: "x" });
+  assert.equal(r.verdict, "green", "0 paragraphs is within the limit");
+  const m = (await run([{ id: "k", rule: "maxParagraphs", field: "nope", value: 2 }], { text: "x" })).gaps[0];
+  assert.deepEqual([m.kind, m.limit, m.direction], ["missing", 2, "at-most"]);
+  const w = (await run([{ id: "k", rule: "maxParagraphs", field: "f", value: 2 }], { f: [1] })).gaps[0];
+  assert.deepEqual([w.kind, w.measured], ["wrong-type", "type:array"]);
+});
+
+test("maxLineWords: AT / UNDER / OVER, markers are not words, worst line reported, no line text", async () => {
+  const L = async (t, v) => {
+    const r = await one("maxLineWords", { value: v }, t);
+    return r.verdict === "green" ? "ok" : gap(r);
+  };
+  assert.equal(await L(words(5), 5), "ok");
+  assert.equal(await L(words(4), 5), "ok");
+  const over = await L(words(6), 5);
+  assert.deepEqual([over.kind, over.measured, over.limit, over.direction], ["over", 6, 5, "at-most"]);
+  assert.equal(await L("- a b c", 3), "ok", "bullet marker is not a word");
+  assert.equal(await L("1. a b c", 3), "ok", "ordered marker is not a word");
+  assert.equal(await L("2) a b c", 3), "ok");
+  assert.equal(await L("  • a b c", 3), "ok");
+  assert.equal(await L("* a b c", 3), "ok");
+  assert.equal((await L("- a b c d", 3)).measured, 4);
+    assert.equal((await L("- - a b", 2)).measured, 3, "second dash is a word");
+  assert.equal(await L("- ## a b", 2), "ok", "a # run after the list marker is not a word");
+  assert.equal(await L("1. # a", 1), "ok");
+  assert.equal(await L("## a b", 2), "ok");
+  assert.equal((await L("## - a b", 2)).measured, 3, "only a LINE-START marker is stripped: a marker after the # run is a word");
+  assert.equal(await L("## a b c", 3), "ok", "# run is not a word");
+  assert.equal((await L("## a b c d", 3)).measured, 4);
+  assert.equal(await L("-x y", 2), "ok", "'-x' is not a marker: it is a word");
+  assert.equal((await L("-x y z", 2)).measured, 3);
+  const worst = await L("a b\r\n\r\nc d e f g\r\n- h i j", 3);
+  assert.deepEqual([worst.measured, worst.limit], [5, 3], "the worst line");
+  assert.equal(JSON.stringify(worst).includes(" g"), false, "no line text in the gap");
+  assert.equal(await L("a b c\n\n\nd e f", 3), "ok", "words are per line, not per paragraph");
+  const m = (await run([{ id: "k", rule: "maxLineWords", field: "nope", value: 2 }], { text: "x" })).gaps[0];
+  assert.deepEqual([m.kind, m.limit, m.direction], ["missing", 2, "at-most"]);
+  assert.equal((await run([{ id: "k", rule: "maxLineWords", field: "f", value: 2 }], { f: 4 })).gaps[0].kind, "wrong-type");
+});
+
+test("the four new rules are linear: doubling a large input does not quadruple the time (growth ratio)", async () => {
+  const time = async (rule, extra, mk) => {
+    const best = [];
+    for (const n of [200_000, 400_000]) {
+      const text = mk(n);
+      const t0 = performance.now();
+      await one(rule, extra, text);
+      best.push(performance.now() - t0);
+    }
+    return best;
+  };
+  const cases = [
+    ["jsonValid", {}, (n) => JSON.stringify({ a: Array.from({ length: n / 8 }, (_, i) => i) })],
+    ["carriesNone", { phrases: ["zz yy", "qq"] }, (n) => "ab   ".repeat(n / 5)],
+    ["maxParagraphs", { value: 1_000_000 }, (n) => "line\n\n \n".repeat(n / 8)],
+    ["maxLineWords", { value: 1_000_000 }, (n) => "- w1 w2 w3\n".repeat(n / 12)],
+  ];
+  for (const [rule, extra, mk] of cases) {
+    const [t1, t2] = await time(rule, extra, mk);
+    assert.ok(t2 < Math.max(4 * t1, 50), `${rule}: 400K took ${t2.toFixed(0)}ms vs ${t1.toFixed(0)}ms for 200K`);
+  }
+});

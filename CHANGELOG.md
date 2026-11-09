@@ -3,6 +3,17 @@
 All notable changes to bareguard are documented here. Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [SemVer](https://semver.org/).
 
 
+## [0.32.0] - 2026-11-09
+
+### Added
+
+- **Four rubric rules for bareloop (rulings #75-#78).** All additive; every existing `rubricSha` is unchanged.
+  - `jsonValid` `{ id, rule, field }` is green when `JSON.parse` accepts the string field (any JSON value, `"1"` and `"\"x\""` included). Red `not-json` when it throws; the gap carries no field text. No depth cap of its own: deeply nested valid JSON is green. A missing, unreadable or non-string field is `missing`, `unreadable`, `wrong-type`.
+  - `carriesNone` `{ id, rule, field, phrases, strict? }` is the inverse of `carriesAny` with the same matcher, phrase rules and linear cost: green when no signed phrase appears on word edges; red `present` with `measured`, `limit: 0` and the found signed phrases as `items` (bounded, `itemsTotal` when cut).
+  - `maxParagraphs` `{ id, rule, field, value }`: a paragraph is a maximal run of non-blank lines (a line is blank when `trim()` is empty; lines break on `\n` and `\r\n` only, so a lone `\r` joins lines). Red `over` (`direction: "at-most"`) when the count exceeds `value` (>= 1).
+  - `maxLineWords` `{ id, rule, field, value }`: the words on each non-blank line, counted as `maxWords` does by default (a leading `#` run is not a word), plus one leading list marker (a bullet or an ordered `1.` / `1)`) is not a word; the marker is stripped at the line start first, so a `#` run after it is not a word either (`- ## a b` = 2) while a marker after a `#` run stays a word (`## - a b` = 3). Red `over` carries the worst line's count as `measured`; no line text. No `strict`.
+  - All four are one linear pass (or one linear match for `carriesNone`).
+
 ## [0.31.0] - 2026-11-03
 
 ### Added
