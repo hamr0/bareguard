@@ -94,7 +94,7 @@ end -> human ACCEPT
 - `maxWords` / `minWords`: word count bound.
 - `maxLines`: non-empty line count bound.
 - `listItems`: the field holds exactly `value` outer list items (RULED #73).
-- `maxParagraphs`: at most `value` paragraphs, a paragraph being a run of non-blank lines (RULED #77). `maxLineWords`: no non-blank line over `value` words, a leading list marker not a word (RULED #78).
+- `maxParagraphs`: at most `value` paragraphs, a paragraph being a run of non-blank lines (RULED #77). `maxLineWords`: no non-blank line over `value` words, a leading list marker not a word, a `#` run after it not a word either (RULED #78).
 - `carriesNone`: the inverse of `carriesAny`, green when no phrase is present (RULED #76). `jsonValid`: the string field parses as JSON (RULED #75).
 - `sections`: each named heading is present. `sectionOrder`: headings present and in order.
 - `sectionWords`: each listed section's own word count is within +-20% of `wordsPerSection` (ported from fwdloop, RULED 2026-10-08 #25).
@@ -2127,4 +2127,4 @@ Status of #30-#47: kept as history. Live and shared with `cited`: #32 (exactly o
 
 77. RULED (hamr, 2026-11-09; requested by bareloop): `maxParagraphs`, `{ id, rule: "maxParagraphs", field, value }`, `value` a COUNT (>= 1). Lines come from the shared line splitter; a line is blank when `trim() === ""`; a paragraph is a maximal run of non-blank lines. Red `over` `{ measured, limit, direction: "at-most" }` when the count exceeds `value`. One linear pass. Built.
 
-78. RULED (hamr, 2026-11-09; requested by bareloop): `maxLineWords`, `{ id, rule: "maxLineWords", field, value }`, `value` a COUNT (>= 1), no `strict`. Per non-blank line, the default (non-strict) `maxWords` count, except that one leading list marker (the `listItems` item shape: a bullet then a space or tab, or an ordered marker) is not a word. Red `over` `{ measured: the worst line's count, limit, direction: "at-most" }`, no line text. One linear pass. Built.
+78. RULED (hamr, 2026-11-09; requested by bareloop): `maxLineWords`, `{ id, rule: "maxLineWords", field, value }`, `value` a COUNT (>= 1), no `strict`. Per non-blank line, the default (non-strict) `maxWords` count, except that one leading list marker (the `listItems` item shape: a bullet then a space or tab, or an ordered marker) is not a word. Order (self-review 20d34e3): strip one marker at the line start, then count the rest as a line start, so a `#` run after the marker is not a word (`- ## a b` = 2); a marker after a `#` run stays a word (`## - a b` = 3). Lines break on `\n` and `\r\n` only. Red `over` `{ measured: the worst line's count, limit, direction: "at-most" }`, no line text. One linear pass. Built.

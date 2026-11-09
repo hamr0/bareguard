@@ -466,7 +466,7 @@ test("jsonValid: valid and invalid texts; the gap carries no field text", async 
   assert.equal(JSON.stringify(gap(await one("jsonValid", {}, "SECRET {"))).includes("SECRET"), false);
 });
 
-test("jsonValid: empty string is red; CRLF ok; 100k-deep nesting is red, no crash", async () => {
+test("jsonValid: empty string is red; CRLF ok; unbalanced 100k-deep '[' is red, balanced 100k-deep is green, no crash", async () => {
   const e = await run([{ id: "k", rule: "jsonValid", field: "text" }], { text: "" });
   assert.equal(e.verdict, "red");
   assert.equal(e.gaps[0].kind, "not-json", "an empty string field is not JSON");
@@ -567,6 +567,10 @@ test("maxLineWords: AT / UNDER / OVER, markers are not words, worst line reporte
   assert.equal(await L("* a b c", 3), "ok");
   assert.equal((await L("- a b c d", 3)).measured, 4);
     assert.equal((await L("- - a b", 2)).measured, 3, "second dash is a word");
+  assert.equal(await L("- ## a b", 2), "ok", "a # run after the list marker is not a word");
+  assert.equal(await L("1. # a", 1), "ok");
+  assert.equal(await L("## a b", 2), "ok");
+  assert.equal((await L("## - a b", 2)).measured, 3, "only a LINE-START marker is stripped: a marker after the # run is a word");
   assert.equal(await L("## a b c", 3), "ok", "# run is not a word");
   assert.equal((await L("## a b c d", 3)).measured, 4);
   assert.equal(await L("-x y", 2), "ok", "'-x' is not a marker: it is a word");

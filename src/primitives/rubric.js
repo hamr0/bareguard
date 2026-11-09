@@ -825,10 +825,10 @@ function runMaxParagraphs(ctx, c) {
   return n > c.value ? red("over", { measured: n, limit: c.value, direction: "at-most" }) : OK;
 }
 
-/** Words on ONE line without a single leading list marker (bullet or ordered, the `listItems` predicate), then as `lineWords`. */
+/** Words on ONE line without a single leading list marker (bullet or ordered, the `listItems` predicate), then as `lineWords` on the rest read as a line start (so a `#` run after the marker is not a word either). */
 function lineWordsNoMarker(line) {
   const s = line.trim();
-  if (isListItem(s)) return lineWords(s.charCodeAt(0) >= 48 && s.charCodeAt(0) <= 57 ? stripListMarker(s) : s.slice(1));
+  if (isListItem(s)) return lineWords((s.charCodeAt(0) >= 48 && s.charCodeAt(0) <= 57 ? stripListMarker(s) : s.slice(1)).trimStart());
   return lineWords(s);
 }
 

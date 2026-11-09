@@ -53,7 +53,7 @@ The field holds EXACTLY `value` outer list items (ruling #73; a fwdloop ask). No
 ### `maxParagraphs`
 The field has at most `value` paragraphs (ruling #77; a bareloop ask). No `strict`.
 - Fields: `field`, `value` (integer >= 1).
-- A line is blank when `trim() === ""` (NBSP and other Unicode whitespace count as blank). A paragraph is a maximal run of non-blank lines, so a heading attached to text is one paragraph and a heading, a blank line, then text is two. Leading, trailing and repeated blank lines add nothing; an empty string is 0.
+- A line is blank when `trim() === ""` (NBSP and other Unicode whitespace count as blank). A paragraph is a maximal run of non-blank lines, so a heading attached to text is one paragraph and a heading, a blank line, then text is two. Leading, trailing and repeated blank lines add nothing; an empty string is 0. Lines break on `\n` and `\r\n` only; a lone `\r` is not a line break, so `"a\r\rb"` is one paragraph.
 - Example: `{ id: "short", rule: "maxParagraphs", field: "text", value: 3 }`
 - Red: `over` (`measured`, `limit`, `direction: "at-most"`); also `missing`, `unreadable`, `wrong-type`.
 - Cost: one pass over the lines.
@@ -61,7 +61,7 @@ The field has at most `value` paragraphs (ruling #77; a bareloop ask). No `stric
 ### `maxLineWords`
 No non-blank line holds more than `value` words (ruling #78; a bareloop ask). No `strict`.
 - Fields: `field`, `value` (integer >= 1).
-- Words are counted per line as `maxWords` counts them by default (a leading `#` run is not a word), except that ONE leading list marker is not a word either: a bullet (`-`, `*`, `+`, `•` then a space or tab) or an ordered marker (`1.` or `1)` then a space or tab), the same item shape `listItems` uses. Only one marker is removed; `-x` is not a marker.
+- Words are counted per line as `maxWords` counts them by default (a leading `#` run is not a word), except that ONE leading list marker is not a word either: a bullet (`-`, `*`, `+`, `•` then a space or tab) or an ordered marker (`1.` or `1)` then a space or tab), the same item shape `listItems` uses. Only one marker is removed; `-x` is not a marker. The order is: strip one marker at the line start, then read the rest as a line start, so a `#` run after the marker is not a word either (`- ## a b` = 2, `1. # a` = 1, `## a b` = 2). A marker after a `#` run is not at the line start and stays a word (`## - a b` = 3). Lines break on `\n` and `\r\n` only; a lone `\r` joins lines (`"a b\r\rc d e"` is one line of 5 words).
 - Example: `{ id: "tight", rule: "maxLineWords", field: "text", value: 20 }`
 - Red: `over` (`measured` = the worst line's word count, `limit`, `direction: "at-most"`). The gap holds no line text. Also `missing`, `unreadable`, `wrong-type`.
 - Cost: one pass over the lines.
