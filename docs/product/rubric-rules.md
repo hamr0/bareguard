@@ -159,8 +159,9 @@ A number field is at most / at least `value` (finite numbers only).
 Each claim `{ claim, quote, values? }` in the `claims` field has its `quote` found verbatim in a frozen input, and the claim's numbers appear in that quote. With `decides`, the quote must also satisfy each signed decide (number, money, date, time, text, or a phrase list) and the claim's typed `values.d<j>` must match what is extracted from the quote. Zero claims is red.
 - Fields: `claims`, `source` (a signed input name), `decides?` (1-10).
 - Example: `{ id: "grounded", rule: "cited", claims: "claims", source: "page" }`
-- Red: `no-claims`, `unsupported` (items are per claim: `#0:malformed`, `#0:empty-quote`, `#0:quote-not-found`, `#0:quote-too-long`, `#0:numbers:<n>`, `#0:d<j>:<kind>`), `too-many` (quote work cap), plus `missing`, `unreadable`, `wrong-type`.
+- Red: `no-claims`, `unsupported` (items are per claim: `#0:malformed`, `#0:empty-quote`, `#0:quote-not-found`, `#0:quote-too-long`, `#0:numbers:<n>`, `#0:d<j>:<kind>`, kinds include `phrase-missing:<phrase>` and `none-found`), `too-many` (quote work cap), plus `missing`, `unreadable`, `wrong-type`.
 - Stopped: `missing-measurement` (the input is absent or does not match its signed sha256).
+- Presence decide `{ phrases, any?, edges? }`: by default every phrase must be in the quote (substring, case-insensitive; red `#<i>:d<j>:phrase-missing:<phrase>`). `any: true` = at least one (red `#<i>:d<j>:none-found`, no phrase in the item). `edges: true` = match each phrase on word edges like `carriesAny` (`Changed` is not in `unchanged`; a phrase then follows `carriesAny`'s phrase rules at `createRubric`). Both are booleans, optional, independent; a green any-of gives a `phrase` evidence span for each found phrase.
 
 ### `complete`
 Every item of a list is covered by a claim whose `item` equals it. The list is signed (`items`) or caller-supplied (`itemsFrom: "caller"`); exactly one.
