@@ -94,6 +94,8 @@ end -> human ACCEPT
 - `maxWords` / `minWords`: word count bound.
 - `maxLines`: non-empty line count bound.
 - `listItems`: the field holds exactly `value` outer list items (RULED #73).
+- `maxParagraphs`: at most `value` paragraphs, a paragraph being a run of non-blank lines (RULED #77). `maxLineWords`: no non-blank line over `value` words, a leading list marker not a word (RULED #78).
+- `carriesNone`: the inverse of `carriesAny`, green when no phrase is present (RULED #76). `jsonValid`: the string field parses as JSON (RULED #75).
 - `sections`: each named heading is present. `sectionOrder`: headings present and in order.
 - `sectionWords`: each listed section's own word count is within +-20% of `wordsPerSection` (ported from fwdloop, RULED 2026-10-08 #25).
 - `allowedKeys`: an object output has no own key outside a signed list (ported from fwdloop, RULED 2026-10-08 #26).
@@ -225,12 +227,16 @@ keys.
 | `maxWords` / `minWords` | `field`, `value`, `strict?` | word count <= / >= value |
 | `maxLines` | `field`, `value` | non-empty line count <= value |
 | `listItems` | `field`, `value` | exactly `value` outer list items (RULED #73) |
+| `maxParagraphs` | `field`, `value` | paragraph count <= value (RULED #77) |
+| `maxLineWords` | `field`, `value` | every non-blank line has <= value words, one leading list marker not a word (RULED #78) |
+| `jsonValid` | `field` | `JSON.parse` accepts the string field (RULED #75) |
 | `sections` | `field`, `names:[...]`, `strict?` | every name matches some heading line |
 | `sectionOrder` | `field`, `names:[...]`, `strict?` | every name matches a heading line, in that order |
 | `sectionWords` | `field`, `names:[...]`, `wordsPerSection` | each found section's words are within `[ceil(N*0.8), floor(N*1.2)]` inclusive (no `strict`) |
 | `allowedKeys` | `keys:[...]` | the output has no own key outside `keys` |
 | `mustCarry` | `field`, `phrases:[...]`, `strict?` | every listed phrase is present |
 | `carriesAny` | `field`, `phrases:[...]`, `strict?` | at least ONE listed phrase is present on word edges (RULED #69) |
+| `carriesNone` | `field`, `phrases:[...]`, `strict?` | NO listed phrase is present on word edges (RULED #76) |
 | `blockLines` | `field`, `size`, `phrases:[...]`, `strict?` | see below |
 | `in` / `notIn` | `field`, `values:[...]` | value `===` one of / none of |
 | `atMost` | `field`, `value`, `order:[...]` | ordered-enum rank <= value's |
@@ -291,6 +297,8 @@ keys.
 - **`listItems`** (RULED #73): green when the field holds exactly `value` outer list items (no `strict`). Item lines, outer
   indent and the mixed tab/space caveat are in ruling #73 (§12). Red `under` (`at-least`) / `over` (`at-most`) with `measured`
   and `limit`; a missing, unreadable or non-string field carries `limit` only, no `direction`. Cost: one linear pass.
+- **`maxParagraphs`** (RULED #77), **`maxLineWords`** (RULED #78): red `over` with `measured`, `limit`, `direction: "at-most"` (`maxLineWords` measures the worst line and carries no line text); a missing, unreadable or non-string field carries `limit` and `direction`, like `maxLines`. One linear pass each.
+- **`jsonValid`** (RULED #75): red `not-json`, no field text in the gap. **`carriesNone`** (RULED #76): red `present` with `measured`, `limit: 0` and the found signed phrases in `items` (bounded, `itemsTotal` when cut); same matcher and cost as `carriesAny`.
 - **`mustCarry`**: every phrase in `phrases` is a case-insensitive substring of the field; a red
   gap lists the missing phrases (bounded).
 - **`carriesAny`** (RULED #69): green when at least ONE phrase in `phrases` appears in the field on word edges (the
@@ -331,7 +339,7 @@ and line rules, `size`, `reads`, `maxReds`) are integers >= 1 with no maximum; s
 non-empty strings; a whitespace-only string is refused.
 
 **Gap fields** (§7): every gap for an ordered rule (`maxWords`, `minWords`, `maxLines`, `max`,
-`min`, `atMost`) carries `direction`: `"at-most"` or `"at-least"`. `listItems` (#73) is an exact count: its `under`/`over` gaps carry the matching direction, its `missing`/`unreadable`/`wrong-type` gaps carry `limit` only. `notWorse` carries its signed
+`min`, `atMost`) carries `direction`: `"at-most"` or `"at-least"`. `maxParagraphs` and `maxLineWords` (#77, #78) carry `"at-most"`. `listItems` (#73) is an exact count: its `under`/`over` gaps carry the matching direction, its `missing`/`unreadable`/`wrong-type` gaps carry `limit` only. `notWorse` carries its signed
 `direction`.
 
 **`cited`: zero claims is RED** (RULED 2026-10-08 #13). A non-empty output whose `claims` list is
@@ -2110,3 +2118,13 @@ Status of #30-#47: kept as history. Live and shared with `cited`: #32 (exactly o
 **2026-11-09 (mailproof ask; RULED; PARKED, not built)**
 
 74. RULED (hamr, 2026-11-09; requested by mailproof): opt-in `ignoreCase` on `in`/`notIn`, default unchanged. PARKED: built only after mailproof ships `replyFacts` and its POC. The field name, the case-fold method and the `rubricSha` effect are settled at build. Requirements in §5.4.
+
+**2026-11-09 (bareloop ask; RULED; built on feat/four-rules, not released)**
+
+75. RULED (hamr, 2026-11-09; requested by bareloop): `jsonValid`, `{ id, rule: "jsonValid", field }`. Green when `JSON.parse(text)` succeeds on the string field (any JSON value). Any throw, including deep nesting (RangeError), is red `not-json` with NO field text in the gap. A missing, unreadable or non-string field is `missing` / `unreadable` / `wrong-type`. Fields: `field` only. Built.
+
+76. RULED (hamr, 2026-11-09; requested by bareloop): `carriesNone`, `{ id, rule: "carriesNone", field, phrases, strict? }`. Exactly `carriesAny`'s matcher, normalization and phrase-list validation (word edges, case-insensitive, strict adds case, linear normalize-once plus KMP, no work cap), with the inverse verdict: green when NO phrase is found. Red `present` with `measured` (phrases found), `limit: 0` and the found signed phrases as bounded `items` (`itemsTotal` when cut). Built.
+
+77. RULED (hamr, 2026-11-09; requested by bareloop): `maxParagraphs`, `{ id, rule: "maxParagraphs", field, value }`, `value` a COUNT (>= 1). Lines come from the shared line splitter; a line is blank when `trim() === ""`; a paragraph is a maximal run of non-blank lines. Red `over` `{ measured, limit, direction: "at-most" }` when the count exceeds `value`. One linear pass. Built.
+
+78. RULED (hamr, 2026-11-09; requested by bareloop): `maxLineWords`, `{ id, rule: "maxLineWords", field, value }`, `value` a COUNT (>= 1), no `strict`. Per non-blank line, the default (non-strict) `maxWords` count, except that one leading list marker (the `listItems` item shape: a bullet then a space or tab, or an ordered marker) is not a word. Red `over` `{ measured: the worst line's count, limit, direction: "at-most" }`, no line text. One linear pass. Built.

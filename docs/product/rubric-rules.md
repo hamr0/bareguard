@@ -50,6 +50,22 @@ The field holds EXACTLY `value` outer list items (ruling #73; a fwdloop ask). No
 - Red: `under` (`measured` < `limit`, `direction: "at-least"`) and `over` (`measured` > `limit`, `direction: "at-most"`); 0 items is `under` with `measured: 0`. A missing, unreadable or non-string field is `missing`, `unreadable`, `wrong-type` with `limit` only and NO `direction` (an exact count is neither bound).
 - Cost: one pass over the lines; each line is trimmed once and examined by a fixed-length look at its start. No regex on the text and no rescan, so the work grows in proportion to the field length.
 
+### `maxParagraphs`
+The field has at most `value` paragraphs (ruling #77; a bareloop ask). No `strict`.
+- Fields: `field`, `value` (integer >= 1).
+- A line is blank when `trim() === ""` (NBSP and other Unicode whitespace count as blank). A paragraph is a maximal run of non-blank lines, so a heading attached to text is one paragraph and a heading, a blank line, then text is two. Leading, trailing and repeated blank lines add nothing; an empty string is 0.
+- Example: `{ id: "short", rule: "maxParagraphs", field: "text", value: 3 }`
+- Red: `over` (`measured`, `limit`, `direction: "at-most"`); also `missing`, `unreadable`, `wrong-type`.
+- Cost: one pass over the lines.
+
+### `maxLineWords`
+No non-blank line holds more than `value` words (ruling #78; a bareloop ask). No `strict`.
+- Fields: `field`, `value` (integer >= 1).
+- Words are counted per line as `maxWords` counts them by default (a leading `#` run is not a word), except that ONE leading list marker is not a word either: a bullet (`-`, `*`, `+`, `•` then a space or tab) or an ordered marker (`1.` or `1)` then a space or tab), the same item shape `listItems` uses. Only one marker is removed; `-x` is not a marker.
+- Example: `{ id: "tight", rule: "maxLineWords", field: "text", value: 20 }`
+- Red: `over` (`measured` = the worst line's word count, `limit`, `direction: "at-most"`). The gap holds no line text. Also `missing`, `unreadable`, `wrong-type`.
+- Cost: one pass over the lines.
+
 ## Shape
 
 ### `sections`
@@ -94,6 +110,13 @@ At least ONE listed phrase appears in the field on word edges (any-of; `mustCarr
 - Green detail: `full.matched` on the step result, one `{ check, phrases, phrasesTotal? }` per green `carriesAny` check (phrases found, signed order, up to 20). Not in the gaps, the audit line or the humanChannel ask.
 - Cost (ruling #69 amendment 3): no work cap and no `too-many` gap. The field is lowered and its whitespace runs collapsed once, then each phrase is searched by KMP (the text is never re-read), so the work is about (2 normalizations + 2 x phrases) x field length: linear, growing in proportion to field length x number of phrases, for any input, with no superlinear case. Strict re-scans the raw text for phrases the forgiving pass found, so it can take up to about twice as long when phrases are found. Each candidate match whose edge characters are non-ASCII (e.g. `İ`, accented letters) costs more to check than an ASCII edge. `full.matched` is always complete (every signed phrase found, signed order). Bounding the field (output) size is the harness's job, because `gate.checkStep` holds the gate's ordering lock while it runs.
 
+### `carriesNone`
+NO listed phrase appears in the field on word edges (the inverse of `carriesAny`; ruling #76, a bareloop ask).
+- Fields: `field`, `phrases`, `strict?`.
+- Match, phrase rules, case handling and cost are exactly `carriesAny`'s (same code): word edges, case-insensitive unless `strict`, single spaces match any whitespace run, 1 to 50 phrases, linear with no work cap.
+- Example: `{ id: "no-crash", rule: "carriesNone", field: "body", phrases: ["crash", "hang"] }`
+- Red: `present` (`measured` = phrases found, `limit: 0`, `items` = the found signed phrases in signed order, never clipped, up to 20, `itemsTotal` when cut); a missing, non-string or unreadable field stays `missing`, `wrong-type`, `unreadable`. No `full.matched` entry.
+
 ### `blockLines`
 Non-empty lines are grouped in blocks of `size`; every listed phrase must appear in each block.
 - Fields: `field`, `size`, `phrases`, `strict?`.
@@ -111,6 +134,16 @@ A string field ranks at or below the signed `value` in the ordered list `order` 
 - Fields: `field`, `value` (must be in `order`), `order` (no duplicates).
 - Example: `{ id: "sev", rule: "atMost", field: "severity", value: "medium", order: ["low", "medium", "high"] }`
 - Red: `over`, `unknown` (the field's value is not in `order`); also `missing`, `unreadable`, `wrong-type`.
+
+## Format
+
+### `jsonValid`
+The string field is valid JSON (ruling #75; a bareloop ask). No `strict`.
+- Fields: `field`.
+- Green when `JSON.parse` accepts the whole string: any JSON value, so `1`, `"x"`, `null`, arrays and objects all pass; surrounding whitespace is fine. It checks syntax only, not shape.
+- Example: `{ id: "reply", rule: "jsonValid", field: "text" }`
+- Red: `not-json` for any throw (bad syntax, an empty string, trailing text, nesting deep enough to raise a RangeError). The gap carries NO field text. A missing, unreadable or non-string field is `missing`, `unreadable`, `wrong-type`.
+- Cost: one native `JSON.parse` pass.
 
 ## Numbers
 
