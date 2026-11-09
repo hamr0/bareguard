@@ -8,7 +8,7 @@
 // no user regex. Text is the quote after `normalizeForQuote` (the text `quoteIn` proved), digits are ASCII
 // 0-9 only. Number and money values are EXACT decimals ({neg, int, frac} digit strings), never IEEE floats.
 
-import { normalizeForQuote, carries, clip } from "./rubric.js";
+import { normalizeForQuote, clip, carriesOnEdgesAt, collapseWs } from "./rubric.js";
 import { isRealDay, monthTable, customMonthTable, MONTH_NAME_MAX } from "./rubric-months.js";
 
 const MAX_ITEMS = 20; // list bound inside a gap (same as rubric.js)
@@ -1084,25 +1084,39 @@ function normalizeUntil(s) {
   return s.split("**").join("").split("__").join("").replace(/\s+/g, " ");
 }
 
+/**
+ * A presence decide. ALL-of by default (red `phrase-missing`, the first missing phrase); `any: true` is green when at least one
+ * phrase is there (red `none-found`, no phrase in it; RULED #79). `edges: true` finds each phrase with carriesAny's word-edge matcher
+ * (one linear KMP scan per phrase, no RegExp from signed input), else a case-insensitive substring. A found phrase's evidence span is
+ * its FIRST occurrence by the same matcher, mapped back to `text` when lower-casing changed its length (U+0130).
+ */
 function evalPresence(decide, text, sp) {
+  const any = decide.any === true;
+  const edges = decide.edges === true;
   const lower = text.toLowerCase();
-  let missing;
   const aligned = lower.length === text.length; // else the folded offset is mapped back (U+0130)
+  // `text` is already whitespace-collapsed (decideQuote normalizes), so the collapse changes nothing and offsets hold; if a direct caller
+  // passed an uncollapsed text the offsets would not be `text`'s, so no span is emitted then (the verdict is unaffected)
+  const hay = edges ? collapseWs(lower) : lower;
+  const offsetsOk = hay.length === lower.length;
+  let missing;
+  let found = 0;
   for (const p of decide.phrases) {
-    if (!carries(text, lower, p, false)) {
+    const pl = p.toLowerCase();
+    const at = edges ? carriesOnEdgesAt(hay, pl) : lower.indexOf(pl); // the FIRST occurrence, exactly what `carries` found
+    if (at === -1) {
       if (missing === undefined) missing = p;
-      if (sp === undefined) break; // verdict only: the first missing phrase decides; with evidence the rest are still located
+      if (sp === undefined && !any) break; // verdict only, all-of: the first missing phrase decides; with evidence the rest are still located
       continue;
     }
-    if (sp !== undefined) {
-      const pl = p.toLowerCase();
-      const at = lower.indexOf(pl); // the FIRST case-insensitive occurrence, exactly what `carries` found
-      if (at !== -1) {
-        const m = aligned ? { start: at, end: at + pl.length } : foldedSpanToOriginal(text, at, at + pl.length);
-        if (m !== null) sp.push({ role: "phrase", start: m.start, end: m.end });
-      }
+    found++;
+    if (sp === undefined && any) break; // verdict only, any-of: one hit decides
+    if (sp !== undefined && offsetsOk) {
+      const m = aligned ? { start: at, end: at + pl.length } : foldedSpanToOriginal(text, at, at + pl.length);
+      if (m !== null) sp.push({ role: "phrase", start: m.start, end: m.end });
     }
   }
+  if (any) return found > 0 ? { type: "presence", ok: true } : { type: "presence", ok: false, kind: "none-found" };
   if (missing !== undefined) return { type: "presence", ok: false, kind: "phrase-missing", measured: missing };
   return { type: "presence", ok: true };
 }

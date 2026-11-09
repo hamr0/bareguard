@@ -300,8 +300,18 @@ const DECIDES = {
       ],
     },
     presence: {
-      fields: { phrases: LIST },
-      conditions: ["a presence decide holds only phrases"],
+      fields: { phrases: LIST, any: { type: "boolean", required: false, default: false }, edges: { type: "boolean", required: false, default: false } },
+      conditions: [
+        "a presence decide holds phrases and the optional booleans any and edges, nothing else",
+        "any: true is green when AT LEAST ONE phrase is in the quote (red kind none-found, item #<i>:d<j>:none-found, no phrase in it); absent or false = every phrase must be there (red phrase-missing)",
+        "edges: true matches each phrase on word edges like carriesAny (case-insensitive, a phrase space matches any whitespace run; so Changed is not found in unchanged); absent or false = substring, case-insensitive; with edges every phrase follows carriesAny's phrase rules (starts and ends with a letter or digit, only single ASCII spaces inside, unique ignoring case)",
+      ],
+      // RULED #79: a worked example, run GREEN through checkStep by the tests (the `input` text is the signed `offers` input, its sha256 goes in spec.inputs)
+      example: {
+        input: { name: "offers", text: "### Fixed\n- **Plain panel words**: the terminal outcome is unchanged." },
+        check: { id: "release-heading", rule: "cited", claims: "claims", source: "offers", decides: [{ phrases: ["Added", "Changed", "Fixed"], any: true, edges: true }] },
+        output: { claims: [{ claim: "Fixed", quote: "### Fixed" }] },
+      },
     },
   },
   conditions: ["each decide is exactly one shape (value or presence); a claim must carry a string in values.d<j> for every value decide, any valueKind, with or without op, text included; j indexes the whole decides list"],
@@ -685,7 +695,7 @@ function wordEndsAt(t, e) {
  * combining mark), so the lowered text has the same runs as the raw one; (d) a run is made of BMP units only (no `\s` character is
  * astral), so collapsing never cuts or joins a surrogate pair, and `wordEndsAt` / `isCarryWordAt` still see whole code points.
  */
-const collapseWs = (s) => s.replace(/ \s+|[^\S ]\s*/g, " "); // a lone space is already collapsed: only a run that is not exactly " " is a match, so ordinary prose pays for no replacement
+export const collapseWs = (s) => s.replace(/ \s+|[^\S ]\s*/g, " "); // a lone space is already collapsed: only a run that is not exactly " " is a match, so ordinary prose pays for no replacement
 
 /** KMP failure table of `p`: fail[k] = the length of the longest proper prefix of p[0..k] that is also its suffix. O(p.length). */
 function carryFailure(p) {
@@ -706,6 +716,11 @@ function carryFailure(p) {
  * (there are at most n). The first match with both edges is the answer. Cost O(n + c) per call, n = t.length, c = phrase.length.
  */
 function carriesOnEdges(t, phrase) {
+  return carriesOnEdgesAt(t, phrase) !== -1;
+}
+
+/** `carriesOnEdges` with a position: the start offset in `t` of the FIRST on-edge match of `phrase`, or -1. The match is `phrase.length` units long. Same single linear scan. */
+export function carriesOnEdgesAt(t, phrase) {
   const m = phrase.length;
   const fail = carryFailure(phrase);
   const first = phrase[0];
@@ -715,17 +730,17 @@ function carriesOnEdges(t, phrase) {
       // nothing is partially matched: jump to the next unit equal to the phrase's first one. A one-unit native search only moves
       // forward and reads each unit once, so the O(n + c) bound stands; it only makes the common non-matching text fast.
       i = t.indexOf(first, i);
-      if (i === -1) return false;
+      if (i === -1) return -1;
     }
     const u = t.charCodeAt(i);
     while (k > 0 && u !== phrase.charCodeAt(k)) k = fail[k - 1];
     if (u === phrase.charCodeAt(k)) k++;
     if (k === m) {
-      if (!wordEndsAt(t, i + 1 - m) && !isCarryWordAt(t, i + 1)) return true;
+      if (!wordEndsAt(t, i + 1 - m) && !isCarryWordAt(t, i + 1)) return i + 1 - m;
       k = fail[m - 1];
     }
   }
-  return false;
+  return -1;
 }
 
 /**
@@ -1538,10 +1553,15 @@ function checkDecides(d, v, where) {
     const shape = isPresence ? d.shapes.presence : d.shapes.value;
     for (const k of Object.keys(x)) {
       if (!Object.hasOwn(shape.fields, k)) {
-        throw fail(`${w}.${k}`, isPresence ? "is not allowed on a presence decide (it holds only phrases)" : "is not a recognised decide field");
+        throw fail(`${w}.${k}`, isPresence ? "is not allowed on a presence decide (it holds phrases, any and edges)" : k === "any" || k === "edges" ? "is not allowed on a value decide (any and edges belong to a presence decide)" : "is not a recognised decide field");
       }
     }
-    if (isPresence) return checkValue(shape.fields.phrases, x.phrases, `${w}.phrases`);
+    if (isPresence) {
+      for (const k of ["any", "edges"]) if (x[k] !== undefined) checkValue(shape.fields[k], x[k], `${w}.${k}`);
+      // RULED #79: with edges the phrases follow carriesAny's phrase rules (same code), keeping the presence list's own bounds
+      if (x.edges === true) return checkCarryPhrases(shape.fields.phrases, x.phrases, `${w}.phrases`);
+      return checkValue(shape.fields.phrases, x.phrases, `${w}.phrases`);
+    }
     const f = shape.fields;
     for (const k of ["valueKind", "op"]) {
       if (x[k] === undefined) {
