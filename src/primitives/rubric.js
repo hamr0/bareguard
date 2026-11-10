@@ -695,7 +695,7 @@ function wordEndsAt(t, e) {
  * combining mark), so the lowered text has the same runs as the raw one; (d) a run is made of BMP units only (no `\s` character is
  * astral), so collapsing never cuts or joins a surrogate pair, and `wordEndsAt` / `isCarryWordAt` still see whole code points.
  */
-export const collapseWs = (s) => s.replace(/ \s+|[^\S ]\s*/g, " "); // a lone space is already collapsed: only a run that is not exactly " " is a match, so ordinary prose pays for no replacement
+const collapseWs = (s) => s.replace(/ \s+|[^\S ]\s*/g, " "); // a lone space is already collapsed: only a run that is not exactly " " is a match, so ordinary prose pays for no replacement
 
 /** KMP failure table of `p`: fail[k] = the length of the longest proper prefix of p[0..k] that is also its suffix. O(p.length). */
 function carryFailure(p) {

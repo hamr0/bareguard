@@ -8,7 +8,7 @@
 // no user regex. Text is the quote after `normalizeForQuote` (the text `quoteIn` proved), digits are ASCII
 // 0-9 only. Number and money values are EXACT decimals ({neg, int, frac} digit strings), never IEEE floats.
 
-import { normalizeForQuote, clip, carriesOnEdgesAt, collapseWs } from "./rubric.js";
+import { normalizeForQuote, clip, carriesOnEdgesAt } from "./rubric.js";
 import { isRealDay, monthTable, customMonthTable, MONTH_NAME_MAX } from "./rubric-months.js";
 
 const MAX_ITEMS = 20; // list bound inside a gap (same as rubric.js)
@@ -1095,15 +1095,12 @@ function evalPresence(decide, text, sp) {
   const edges = decide.edges === true;
   const lower = text.toLowerCase();
   const aligned = lower.length === text.length; // else the folded offset is mapped back (U+0130)
-  // `text` is already whitespace-collapsed (decideQuote normalizes), so the collapse changes nothing and offsets hold; if a direct caller
-  // passed an uncollapsed text the offsets would not be `text`'s, so no span is emitted then (the verdict is unaffected)
-  const hay = edges ? collapseWs(lower) : lower;
-  const offsetsOk = hay.length === lower.length;
+  // `text` is already normalized by decideQuote (whitespace runs collapsed), which is what carriesOnEdgesAt needs
   let missing;
   let found = 0;
   for (const p of decide.phrases) {
     const pl = p.toLowerCase();
-    const at = edges ? carriesOnEdgesAt(hay, pl) : lower.indexOf(pl); // the FIRST occurrence, exactly what `carries` found
+    const at = edges ? carriesOnEdgesAt(lower, pl) : lower.indexOf(pl); // the FIRST occurrence, exactly what `carries` found
     if (at === -1) {
       if (missing === undefined) missing = p;
       if (sp === undefined && !any) break; // verdict only, all-of: the first missing phrase decides; with evidence the rest are still located
@@ -1111,7 +1108,7 @@ function evalPresence(decide, text, sp) {
     }
     found++;
     if (sp === undefined && any) break; // verdict only, any-of: one hit decides
-    if (sp !== undefined && offsetsOk) {
+    if (sp !== undefined) {
       const m = aligned ? { start: at, end: at + pl.length } : foldedSpanToOriginal(text, at, at + pl.length);
       if (m !== null) sp.push({ role: "phrase", start: m.start, end: m.end });
     }
