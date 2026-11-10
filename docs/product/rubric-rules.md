@@ -199,7 +199,7 @@ Red from the claim: `claim-missing`, `claim-malformed`, `claim-unreadable`, `cla
 | `max` | largest number in a column (`{ value }`) | `value-mismatch`, `no-values` |
 | `found` | a needle is (or is not) a cell of a column (`{ value: boolean }`) | `value-mismatch` |
 | `lookup` | the cell on the one row whose key column equals `keyValue` (`{ value }`) | `value-mismatch`, `lookup-not-unique` |
-| `rows` | the claimed rows (or keys) equal the matching rows (`{ rows }` or `{ keys }`) | `rows-missing`, `rows-extra`, `rows-duplicated`, `keys-extra` |
+| `rows` | the claimed rows (or keys) equal the matching rows (`{ rows }` or `{ keys }`, not both: a claim with both is `claim-malformed`) | `rows-missing`, `rows-extra`, `rows-duplicated`, `keys-extra` |
 | `topN` | the n largest or smallest rows or values (`{ rows }` or `{ values }`) | `rows-missing`, `rows-extra`, `rows-duplicated`, `tied-rows-missing`, `topn-values-mismatch`, `fewer-than-n` |
 | `uniqueCount` | distinct non-blank values of a column (`{ value }`) | `value-mismatch` |
 | `duplicates` | values (and rows) that occur more than once (`{ values }` and/or `{ rows }`) | `values-missing`, `values-extra`, `values-duplicated`, `rows-missing`, `rows-extra`, `rows-duplicated` |
