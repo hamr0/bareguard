@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { createRubric, checkStep, rubricSha, rubricVocabulary } from "../src/index.js";
+import { decideQuote } from "../src/primitives/rubric-locate.js";
 
 // presence decide `any` / `edges` (docs/product/rubric-prd.md RULED #79, bareloop BG-4).
 
@@ -159,4 +160,18 @@ test("vocabulary: presence lists any and edges, and its worked example runs GREE
   // mutation-sensitive: a quote with none of the words is red
   const bad = await checkStep(spec, "cp", { claims: [{ claim: "x", quote: "the terminal outcome is unchanged." }] }, { inputs: { [input.name]: input.text } });
   assert.equal(bad.verdict, "red");
+});
+
+// decideQuote without spans (verdict only): any-of stops at the first hit, all-of stops at the first miss; both must read a LATER phrase.
+test("verdict-only presence: any-of green when only a later phrase hits (with and without edges); all-of reads the first miss", () => {
+  for (const edges of [false, true]) {
+    const g = decideQuote("the Fixed item", [{ phrases: ["Nope", "Fixed"], any: true, edges }]);
+    assert.equal(g.ok, true, `edges=${edges}`);
+    const r = decideQuote("the Fixed item", [{ phrases: ["Nope", "Nada"], any: true, edges }]);
+    assert.equal(r.ok, false);
+    assert.equal(r.kind, "none-found");
+    const all = decideQuote("the Fixed item", [{ phrases: ["Fixed", "Nope", "Nada"], edges }]);
+    assert.equal(all.kind, "phrase-missing");
+    assert.equal(all.measured, "Nope");
+  }
 });

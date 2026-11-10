@@ -466,7 +466,8 @@ export {};
  * bareguard does not load `bareguard.rwx.json` itself (§23.13 decision 4);
  * the caller reads the file and passes its three maps in. An unlisted tool,
  * command, or agent is denied loudly (never asked): rule `rwx.unlisted`. A
- * listed-but-insufficient letter denies with `rwx.denied`; a joined/chained
+ * listed-but-insufficient letter denies with `rwx.denied` (or asks `rwx.ask` when
+ * `rwx.askUnheld` lists it); a joined/chained
  * bash command not listed verbatim denies with `rwx.joined`; a malformed
  * `rwx` config (or a value mutated post-construction into an unusable shape)
  * denies with `rwx.invalid`, following the `<key>.invalid` fail-closed family.
@@ -509,7 +510,8 @@ export {};
  *   step-5 slot rwx already occupies) before allowing an action whose
  *   matched entry's normalized marker is `"loose"` — the letter is still
  *   required first; a letter the agent lacks still denies `rwx.denied`
- *   unchanged. A bare-string entry has no marker and never asks. `"tight"`
+ *   unchanged. A bare-string entry has no marker, so `askOn` never asks for it (`askUnheld`
+ *   can still ask for its letter). `"tight"`
  *   and `"settled"` never ask. Any other value throws at construct time.
  * @property {Array<"r"|"w"|"x">} [askUnheld]  Ruling #70, default `[]`
  *   (unset/`null`/`[]` is byte-identical to before). A matched tool/bash

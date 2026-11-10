@@ -142,7 +142,7 @@ The string field is valid JSON (ruling #75; a bareloop ask). No `strict`.
 - Fields: `field`.
 - Green when `JSON.parse` accepts the whole string: any JSON value, so `1`, `"x"`, `null`, arrays and objects all pass; surrounding whitespace is fine. It checks syntax only, not shape.
 - Example: `{ id: "reply", rule: "jsonValid", field: "text" }`
-- Red: `not-json` when `JSON.parse` throws (bad syntax, an empty string, trailing text). There is no depth cap of its own: deeply nested valid JSON is green. The gap carries NO field text. A missing, unreadable or non-string field is `missing`, `unreadable`, `wrong-type`.
+- Red: `not-json` when `JSON.parse` throws (bad syntax, an empty string, trailing text, a leading BOM U+FEFF). There is no depth cap of its own: deeply nested valid JSON is green. The gap carries NO field text. A missing, unreadable or non-string field is `missing`, `unreadable`, `wrong-type`.
 - Cost: one native `JSON.parse` pass.
 
 ## Numbers

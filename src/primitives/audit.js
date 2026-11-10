@@ -624,7 +624,7 @@ export class Audit {
    * the caller's offset untouched — it only advances on the returned `end`.
    *
    * File identity (file mode): the returned `anchor` is `{dev, ino, len, hash,
-   * atStart, partial}` - the open handle's device/inode and the WHOLE last
+   * partial}` - the open handle's device/inode and the WHOLE last
    * complete line consumed (from the byte after the previous `\n`, or from 0,
    * through its own `\n`), kept as its byte length and a sha256, not as bytes.
    * Passed back on the next call, a different dev/ino (when both are usable;
@@ -708,8 +708,7 @@ export class Audit {
       const whole = Buffer.concat([lastLine, Buffer.from("\n")]);
       const partial = whole.length > ANCHOR_MAX;
       const kept = partial ? whole.subarray(whole.length - ANCHOR_MAX) : whole;
-      const atStart = !partial && consumed === whole.length;
-      return { end: consumed, anchor: { dev: st.dev, ino: st.ino, len: kept.length, hash: createHash("sha256").update(kept).digest("hex"), atStart, partial } };
+      return { end: consumed, anchor: { dev: st.dev, ino: st.ino, len: kept.length, hash: createHash("sha256").update(kept).digest("hex"), partial } };
     } finally {
       await fh.close();
     }

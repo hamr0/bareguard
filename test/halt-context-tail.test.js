@@ -333,7 +333,7 @@ test("identity: delete + recreate + regrow past the offset is rescanned even whe
   } finally { restore(); }
 });
 
-test("identity: same-shaped lines that differ only EARLY in the line (past a 64-byte tail) are told apart", async (t) => {
+test("identity: same-shaped lines that differ only EARLY in the line (the whole line is compared, not a tail) are told apart", async (t) => {
   const { auditPath, mkGate } = await mk(t);
   await fsp.writeFile(auditPath, lineSet(10, 1));
   const g = await mkGate();

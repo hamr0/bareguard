@@ -1639,7 +1639,7 @@ export class Gate {
    * @param {string} checkpoint a checkpoint id in the signed rubric
    * @param {string|object} output the output to grade (a string is the field `text`)
    * @param {{measurements?:object, items?:object, inputs?:object, tables?:object, outputBytes?:(string|Uint8Array)}} [opts] same as the exported `checkStep`; `priorBaselines` is the gate's and is refused here
-   * @returns {Promise<import("./primitives/rubric.js").StepResult>} the verdict, the worker `gaps`, the `fault` (stopped), `full` (including `full.evidence`: for cited checks with `decides`, where in each claim's quote the check read the anchor/value/unit/currency/until/phrase; ruling #66), `rubricSha`, `outputSha`
+   * @returns {Promise<import("./primitives/rubric.js").StepResult>} the verdict, the worker `gaps`, the `fault` (stopped), `full` (including `full.evidence`: for cited checks with `decides`, where in each claim's quote the check read the anchor/value/unit/currency/until/phrase; ruling #66; and `full.matched`: one entry per green `carriesAny` check, always present, `[]` when none; ruling #69), `rubricSha`, `outputSha`
    * @when Reach for this instead of the exported `checkStep` whenever a Gate holds the rubric: it is the only call that makes a verdict real to `gate.check`. Call it each time the agent hands over output at a checkpoint, then let the advance action through `gate.check` carrying `{ type, checkpoint, outputSha }`.
    * @category rubric
    * @signature gate.checkStep(checkpoint: string, output: string|object, opts?: { measurements?: object, items?: object, inputs?: object, tables?: object, outputBytes?: string|Uint8Array }) => Promise<StepResult>
