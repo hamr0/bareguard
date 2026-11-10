@@ -1466,13 +1466,17 @@ Requirements captured from mailproof, a peer project. Nothing here is built. The
 **The flow (decided by hamr with mailproof).**
 
 - Whoever starts the exchange (an agent, or bareguard's humanChannel) sends the question email with its own tools and its own Message-ID.
-- The humanChannel implementation is harness-side; mailproof documents the recipe. It polls mailproof's planned `replyFacts({ messageId })`, which returns a flat fact bundle or null.
-- It runs `checkStep` on the bundle against a user-signed rubric. Green maps to `{decision:"allow"}`. Anything else maps to deny.
+- The humanChannel implementation is harness-side; mailproof documents the recipe. It polls mailproof's planned `replyFacts({ messageId })`, which returns an ARRAY of flat fact bundles (empty when there is no reply). Candidates are only DIRECT replies to the question (In-Reply-To, or the last References entry), earliest captured first. Each bundle carries a `messageKey` so copies of one signed message can be grouped.
+- The adapter groups copies by `messageKey` and runs `checkStep` on each distinct reply against a user-signed rubric. It maps to `{decision:"allow"}` ONLY when at least one reply is green AND none is red. Everything else is deny: no reply, all red, any mix.
+- Why (hamr, 2026-11-10, with mailproof, after their POC F26): fail closed ("not saying is deny"). A later "no, wait", or a forged reply that fails the rubric, blocks approval instead of being outvoted. A noise reply (out-of-office) also blocks and the human is asked again; this is accepted.
+- No bareguard change: `checkStep` grades one output object; the loop lives in the adapter.
 - The agent never decides. bareguard never reads mail and never touches the network.
 
 **The fact bundle (mailproof's; names are indicative and final at their build).** Flat top-level keys, string values only, flags from closed sets, claimed and proven values as sibling keys:
 
-`messageId`, `recordId`, `commit`, `trail`, `from`, `fromDkimAligned` ("pass" | "fail" | "none"), `to`, `cc`, `date`, `subject`, `dkim`, `dmarc`, `spf`, `arc`, `live`, `portable`, `link` ("signed" | "unsigned" | "none"), `text`, `firstLine`, `bodyProven` ("proven" | "unproven"), `quote` ("found" | "not-found" | "inline"), `attachments` (one string).
+`messageId`, `recordId`, `commit`, `trail`, `from`, `fromDkimAligned` ("pass" | "fail" | "none"), `to`, `cc`, `date`, `subject`, `dkim`, `dmarc`, `spf`, `arc`, `live`, `portable`, `link` ("signed" | "unsigned" | "none"), `text`, `firstLine`, `bodyProven` ("proven" | "unproven"), `quote` ("found" | "not-found" | "inline"), `attachments` (one string), `trailing` ("yes" | "no": a reply written below the quote), `messageKey`.
+
+Field notes: multi-value fields (`to`, `cc`, `attachments`) are joined with "," and no space. `fromDkimAligned` is "pass" only when the signature also covers From. `date` and `subject` are the signed value when signed, else the claimed header. `commit` comes from the trail index. `in` compares the whole joined string, so checking one recipient among several needs a rule bareguard does not have (no caller yet).
 
 Why flat strings: rubric rules read only own top-level keys (no dotted paths), and no rule reads a boolean.
 
@@ -2119,7 +2123,7 @@ Status of #30-#47: kept as history. Live and shared with `cited`: #32 (exactly o
 
 **2026-11-09 (mailproof ask; RULED; PARKED, not built)**
 
-74. RULED (hamr, 2026-11-09; requested by mailproof): opt-in `ignoreCase` on `in`/`notIn`, default unchanged. PARKED: built only after mailproof ships `replyFacts` and its POC. The field name, the case-fold method and the `rubricSha` effect are settled at build. Requirements in §5.4.
+74. RULED (hamr, 2026-11-09; requested by mailproof): opt-in `ignoreCase` on `in`/`notIn`, default unchanged. PARKED: built only after mailproof ships `replyFacts` and its POC. The field name, the case-fold method and the `rubricSha` effect are settled at build. Requirements in §5.4. (amendment, hamr 2026-11-10: multi-reply rule, see §5.4)
 
 **2026-11-09 (bareloop ask; RULED; built on feat/four-rules, not released)**
 
