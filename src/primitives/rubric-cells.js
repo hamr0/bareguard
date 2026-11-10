@@ -827,6 +827,8 @@ function runCells(plan, env, ctx) {
       const trueRows = matched(conds);
       const nums = trueRows.map((r) => r.rowNumber);
       expectRows(ctx, "rows", nums);
+      // Both forms in one claim is ambiguous (the old code graded rows and ignored keys): red, pointing at the second field.
+      if (claim.rows !== undefined && claim.keys !== undefined) throw new Bad("claim-malformed", "keys");
       if (claim.rows !== undefined) return compareRowSets(ctx, claimRowList(claim.rows, "rows"), nums);
       if (claim.keys === undefined) throw new Bad("claim-missing", "rows|keys");
       if (kcol < 0) throw new Bad("claim-malformed", "keys");

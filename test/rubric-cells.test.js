@@ -120,6 +120,21 @@ T("rows red non-integer row", rowsOf([{ column: "Amount", cmp: "gt", value: 500 
 T("rows by keys green (amounts, valueKind number)", rowsNum([{ column: "Amount", cmp: "gt", value: 500 }]), tb, { keys: [700, 1200.5] }, "green");
 T("rows by keys red extra amount", rowsNum([{ column: "Amount", cmp: "gt", value: 500 }]), tb, { keys: [700, 1200.5, 300] }, "red", "keys-extra");
 T("rows no claim fields -> red claim-missing", rowsOf([{ column: "Amount", cmp: "gt", value: 500 }]), tb, {}, "red", "claim-missing");
+// A claim carrying BOTH rows and keys is ambiguous: red claim-malformed pointing at `keys` (it used to grade rows and ignore keys).
+const both = (rows, keys) => ({ rows, keys });
+const gt500 = [{ column: "Amount", cmp: "gt", value: 500 }];
+T("rows+keys both present (text keys) -> red claim-malformed", rowsOf(gt500), tb, both([2, 7], ["x"]), "red", "claim-malformed");
+T("rows+keys both present where rows alone is green (the old false green) -> red", rowsOf(gt500), tb, both([2, 7], ["wrong"]), "red", "claim-malformed");
+T("rows+keys both present, both correct -> still red (ambiguous)", rowsNum(gt500), tb, both([2, 7], [700, 1200.5]), "red", "claim-malformed");
+T("rows+keys both present with empty lists -> red", rowsOf(gt500), tb, both([], []), "red", "claim-malformed");
+T("rows only still green", rowsNum(gt500), tb, { rows: [2, 7] }, "green");
+T("keys only still green", rowsNum(gt500), tb, { keys: [700, 1200.5] }, "green");
+T("keys: undefined set explicitly beside rows counts as absent (green, like every claim field)", rowsOf(gt500), tb, { rows: [2, 7], keys: undefined }, "green");
+T("rows: undefined set explicitly beside keys counts as absent (keys graded)", rowsNum(gt500), tb, { rows: undefined, keys: [700, 1200.5] }, "green");
+test("rows+keys both present: the gap points at `keys` and says claim-malformed", () => {
+  const r = runCheck(rowsOf(gt500), tb, both([2, 7], ["wrong"]));
+  assert.deepEqual(r.gaps.map((g) => [g.kind, g.items]), [["claim-malformed", ["keys"]]]);
+});
 T("cond gte (>=300: 2,3,4,7,8)", rowsOf([{ column: "Amount", cmp: "gte", value: 300 }]), tb, { rows: [2, 3, 4, 7, 8] }, "green");
 T("cond gte red (omits boundary 300s)", rowsOf([{ column: "Amount", cmp: "gte", value: 300 }]), tb, { rows: [2, 7] }, "red");
 T("cond lt (<300: only 6; blank not matched)", rowsOf([{ column: "Amount", cmp: "lt", value: 300 }]), tb, { rows: [6] }, "green");
