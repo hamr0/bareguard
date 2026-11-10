@@ -1030,7 +1030,7 @@ judge(input, check, { signal, identity }) -> { quotes: [{ source, quote }], fact
    does not hide the others, so the worker's gap shows every failing decide). A value decide
    **extracts** exactly one value of its `valueKind` (below; zero, two or more, or a malformed token =
    red; unsure = red, Law 1) and **compares** it with its bound exactly (no floats, below). A presence
-   decide is red `phrase-missing` when any of its phrases is absent.
+   decide is red `phrase-missing` when any of its phrases is absent (all-of, the default); with `any: true` it is red `none-found` only when NONE is present (RULED #79).
 
 The check is green only if the judge returned exactly one quote, it is in the source, and EVERY decide
 passes. A decide can only add reds; none is ever dropped to turn a red green. `numbersInQuote` is NOT
@@ -1414,7 +1414,7 @@ These concern the PARKED judge. The open questions of the `cited` pivot are at t
    And whether the judge's `input` should include `output` (this spec passes `{ output, sources }`).
 2. `direction` gains `"below"` and `"above"` (strict `lt`/`gt`); the alternative is to give strict
    compares their own gap kinds. Also: the new optional gap field `anchor`, the new `judged` gap kinds
-   (including `phrase-missing`), the money `unit` field (#43) and the `d<i>:<kind>` item form are SemVer-surface additions.
+   (including `phrase-missing`, and `none-found` on a presence decide with `any: true`, RULED #79), the money `unit` field (#43) and the `d<i>:<kind>` item form are SemVer-surface additions.
 3. (SETTLED, RULED #43: money may sign `unit` instead of `currency`; RULED #65: or both, or lists; see "Extraction: per value kind".)
 4. (SETTLED AT BUILD, RULED #46: the names `decides`, `valueKind`, `value` (the bound), `op`, `lo`/`hi`,
    `anchor`, `phrases`, `unit` are settled in code and the orchestrator reviews them.)
