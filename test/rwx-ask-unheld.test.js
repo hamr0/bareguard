@@ -222,3 +222,52 @@ test("askUnheld: with no humanChannel the ask denies as any ask does today (rule
   assert.equal(d.rule, "rwx.ask");
   assert.match(d.reason, /no humanChannel registered/);
 });
+
+// ─── approved ask: accrual and the post-ask freshness re-check ──────────────
+
+test("askUnheld: an approved unheld-letter action accrues {x:1} against budget.resources.x", async () => {
+  const asked = [];
+  const gate = new Gate({
+    audit: { path: null },
+    rwx: rwxCfg({ askUnheld: ["x"] }),
+    budget: { resources: { x: 1 } },
+    humanChannel: async (e) => {
+      asked.push(e.rule);
+      return e.rule === "rwx.ask" ? { decision: "allow" } : { decision: "deny", reason: "cap" };
+    },
+  });
+  await gate.init();
+  const action = { type: "deploy" };
+  const first = await gate.check(action);
+  assert.equal(first.outcome, "allow");
+  assert.equal(first.rule, "humanChannel.allow");
+  await gate.record(action, {}); // no caller counts: the gate accrues the letter itself
+  const second = await gate.check(action);
+  assert.equal(second.outcome, "deny");
+  assert.equal(second.rule, "budget.resource.x");
+  assert.equal(second.severity, "halt");
+  assert.deepEqual(asked, ["rwx.ask", "budget.resource.x"]);
+});
+
+test("askUnheld: a gate.add() tighten during a pending ask ends rwx.tightened, audited", async () => {
+  let release;
+  const humanReleased = new Promise((r) => { release = r; });
+  let entered;
+  const humanEntered = new Promise((r) => { entered = r; });
+  const gate = gateFor({ askUnheld: ["w", "x"] }, async () => {
+    entered();
+    await humanReleased;
+    return { decision: "allow" };
+  });
+  await gate.init();
+  const pending = gate.check({ type: "write", path: X, args: {} });
+  await humanEntered; // the check is now blocked on the human
+  await gate.add({ write: "x" }); // tighten the SAME key w -> x while the ask is open
+  release();
+  const d = await pending;
+  assert.equal(d.outcome, "deny");
+  assert.equal(d.rule, "rwx.tightened");
+  const lines = await gate.readAudit();
+  assert.ok(lines.some((l) => l.phase === "gate" && l.rule === "rwx.tightened" && l.decision === "deny"));
+  assert.ok(!lines.some((l) => l.phase === "gate" && l.rule === "humanChannel.allow"));
+});

@@ -742,17 +742,47 @@ function wideDiff(cols, rowsN) {
   const rows = (h) => Array.from({ length: rowsN }, (_, r) => ({ rowNumber: r + 2, cells: h.map((name) => (name === "K" ? `k${r}` : `${name}-${r}`)) }));
   return { b: { header, rows: rows(header) }, a: { header: header.slice().reverse(), rows: rows(header.slice().reverse()) } };
 }
+// Load-robust: a growth RATIO (n vs 2n columns, best of 5) catches a quadratic alignment without a machine-dependent wall bound;
+// the ratio is only asserted when the base run is long enough to measure (>= 10 ms). The full-cap runs keep a generous ceiling only.
+const wideRun = (op, cols, rowsN) => {
+  const { b, a } = wideDiff(cols, rowsN);
+  const t0 = performance.now();
+  const r = runCheck({ id: "d", op, before: "b", after: "a", keyColumn: "K", ...(op === "onlyColumnsChanged" ? { columns: [] } : {}) }, { b, a }, undefined);
+  return { r, ms: performance.now() - t0 };
+};
+const bestWide = (op, cols, rowsN) => {
+  let best = Infinity;
+  for (let i = 0; i < 5; i++) {
+    const { r, ms } = wideRun(op, cols, rowsN);
+    assert.equal(r.verdict, "green", "same cells under a reordered header: nothing changed");
+    best = Math.min(best, ms);
+    if (ms > 1000) break; // far past noise: more repetitions only slow a regression's failure down
+  }
+  return best;
+};
 for (const [cols, rowsN] of [[TABLE_MAX_CELLS, 1], [TABLE_MAX_CELLS / 2, 2]]) {
   for (const op of ["onlyColumnsChanged", "untouchedIdentical"]) {
-    test(`wide diff at the cap: ${rowsN} row(s) x ${cols} columns, reversed header, ${op}, finishes within a loose bound`, () => {
-      const { b, a } = wideDiff(cols, rowsN);
-      const t0 = performance.now();
-      const r = runCheck({ id: "d", op, before: "b", after: "a", keyColumn: "K", ...(op === "onlyColumnsChanged" ? { columns: [] } : {}) }, { b, a }, undefined);
-      const ms = performance.now() - t0;
+    test(`wide diff at the cap: ${rowsN} row(s) x ${cols} columns, reversed header, ${op}, finishes within a generous ceiling`, () => {
+      const { r, ms } = wideRun(op, cols, rowsN);
       assert.equal(r.verdict, "green", "same cells under a reordered header: nothing changed");
-      assert.ok(ms < 5000, `${op} on ${rowsN}x${cols} took ${ms.toFixed(0)} ms (linear should be ~100-300 ms; the indexOf version took minutes)`);
+      assert.ok(ms < 60_000, `${op} on ${rowsN}x${cols} took ${ms.toFixed(0)} ms (the indexOf version took minutes)`);
     });
   }
+}
+for (const op of ["onlyColumnsChanged", "untouchedIdentical"]) {
+  test(`wide diff scaling: doubling the columns about doubles the time, reversed header, ${op}`, () => {
+    bestWide(op, 5000, 1); // warm
+    // A concurrent test file can steal the CPU mid-measurement, so a noisy pair is measured again (up to 4 pairs): linear passes on
+    // any clean pair, a quadratic fails every pair. A pair already past 2 s is far beyond noise, so it is not retried.
+    let t1 = 0, t2 = 0;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      t1 = bestWide(op, 25_000, 1);
+      t2 = bestWide(op, 50_000, 1);
+      if (t1 < 10 || t2 / t1 < 4 || t2 > 2000) break;
+    }
+    if (t1 >= 10) assert.ok(t2 / t1 < 4, `${op}: 50k columns took ${t2.toFixed(0)} ms vs ${t1.toFixed(0)} ms for 25k (ratio ${(t2 / t1).toFixed(2)}, linear is ~2, quadratic ~4+)`);
+    assert.ok(t2 < 60_000, `${op}: ${t2.toFixed(0)} ms`);
+  });
 }
 test("wide diff: a changed cell is still found after the Map alignment (column and row named)", () => {
   const { b, a } = wideDiff(2000, 2);

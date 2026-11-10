@@ -461,9 +461,18 @@ test("growth ratio: doubling a whitespace-flood body roughly doubles the time", 
     for (let i = 0; i < 3; i++) m = Math.min(m, (await timed(phrases, body(n), false)).ms);
     return m;
   };
-  await best(20_000); // warm
-  const t1 = await best(200_000);
-  const t2 = await best(400_000);
-  assert.ok(t2 / t1 < 4, `400K took ${t2.toFixed(0)}ms vs ${t1.toFixed(0)}ms for 200K (ratio ${(t2 / t1).toFixed(2)}, linear is ~2, quadratic ~4+)`);
+  await best(200_000); // warm
+  // A concurrent test file can steal the CPU mid-measurement, so a noisy pair is measured again (up to 4 pairs): linear passes on any
+  // clean pair, a quadratic fails every pair. The ratio is asserted only when the base run is long enough to measure (>= 10 ms);
+  // a faster machine falls back to the absolute bound below.
+  let t1 = 0, t2 = 0;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    t1 = await best(4_000_000);
+    t2 = await best(8_000_000);
+    if (t1 < 10 || t2 / t1 < 4 || t2 > 2000) break;
+  }
+  if (t1 >= 10) {
+    assert.ok(t2 / t1 < 4, `8M took ${t2.toFixed(0)}ms vs ${t1.toFixed(0)}ms for 4M (ratio ${(t2 / t1).toFixed(2)}, linear is ~2, quadratic ~4+)`);
+  }
   assert.ok(t2 < 20_000, `${t2.toFixed(0)}ms`);
 });
