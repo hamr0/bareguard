@@ -45,6 +45,13 @@ test("without ignoreCase (absent or false) a case-differing list stays legal", a
   assert.equal((await run("in", ["Mashy", "mashy"], "mashy", { ignoreCase: false })).verdict, "green");
 });
 
+test("ignoreCase: false does NOT fold: a case-differing value is red for in, green for notIn", async () => {
+  assert.equal((await run("in", ["approved."], "Approved.", { ignoreCase: false })).verdict, "red");
+  assert.equal((await run("notIn", ["approved."], "Approved.", { ignoreCase: false })).verdict, "green");
+  assert.equal((await run("in", ["approved."], "Approved.", { ignoreCase: true })).verdict, "green");
+  assert.equal((await run("notIn", ["approved."], "Approved.", { ignoreCase: true })).verdict, "red");
+});
+
 test("notIn default: Approved. vs [approved.] -> GREEN (case differs)", async () => {
   assert.equal((await run("notIn", ["approved."], "Approved.")).verdict, "green");
   assert.equal((await run("notIn", ["Approved."], "Approved.")).verdict, "red");

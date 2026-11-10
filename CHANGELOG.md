@@ -3,6 +3,16 @@
 All notable changes to bareguard are documented here. Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [SemVer](https://semver.org/).
 
 
+## [0.34.1] - 2026-11-10
+
+### Changed
+
+- **TIGHTENING (ruling #80): a `cells` claim that carries both of its alternative forms is now red `claim-malformed`, signed or not.** A `rows` claim carrying both `rows` and `keys` is red `claim-malformed` with item `keys`; a `topN` claim carrying both `rows` and `values` is red `claim-malformed` with item `values` (the second field in each case). A field set to `undefined` counts as absent. Before, the first form was graded and the other field silently ignored, so a claim could be green on `rows` while its `keys` were wrong. For `topN` the check runs before `fewer-than-n`, so a both-fields claim is `claim-malformed` even when the table has fewer than `n` rows. Rule names and gap shapes are unchanged and no spec field is added, so every signed spec keeps its `rubricSha`. fwdloop scanned 3,859 saved files and found 0 such claims.
+
+### Fixed
+
+- **JSDoc/doc accuracy (no behaviour change).** `gate.checkStep`'s `@returns` now names `full.matched` (one entry per green `carriesAny` check, `[]` when none; ruling #69); the `rwx` JSDoc and `types.js` note that `rwx.askUnheld` is the one exception to "a listed-but-insufficient letter denies" and that `askOn` never asks for a bare-string entry. The internal audit-scan anchor no longer carries a field nothing read (`atStart`); it is not on the public surface.
+
 ## [0.34.0] - 2026-11-10
 
 ### Added

@@ -332,7 +332,8 @@ function readAskUnheld(cfg) {
  * `tools.allowlist` when `rwx` config is present (mutually exclusive,
  * enforced at construct time by {@link assertRwxConfig}). Deny by absence,
  * loudly: an unlisted tool, unlisted command, or unlisted agent denies
- * (never asks, never guesses); a listed-but-insufficient letter denies too.
+ * (never asks, never guesses); a listed-but-insufficient letter denies too
+ * (unless `rwx.askUnheld` lists it, see below).
  * Attaches `rwxLetters` (the agent's full grant) and, once a specific
  * tool/command has been matched, `rwxLetter` (the letter that matched) and,
  * for an object-form entry, `rwxMarker` (its normalized `tight`/`loose`/

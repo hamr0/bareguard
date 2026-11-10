@@ -142,7 +142,7 @@ The string field is valid JSON (ruling #75; a bareloop ask). No `strict`.
 - Fields: `field`.
 - Green when `JSON.parse` accepts the whole string: any JSON value, so `1`, `"x"`, `null`, arrays and objects all pass; surrounding whitespace is fine. It checks syntax only, not shape.
 - Example: `{ id: "reply", rule: "jsonValid", field: "text" }`
-- Red: `not-json` when `JSON.parse` throws (bad syntax, an empty string, trailing text). There is no depth cap of its own: deeply nested valid JSON is green. The gap carries NO field text. A missing, unreadable or non-string field is `missing`, `unreadable`, `wrong-type`.
+- Red: `not-json` when `JSON.parse` throws (bad syntax, an empty string, trailing text, a leading BOM U+FEFF). There is no depth cap of its own: deeply nested valid JSON is green. The gap carries NO field text. A missing, unreadable or non-string field is `missing`, `unreadable`, `wrong-type`.
 - Cost: one native `JSON.parse` pass.
 
 ## Numbers
@@ -199,8 +199,8 @@ Red from the claim: `claim-missing`, `claim-malformed`, `claim-unreadable`, `cla
 | `max` | largest number in a column (`{ value }`) | `value-mismatch`, `no-values` |
 | `found` | a needle is (or is not) a cell of a column (`{ value: boolean }`) | `value-mismatch` |
 | `lookup` | the cell on the one row whose key column equals `keyValue` (`{ value }`) | `value-mismatch`, `lookup-not-unique` |
-| `rows` | the claimed rows (or keys) equal the matching rows (`{ rows }` or `{ keys }`) | `rows-missing`, `rows-extra`, `rows-duplicated`, `keys-extra` |
-| `topN` | the n largest or smallest rows or values (`{ rows }` or `{ values }`) | `rows-missing`, `rows-extra`, `rows-duplicated`, `tied-rows-missing`, `topn-values-mismatch`, `fewer-than-n` |
+| `rows` | the claimed rows (or keys) equal the matching rows (`{ rows }` or `{ keys }`, not both: a claim with both is `claim-malformed`) | `rows-missing`, `rows-extra`, `rows-duplicated`, `keys-extra` |
+| `topN` | the n largest or smallest rows or values (`{ rows }` or `{ values }`, not both: a claim with both is `claim-malformed`) | `rows-missing`, `rows-extra`, `rows-duplicated`, `tied-rows-missing`, `topn-values-mismatch`, `fewer-than-n` |
 | `uniqueCount` | distinct non-blank values of a column (`{ value }`) | `value-mismatch` |
 | `duplicates` | values (and rows) that occur more than once (`{ values }` and/or `{ rows }`) | `values-missing`, `values-extra`, `values-duplicated`, `rows-missing`, `rows-extra`, `rows-duplicated` |
 | `groupTotals` | sum of a column per group (`{ totals: [{ group, total }] }`) | `groups-missing`, `groups-extra`, `groups-duplicated`, `group-total-mismatch` |

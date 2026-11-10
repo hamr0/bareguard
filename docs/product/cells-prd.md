@@ -196,7 +196,7 @@ bounds and `between` dates are always signed as `YYYY-MM-DD`, whatever the colum
 Ops: `daysSince` with `cell` claims `{value}`; with `column` it is the per-row mode and claims `{days: {"<row>": n}}`. `band` takes signed
 `bands: [{name, gt|gte, lt|lte}]` and claims `{bands: {"<row>": "<name>"}}`; with `asOf` the column is a date column and the banded number is the
 days since. `diff.untouchedIdentical` takes `exceptKeys` (keys, not row numbers: a delete may renumber). `rowsAdded`/`rowsDeleted` require `n`.
-`rows` by keys: `{keys: [...]}` compared as text (`valueKind: "number"` reads numbers); `lookup` requires `valueKind` (text, number, date).
+`rows` by keys: `{keys: [...]}` compared as text (`valueKind: "number"` reads numbers); a `rows` claim carrying BOTH `rows` and `keys` is red `claim-malformed` (item `keys`), never graded as one and ignoring the other (a key set to `undefined` counts as absent); `topN` takes `{rows}` or `{values}`, and a claim carrying BOTH is likewise red `claim-malformed` (item `values`; `undefined` counts as absent); `lookup` requires `valueKind` (text, number, date).
 `onlyColumnsChanged` and `untouchedIdentical` compare ALIGNED keys only and do NOT notice added or deleted rows; the signer pairs them with `rowsAdded` / `rowsDeleted`.
 A removed column is always red in `diff`; a new column is red unless listed (`onlyColumnsChanged`) or unless the op is `newColumnRule`.
 

@@ -5,7 +5,7 @@ import { Gate, createRubric, checkStep, renderGaps, rubricVocabulary, rubricSha,
 import { describeRule } from "../src/primitives/rubric.js";
 import { readCellNumber, TABLE_MAX_CELLS, TABLE_MAX_CHARS, CLAIM_MAX } from "../src/primitives/rubric-cells.js";
 import { runCheck, mk } from "./_cells-helpers.js";
-import { makeTmpDir, cleanup, uniquePaths } from "./_helpers.js";
+import { makeTmpDir, cleanup, uniquePaths, measurePair } from "./_helpers.js";
 
 // cells / table / diff at the rubric surface: the number reader, tolerance and cap boundaries, createRubric refusals,
 // the vocabulary <-> implementation proof per op, rendering, hostile opts.tables, and the Gate.
@@ -742,17 +742,40 @@ function wideDiff(cols, rowsN) {
   const rows = (h) => Array.from({ length: rowsN }, (_, r) => ({ rowNumber: r + 2, cells: h.map((name) => (name === "K" ? `k${r}` : `${name}-${r}`)) }));
   return { b: { header, rows: rows(header) }, a: { header: header.slice().reverse(), rows: rows(header.slice().reverse()) } };
 }
+// Load-robust: a growth RATIO (n vs 2n columns, best of 5) catches a quadratic alignment without a machine-dependent wall bound;
+// the ratio is only asserted when the base run is long enough to measure (>= 10 ms). The full-cap runs keep a generous ceiling only.
+const wideRun = (op, cols, rowsN) => {
+  const { b, a } = wideDiff(cols, rowsN);
+  const t0 = performance.now();
+  const r = runCheck({ id: "d", op, before: "b", after: "a", keyColumn: "K", ...(op === "onlyColumnsChanged" ? { columns: [] } : {}) }, { b, a }, undefined);
+  return { r, ms: performance.now() - t0 };
+};
+const bestWide = (op, cols, rowsN) => {
+  let best = Infinity;
+  for (let i = 0; i < 5; i++) {
+    const { r, ms } = wideRun(op, cols, rowsN);
+    assert.equal(r.verdict, "green", "same cells under a reordered header: nothing changed");
+    best = Math.min(best, ms);
+    if (ms > 1000) break; // far past noise: more repetitions only slow a regression's failure down
+  }
+  return best;
+};
 for (const [cols, rowsN] of [[TABLE_MAX_CELLS, 1], [TABLE_MAX_CELLS / 2, 2]]) {
   for (const op of ["onlyColumnsChanged", "untouchedIdentical"]) {
-    test(`wide diff at the cap: ${rowsN} row(s) x ${cols} columns, reversed header, ${op}, finishes within a loose bound`, () => {
-      const { b, a } = wideDiff(cols, rowsN);
-      const t0 = performance.now();
-      const r = runCheck({ id: "d", op, before: "b", after: "a", keyColumn: "K", ...(op === "onlyColumnsChanged" ? { columns: [] } : {}) }, { b, a }, undefined);
-      const ms = performance.now() - t0;
+    test(`wide diff at the cap: ${rowsN} row(s) x ${cols} columns, reversed header, ${op}, finishes within a generous ceiling`, () => {
+      const { r, ms } = wideRun(op, cols, rowsN);
       assert.equal(r.verdict, "green", "same cells under a reordered header: nothing changed");
-      assert.ok(ms < 5000, `${op} on ${rowsN}x${cols} took ${ms.toFixed(0)} ms (linear should be ~100-300 ms; the indexOf version took minutes)`);
+      assert.ok(ms < 60_000, `${op} on ${rowsN}x${cols} took ${ms.toFixed(0)} ms (the indexOf version took minutes)`);
     });
   }
+}
+for (const op of ["onlyColumnsChanged", "untouchedIdentical"]) {
+  test(`wide diff scaling: doubling the columns about doubles the time, reversed header, ${op}`, async () => {
+    bestWide(op, 5000, 1); // warm
+    const { t1, t2 } = await measurePair(() => bestWide(op, 25_000, 1), () => bestWide(op, 50_000, 1));
+    if (t1 >= 10) assert.ok(t2 / t1 < 4, `${op}: 50k columns took ${t2.toFixed(0)} ms vs ${t1.toFixed(0)} ms for 25k (ratio ${(t2 / t1).toFixed(2)}, linear is ~2, quadratic ~4+)`);
+    assert.ok(t2 < 60_000, `${op}: ${t2.toFixed(0)} ms`);
+  });
 }
 test("wide diff: a changed cell is still found after the Map alignment (column and row named)", () => {
   const { b, a } = wideDiff(2000, 2);

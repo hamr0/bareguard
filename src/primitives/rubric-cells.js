@@ -827,6 +827,8 @@ function runCells(plan, env, ctx) {
       const trueRows = matched(conds);
       const nums = trueRows.map((r) => r.rowNumber);
       expectRows(ctx, "rows", nums);
+      // Both forms in one claim is ambiguous (the old code graded rows and ignored keys): red, pointing at the second field.
+      if (claim.rows !== undefined && claim.keys !== undefined) throw new Bad("claim-malformed", "keys");
       if (claim.rows !== undefined) return compareRowSets(ctx, claimRowList(claim.rows, "rows"), nums);
       if (claim.keys === undefined) throw new Bad("claim-missing", "rows|keys");
       if (kcol < 0) throw new Bad("claim-malformed", "keys");
@@ -866,6 +868,8 @@ function runCells(plan, env, ctx) {
       const order = plan.order ?? "desc";
       const ties = plan.ties ?? "any";
       const claim = claimOf(["rows", "values"]);
+      // Both forms in one claim is ambiguous (the old code graded values and ignored rows): red claim-malformed pointing at the second field, before any other outcome.
+      if (claim.rows !== undefined && claim.values !== undefined) throw new Bad("claim-malformed", "values");
       const vs = numbers(conds.length ? matched(conds) : rows, i, plan.column, ctx);
       vs.sort((a, b) => (order === "desc" ? b.v - a.v : a.v - b.v));
       if (vs.length < n) return gap(ctx, "fewer-than-n", undefined, { measured: vs.length });

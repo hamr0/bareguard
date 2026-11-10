@@ -566,7 +566,7 @@ test("maxLineWords: AT / UNDER / OVER, markers are not words, worst line reporte
   assert.equal(await L("  • a b c", 3), "ok");
   assert.equal(await L("* a b c", 3), "ok");
   assert.equal((await L("- a b c d", 3)).measured, 4);
-    assert.equal((await L("- - a b", 2)).measured, 3, "second dash is a word");
+  assert.equal((await L("- - a b", 2)).measured, 3, "second dash is a word");
   assert.equal(await L("- ## a b", 2), "ok", "a # run after the list marker is not a word");
   assert.equal(await L("1. # a", 1), "ok");
   assert.equal(await L("## a b", 2), "ok");

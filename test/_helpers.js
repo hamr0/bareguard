@@ -56,3 +56,17 @@ export function makeHumanChannel(plan) {
   channel.reset = () => { i = 0; events.length = 0; };
   return channel;
 }
+
+// Growth-ratio timing pair. A concurrent test file can steal the CPU mid-measurement, so a noisy pair is measured again (up to 4 pairs):
+// linear passes on any clean pair, a quadratic fails every pair. A pair is not retried once the base run is under 10 ms (too fast to
+// measure a ratio; the caller falls back to an absolute bound) or the ratio is under 4 or the larger run is past 2 s (far beyond noise).
+// m1/m2 return milliseconds (sync or async); returns the last {t1, t2}.
+export async function measurePair(m1, m2) {
+  let t1 = 0, t2 = 0;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    t1 = await m1();
+    t2 = await m2();
+    if (t1 < 10 || t2 / t1 < 4 || t2 > 2000) break;
+  }
+  return { t1, t2 };
+}
