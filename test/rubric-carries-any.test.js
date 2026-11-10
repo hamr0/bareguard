@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { Gate, createRubric, checkStep, renderGaps, rubricVocabulary, rubricSha } from "../src/index.js";
-import { makeTmpDir, cleanup, uniquePaths } from "./_helpers.js";
+import { makeTmpDir, cleanup, uniquePaths, measurePair } from "./_helpers.js";
 
 // carriesAny (RULED #69): an any-of phrase rule on word edges. Cases from fwdloop's POC F98.
 
@@ -462,15 +462,8 @@ test("growth ratio: doubling a whitespace-flood body roughly doubles the time", 
     return m;
   };
   await best(200_000); // warm
-  // A concurrent test file can steal the CPU mid-measurement, so a noisy pair is measured again (up to 4 pairs): linear passes on any
-  // clean pair, a quadratic fails every pair. The ratio is asserted only when the base run is long enough to measure (>= 10 ms);
-  // a faster machine falls back to the absolute bound below.
-  let t1 = 0, t2 = 0;
-  for (let attempt = 0; attempt < 4; attempt++) {
-    t1 = await best(4_000_000);
-    t2 = await best(8_000_000);
-    if (t1 < 10 || t2 / t1 < 4 || t2 > 2000) break;
-  }
+  // The ratio is asserted only when the base run is long enough to measure (>= 10 ms); a faster machine falls back to the absolute bound below.
+  const { t1, t2 } = await measurePair(() => best(4_000_000), () => best(8_000_000));
   if (t1 >= 10) {
     assert.ok(t2 / t1 < 4, `8M took ${t2.toFixed(0)}ms vs ${t1.toFixed(0)}ms for 4M (ratio ${(t2 / t1).toFixed(2)}, linear is ~2, quadratic ~4+)`);
   }

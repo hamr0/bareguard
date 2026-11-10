@@ -182,6 +182,11 @@ test("topN rows+values both present: the gap points at `values` and says claim-m
   const r = runCheck(tn3(), tb, { rows: [2, 7, 3], values: [1200.5, 700, 300] });
   assert.deepEqual(r.gaps.map((g) => [g.kind, g.items]), [["claim-malformed", ["values"]]]);
 });
+test("topN rows+values both present with fewer rows than n: still red claim-malformed at `values`, not fewer-than-n", () => {
+  const r = runCheck(base("topN", { column: "Amount", n: 20 }), tb, { rows: [2], values: [1200.5] });
+  assert.equal(r.verdict, "red");
+  assert.deepEqual(r.gaps.map((g) => [g.kind, g.items]), [["claim-malformed", ["values"]]]);
+});
 T("topN asc (bottom 1 = row 6, 50)", base("topN", { column: "Amount", n: 1, order: "asc" }), tb, { rows: [6] }, "green");
 T("topN n larger than data -> red fewer-than-n", base("topN", { column: "Amount", n: 20 }), tb, { rows: [2] }, "red", "fewer-than-n");
 

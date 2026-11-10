@@ -5,7 +5,7 @@ import { Gate, createRubric, checkStep, renderGaps, rubricVocabulary, rubricSha,
 import { describeRule } from "../src/primitives/rubric.js";
 import { readCellNumber, TABLE_MAX_CELLS, TABLE_MAX_CHARS, CLAIM_MAX } from "../src/primitives/rubric-cells.js";
 import { runCheck, mk } from "./_cells-helpers.js";
-import { makeTmpDir, cleanup, uniquePaths } from "./_helpers.js";
+import { makeTmpDir, cleanup, uniquePaths, measurePair } from "./_helpers.js";
 
 // cells / table / diff at the rubric surface: the number reader, tolerance and cap boundaries, createRubric refusals,
 // the vocabulary <-> implementation proof per op, rendering, hostile opts.tables, and the Gate.
@@ -770,16 +770,9 @@ for (const [cols, rowsN] of [[TABLE_MAX_CELLS, 1], [TABLE_MAX_CELLS / 2, 2]]) {
   }
 }
 for (const op of ["onlyColumnsChanged", "untouchedIdentical"]) {
-  test(`wide diff scaling: doubling the columns about doubles the time, reversed header, ${op}`, () => {
+  test(`wide diff scaling: doubling the columns about doubles the time, reversed header, ${op}`, async () => {
     bestWide(op, 5000, 1); // warm
-    // A concurrent test file can steal the CPU mid-measurement, so a noisy pair is measured again (up to 4 pairs): linear passes on
-    // any clean pair, a quadratic fails every pair. A pair already past 2 s is far beyond noise, so it is not retried.
-    let t1 = 0, t2 = 0;
-    for (let attempt = 0; attempt < 4; attempt++) {
-      t1 = bestWide(op, 25_000, 1);
-      t2 = bestWide(op, 50_000, 1);
-      if (t1 < 10 || t2 / t1 < 4 || t2 > 2000) break;
-    }
+    const { t1, t2 } = await measurePair(() => bestWide(op, 25_000, 1), () => bestWide(op, 50_000, 1));
     if (t1 >= 10) assert.ok(t2 / t1 < 4, `${op}: 50k columns took ${t2.toFixed(0)} ms vs ${t1.toFixed(0)} ms for 25k (ratio ${(t2 / t1).toFixed(2)}, linear is ~2, quadratic ~4+)`);
     assert.ok(t2 < 60_000, `${op}: ${t2.toFixed(0)} ms`);
   });
