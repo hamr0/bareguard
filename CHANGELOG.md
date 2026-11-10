@@ -3,6 +3,14 @@
 All notable changes to bareguard are documented here. Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [SemVer](https://semver.org/).
 
 
+## [0.34.0] - 2026-11-10
+
+### Added
+
+- **`in` / `notIn` gain an optional boolean `ignoreCase` (ruling #74; a mailproof ask).** `{ id, rule: "in" | "notIn", field, values, ignoreCase? }`. Absent or `false` is unchanged: an exact, case-sensitive whole-value match, so every existing spec keeps its `rubricSha` and behaviour. `true` compares `toLowerCase()` of the field with `toLowerCase()` of each signed value, still a whole-value match: no trim, no Unicode normalisation (a composed and a decomposed `é` stay different) and no punctuation stripping (`Approved.` never matches `approved`). `toLowerCase` is context-sensitive for Greek capital sigma (`ΟΔΥΣΣΕΥΣ` folds to a final `ς`), so sign the final-sigma form. A non-boolean `ignoreCase` fails `createRubric`; with `ignoreCase: true`, signed `values` that are equal after the fold fail `createRubric` (the same message as `carriesAny`'s). Red kinds and gaps are unchanged.
+  - Why: mailproof's email approval gate (the `humanChannel` reply is a rubric check on the reply's first line). The approval word stays exact and case-sensitive by default, like a password; case-insensitive only by opt-in. Frozen against mailproof's real Gmail reply POC.
+  - `rubricVocabulary.rules.in` and `.notIn` carry a worked example (`ignoreCase: true`), run green by the tests. On the SemVer surface from 0.34.0: the `ignoreCase` field and its `createRubric` refusals.
+
 ## [0.33.0] - 2026-11-10
 
 ### Added

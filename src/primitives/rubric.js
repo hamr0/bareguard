@@ -254,6 +254,10 @@ const STRICT = { type: "boolean", required: false, default: false };
 const FIELD = { type: "name", required: true, nonBlank: true, maxLength: MAX_NAME_LEN };
 const COUNT = { type: "integer", required: true, min: 1, max: null };
 const LIST = { type: "string-list", required: true, minItems: 1, itemType: "string", nonBlank: true, itemMaxLength: MAX_SIGNED_LEN };
+// RULED #74: `in`/`notIn` opt-in case fold (toLowerCase on both sides, whole-value equality; absent or false = exact, byte-for-byte as before)
+const IGNORE_CASE = { type: "boolean", required: false, default: false };
+// a worked example, run through checkStep by the tests: `output` is green against `check`
+const IN_EXAMPLE = (rule, value) => ({ check: { id: "first-line", rule, field: "firstLine", values: ["approved."], ignoreCase: true }, output: { firstLine: value } });
 const OPT_LIST = { ...LIST, required: false };
 // RULED #69: `carriesAny` phrases are matched on word edges, so the signer's list is tighter than LIST (see checkCarryPhrases).
 const CARRY_PHRASES = { type: "string-list", required: true, minItems: 1, maxItems: 50, itemType: "string", nonBlank: true, itemMaxLength: 200, carryPhrases: true };
@@ -894,7 +898,10 @@ function runIn(want) {
     if (r.unreadable) return red("unreadable");
     if (r.missing) return red("missing");
     if (typeof r.value !== "string") return red("wrong-type", { measured: typeName(r.value) });
-    const inList = c.values.includes(r.value);
+    // RULED #74: ignoreCase true folds both sides with toLowerCase (whole-value equality; no trim, no NFC)
+    const fold = c.ignoreCase === true;
+    const folded = fold ? r.value.toLowerCase() : r.value;
+    const inList = fold ? c.values.some((v) => v.toLowerCase() === folded) : c.values.includes(r.value);
     if (inList === want) return OK;
     return red(want ? "not-in" : "forbidden", { measured: clip(r.value), ...boundItems(c.values, true) });
   };
@@ -1368,8 +1375,8 @@ const RULES = {
   carriesAny: { fields: { field: FIELD, phrases: CARRY_PHRASES, strict: STRICT }, run: runCarriesAny },
   carriesNone: { fields: { field: FIELD, phrases: CARRY_PHRASES, strict: STRICT }, run: runCarriesNone },
   blockLines: { fields: { field: FIELD, size: COUNT, phrases: LIST, strict: STRICT }, run: runBlockLines },
-  in: { fields: { field: FIELD, values: LIST }, run: runIn(true) },
-  notIn: { fields: { field: FIELD, values: LIST }, run: runIn(false) },
+  in: { fields: { field: FIELD, values: LIST, ignoreCase: IGNORE_CASE }, run: runIn(true), example: IN_EXAMPLE("in", "APPROVED.") },
+  notIn: { fields: { field: FIELD, values: LIST, ignoreCase: IGNORE_CASE }, run: runIn(false), example: IN_EXAMPLE("notIn", "REJECTED.") },
   atMost: {
     fields: { field: FIELD, value: { type: "string", required: true, nonBlank: true, maxLength: MAX_SIGNED_LEN }, order: { ...LIST, unique: true } },
     run: runAtMost,
@@ -1521,6 +1528,7 @@ export const rubricVocabulary = deepFreeze({
         description: describeRule(rule),
         fields: JSON.parse(JSON.stringify(RULES[rule].fields)),
         ...(RULES[rule].exactlyOne ? { exactlyOne: [...RULES[rule].exactlyOne] } : {}),
+        ...(RULES[rule].example ? { example: JSON.parse(JSON.stringify(RULES[rule].example)) } : {}),
         ...(RULES[rule].ops ? { ops: JSON.parse(JSON.stringify(RULES[rule].ops)) } : {}),
       },
     ]),
@@ -1628,6 +1636,11 @@ function checkMonthNames(d, v, where) {
       throw fail(`${where}[${i}]`, `must be a month name: letters (with marks) and an optional trailing ".", no space or digit, at most ${d.itemMaxLength} characters`);
     }
   });
+  noFoldDuplicates(v, where);
+}
+
+/** Refuse a signed list whose entries are equal after `toLowerCase` (carriesAny, month names, `in`/`notIn` with ignoreCase). */
+function noFoldDuplicates(v, where) {
   if (new Set(v.map((n) => n.toLowerCase())).size !== v.length) throw fail(where, "must not contain duplicates (compared ignoring letter case)");
 }
 
@@ -1646,7 +1659,7 @@ function checkCarryPhrases(d, v, where) {
     }
     if (/[^\S ]/.test(s) || s.includes("  ")) throw fail(w, "may hold only single ASCII spaces as whitespace (no tab, newline or double space)");
   });
-  if (new Set(v.map((s) => s.toLowerCase())).size !== v.length) throw fail(where, "must not contain duplicates (compared ignoring letter case)");
+  noFoldDuplicates(v, where);
 }
 
 function checkValue(d, v, where) {
@@ -1733,6 +1746,7 @@ function validateCheck(c, where, inputNames) {
     }
     if (d.ref === "input" && !inputNames.has(v)) throw fail(`${where}.${name}`, `names input ${JSON.stringify(clip(v))}, which is not in spec.inputs`);
   }
+  if ((rule === "in" || rule === "notIn") && c.ignoreCase === true) noFoldDuplicates(c.values, `${where}.values`);
   if (def.exactlyOne) {
     const have = def.exactlyOne.filter((k) => c[k] !== undefined);
     if (have.length !== 1) throw fail(where, `needs exactly one of ${def.exactlyOne.join(", ")}`);

@@ -422,8 +422,16 @@ test("rubricVocabulary lists decides on cited with its shapes and conditions; th
 
 test("rubricVocabulary: every EXISTING rule, the common/bounds/checkpoint blocks and the rest of cited are byte-identical to before", () => {
   const h = (x) => sha(JSON.stringify(x));
-  const { cited, cells: _c, table: _t, diff: _df, carriesAny: _ca, listItems: _li, maxParagraphs: _mp, maxLineWords: _mw, jsonValid: _jv, carriesNone: _cn, ...others } = rubricVocabulary.rules; // cells/table/diff are new (cells-prd.md); carriesAny is new (#69); listItems is new (#73); maxParagraphs, maxLineWords, jsonValid, carriesNone are new (#75-#78)
-  assert.equal(h(others), "1643c3f202e7a6a7cfa06be705536e96194bdd9c2ddb832063ae41b77400909a");
+  const { cited, cells: _c, table: _t, diff: _df, carriesAny: _ca, listItems: _li, maxParagraphs: _mp, maxLineWords: _mw, jsonValid: _jv, carriesNone: _cn, in: inRule, notIn: notInRule, ...others } = rubricVocabulary.rules; // in/notIn gain the additive ignoreCase (#74), pinned below; cells/table/diff are new (cells-prd.md); carriesAny is new (#69); listItems is new (#73); maxParagraphs, maxLineWords, jsonValid, carriesNone are new (#75-#78)
+  assert.equal(h(others), "6bfa83bd66e3b74ce198bf14ad86185805f8a2811b3d482bee6035ba5bdc7a8d"); // every other rule, sha of the vocabulary entries as on 3bb777e
+  // in/notIn (#74): the entries minus the additive ignoreCase field, its description part and the worked example are as on 3bb777e
+  const strip = (r) => {
+    const { example: _e, ...rest } = JSON.parse(JSON.stringify(r));
+    delete rest.fields.ignoreCase;
+    rest.description = rest.description.replace(", ignoreCase?: boolean = false", "");
+    return rest;
+  };
+  assert.equal(h({ in: strip(inRule), notIn: strip(notInRule) }), "4c12bf87f67c6adb5c8525065cb2b7b74638ed770084e0ec1dff92168ced300d");
   const { decides: _d, ...citedFields } = cited.fields;
   assert.equal(h(cited.fields.claims), h({ type: "name", required: true, nonBlank: true, maxLength: 128 }));
   assert.deepEqual(citedFields, {
