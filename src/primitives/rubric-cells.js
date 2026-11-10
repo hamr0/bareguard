@@ -877,6 +877,8 @@ function runCells(plan, env, ctx) {
       const need2 = n - better.length; // how many of the tied pool belong
       expectRows(ctx, "rows", better);
       expect(ctx, "tied", tied.length > need2 ? { rows: tied.slice(0, EXPECTED_ROWS), take: need2 } : null);
+      // Both forms in one claim is ambiguous (the old code graded values and ignored rows): red, pointing at the second field.
+      if (claim.rows !== undefined && claim.values !== undefined) throw new Bad("claim-malformed", "values");
       if (claim.values !== undefined) {
         const cv = claim.values.map(claimNumber).sort((a, b) => (order === "desc" ? b - a : a - b));
         const tv = vs.slice(0, n).map((x) => x.v);

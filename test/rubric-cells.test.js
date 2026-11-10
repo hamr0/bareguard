@@ -167,6 +167,21 @@ T("topN tie ties:all needs every tied row", base("topN", { column: "Amount", n: 
 T("topN tie ties:all red with one", base("topN", { column: "Amount", n: 3, ties: "all" }), tb, { rows: [2, 7, 3] }, "red");
 T("topN by values green", base("topN", { column: "Amount", n: 3 }), tb, { values: [1200.5, 700, 300] }, "green");
 T("topN by values red", base("topN", { column: "Amount", n: 3 }), tb, { values: [1200.5, 700, 50] }, "red");
+// A claim carrying BOTH rows and values is ambiguous: red claim-malformed pointing at `values` (it used to grade values and ignore rows).
+const tn3 = () => base("topN", { column: "Amount", n: 3 });
+T("topN rows+values both present, values alone green -> red claim-malformed (the old false green)", tn3(), tb, { rows: [9, 9, 9], values: [1200.5, 700, 300] }, "red", "claim-malformed");
+T("topN rows+values both present, both correct -> still red (ambiguous)", tn3(), tb, { rows: [2, 7, 3], values: [1200.5, 700, 300] }, "red", "claim-malformed");
+T("topN rows+values both present with empty lists -> red", tn3(), tb, { rows: [], values: [] }, "red", "claim-malformed");
+T("topN rows only still green", tn3(), tb, { rows: [2, 7, 3] }, "green");
+T("topN rows only still red when wrong", tn3(), tb, { rows: [2, 7, 6] }, "red", "rows-extra");
+T("topN values only still green", tn3(), tb, { values: [1200.5, 700, 300] }, "green");
+T("topN values only still red when wrong", tn3(), tb, { values: [1200.5, 700, 50] }, "red", "topn-values-mismatch");
+T("topN values: undefined beside rows counts as absent (rows graded, green)", tn3(), tb, { rows: [2, 7, 3], values: undefined }, "green");
+T("topN rows: undefined beside values counts as absent (values graded, green)", tn3(), tb, { rows: undefined, values: [1200.5, 700, 300] }, "green");
+test("topN rows+values both present: the gap points at `values` and says claim-malformed", () => {
+  const r = runCheck(tn3(), tb, { rows: [2, 7, 3], values: [1200.5, 700, 300] });
+  assert.deepEqual(r.gaps.map((g) => [g.kind, g.items]), [["claim-malformed", ["values"]]]);
+});
 T("topN asc (bottom 1 = row 6, 50)", base("topN", { column: "Amount", n: 1, order: "asc" }), tb, { rows: [6] }, "green");
 T("topN n larger than data -> red fewer-than-n", base("topN", { column: "Amount", n: 20 }), tb, { rows: [2] }, "red", "fewer-than-n");
 
