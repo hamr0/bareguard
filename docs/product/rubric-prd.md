@@ -238,7 +238,7 @@ keys.
 | `carriesAny` | `field`, `phrases:[...]`, `strict?` | at least ONE listed phrase is present on word edges (RULED #69) |
 | `carriesNone` | `field`, `phrases:[...]`, `strict?` | NO listed phrase is present on word edges (RULED #76) |
 | `blockLines` | `field`, `size`, `phrases:[...]`, `strict?` | see below |
-| `in` / `notIn` | `field`, `values:[...]` | value `===` one of / none of |
+| `in` / `notIn` | `field`, `values:[...]`, `ignoreCase?` | value `===` one of / none of; `ignoreCase: true` folds both sides with `toLowerCase` (RULED #74) |
 | `atMost` | `field`, `value`, `order:[...]` | ordered-enum rank <= value's |
 | `max` / `min` | `field`, `value` | finite number <= / >= |
 | `cited` | `claims` field, `source` input name, `decides?:[...]` (the shared decide core, §5.2; RULED #48, built df699b9, unreleased) | every claim's quote passes `quoteIn` against the frozen input AND `numbersInQuote`; with `decides`, also every decide on that quote AND the claim's typed `values` equal the values extracted from the quote (§4.6) |
@@ -1457,9 +1457,9 @@ be specified further as real pages come in (the first, bareloop's Google Flights
   page count per label (F1 makes several per URL normal); what counts as "the same host" (redirects, subdomains); whether the registration
   call is a new gate method (harness-only, like `recordAccept`). None of this is decided.
 
-### 5.4 mailproof email approval: `ignoreCase` on `in`/`notIn` (PARKED until mailproof delivers; NOT built; shape may change)
+### 5.4 mailproof email approval: `ignoreCase` on `in`/`notIn` (BUILT, ruling #74; the mailproof bundle below is mailproof's, names indicative)
 
-Requirements captured from mailproof, a peer project. Nothing here is built. The shape may change after mailproof delivers (see "Gate to build").
+Requirements captured from mailproof, a peer project. The `ignoreCase` field below is built (ruling #74); the fact bundle and the flow are mailproof's and stay indicative until their build.
 
 **Who.** mailproof is an npm package (2.2.0). It shadows a mailbox over IMAP and records every email in and out: DKIM-signed headers, the archived signer key, DMARC/SPF/ARC verdicts and attachment hashes. It re-verifies offline. It never sends email.
 
@@ -1474,9 +1474,9 @@ Requirements captured from mailproof, a peer project. Nothing here is built. The
 
 **The fact bundle (mailproof's; names are indicative and final at their build).** Flat top-level keys, string values only, flags from closed sets, claimed and proven values as sibling keys:
 
-`messageId`, `recordId`, `commit`, `trail`, `from`, `fromDkimAligned` ("pass" | "fail" | "none"), `to`, `cc`, `date`, `subject`, `dkim`, `dmarc`, `spf`, `arc`, `live`, `portable`, `link` ("signed" | "unsigned" | "none"), `text`, `firstLine`, `bodyProven` ("proven" | "unproven"), `quote` ("found" | "not-found" | "inline"), `attachments` (one string), `trailing` ("yes" | "no": a reply written below the quote), `messageKey`.
+`messageId`, `recordId`, `commit`, `trail`, `captured`, `from`, `fromRaw`, `fromDkimAligned` ("pass" | "fail" | "none"), `to`, `toRaw`, `cc`, `ccRaw`, `date`, `dateSource` ("signed" | "claimed" | "none"), `subject`, `subjectSource` ("signed" | "claimed" | "none"), `dkim` ("pass" | "fail" | "none"), `dmarc`, `spf`, `arc` (each "pass" | "fail" | "none" | "other"), `live`, `portable` (each "verified" | "forwarded" | "authorized" | "unverified"), `link` ("signed" | "unsigned" | "none"), `text`, `textSource` ("content" | "none" | "over-limit"), `firstLine`, `bodyProven` ("proven" | "unproven"), `quote` ("found" | "not-found" | "inline"), `attachments` (one string), `trailing` ("yes" | "no": a reply written below the quote), `messageKey`.
 
-Field notes: multi-value fields (`to`, `cc`, `attachments`) are joined with "," and no space. `fromDkimAligned` is "pass" only when the signature also covers From. `date` and `subject` are the signed value when signed, else the claimed header. `commit` comes from the trail index. `in` compares the whole joined string, so checking one recipient among several needs a rule bareguard does not have (no caller yet).
+Field notes: the addresses `from`, `to` and `cc` are lower-cased by mailproof, and the `fromRaw`, `toRaw` and `ccRaw` siblings carry them as written. Multi-value fields (`to`, `cc`, `attachments`) are joined with "," and no space. `fromDkimAligned` is "pass" only when the signature also covers From. `date` and `subject` are the signed value when signed, else the claimed header. `commit` comes from the trail index. `in` compares the whole joined string, so checking one recipient among several needs a rule bareguard does not have (no caller yet).
 
 Why flat strings: rubric rules read only own top-level keys (no dotted paths), and no rule reads a boolean.
 
@@ -1492,11 +1492,15 @@ Why flat strings: rubric rules read only own top-level keys (no dotted paths), a
 
 Replay protection comes from `link` "signed": the request's Message-ID sits in a DKIM-signed In-Reply-To/References. Rejected: a one-time per-ask code, because it cannot live in a signed spec.
 
-**The bareguard ask (PARKED).** `in` and `notIn` compare exactly and case-sensitively. So "Ana@Company.com" against a signed "ana@company.com" is red `not-in`, and a genuine approval is denied. Planned: an opt-in field (working name `ignoreCase: true`) on `in`/`notIn`.
+**The bareguard change (BUILT, ruling #74).** `in` and `notIn` compare exactly and case-sensitively by default. So "Ana@Company.com" against a signed "ana@company.com" is red `not-in`. The new optional boolean `ignoreCase` on `in`/`notIn` is an opt-in.
 
-- The default is unchanged, so every already-signed rubric keeps its verdicts.
-- It is still a whole-value match.
-- The exact case-fold method, the field name and the `rubricSha` effect are settled at build.
+- Absent or `false`: byte-for-byte the old behaviour, and every already-signed rubric keeps its exact `rubricSha` (a test pins two shas computed on the previous release's source).
+- `true`: bareguard compares `field.toLowerCase()` with each `value.toLowerCase()` (`String.prototype.toLowerCase`, locale-independent, the same fold `mustCarry` and `carriesAny` use). It is still a WHOLE-VALUE equality: no trim, no Unicode normalisation (NFC), no punctuation stripping. A composed "\u00e9" and a decomposed "e\u0301" stay different even with `ignoreCase`; sign the form the producer emits.
+- A non-boolean `ignoreCase` makes `createRubric` throw with `path` `<check>.ignoreCase`. With `ignoreCase: true`, signed values that are equal after the fold (for example ["Mashy","mashy"]) make `createRubric` throw at `<check>.values` (same rule as `carriesAny`); without it the list rules are unchanged.
+- Gaps are the same kinds and shapes as before (`not-in` / `forbidden` with `measured` and the signed `items`); they show the field and the signed values as written, not folded. Only strings are compared: a non-string field stays red `wrong-type`.
+- Cost stays linear; no cap is added. `rubricVocabulary.rules.in.example` and `.notIn.example` are worked examples that the tests run green.
+
+**Decision (hamr, 2026-11-10): the approval word is exact and case-sensitive by default, like a password or a code.** `ignoreCase` is an opt-in that folds case only: "Approved." does not match "approved" even with `ignoreCase`, because the period (and every other character) must still match. mailproof's POC cases are frozen as tests: `in` `firstLine` ["APPROVE"] on "Approved." is red; ["approved"] with `ignoreCase` is red; ["Approved."] is green; ["APPROVED."] with `ignoreCase` is green; `notIn` ["approved."] with `ignoreCase` is red; `in` ["Mashy","mashy"] with `ignoreCase` is refused.
 
 **Known limits (decided by hamr on mailproof's side, recorded here).**
 
@@ -1505,7 +1509,7 @@ Replay protection comes from `link` "signed": the request's Message-ID sits in a
 
 **Audit proof reference: no bareguard change.** The approval audit line records only `{phase:"approval", action, decision, reason, newCap}`. Extra keys in the reply are dropped. A proof reference rides in `reason` ("mailproof:<recordId>@<commit>") and/or in `gate.annotate({surface:false, …, meta})`. The humanChannel event carries no `aid`. Open, only if mailproof asks: a first-class proof-ref field, and an `aid` on the event.
 
-**Gate to build.** mailproof delivers `replyFacts` and its POC. It then sends (a) a real bundle sample, (b) the POC results, (c) which fields need case-insensitive matching. Then: settle the shape with mailproof, build, mailproof tests the branch, release. See ruling #74 (§12).
+**Gate.** The shape was settled with mailproof after their POC (F26/F27) and is built (ruling #74, §12). Next: mailproof tests the branch, then release.
 
 ## 6. Verdicts, the advance and the human moments
 
@@ -2123,7 +2127,7 @@ Status of #30-#47: kept as history. Live and shared with `cited`: #32 (exactly o
 
 **2026-11-09 (mailproof ask; RULED; PARKED, not built)**
 
-74. RULED (hamr, 2026-11-09; requested by mailproof): opt-in `ignoreCase` on `in`/`notIn`, default unchanged. PARKED: built only after mailproof ships `replyFacts` and its POC. The field name, the case-fold method and the `rubricSha` effect are settled at build. Requirements in §5.4. (amendment, hamr 2026-11-10: multi-reply rule, see §5.4)
+74. RULED (hamr, 2026-11-09; built 2026-11-10 after mailproof's POC F26/F27): optional boolean `ignoreCase` on `in`/`notIn`. Absent or `false` is byte-for-byte the old behaviour and every existing spec keeps its exact `rubricSha`. `true` compares `field.toLowerCase()` with each `value.toLowerCase()` as a whole-value equality (no trim, no NFC, no punctuation stripping; only strings are compared). A non-boolean `ignoreCase`, or signed values equal after the fold, make `createRubric` throw. Gaps unchanged (the field and signed values as written). No new cap. Details in §5.4. (amendment, hamr 2026-11-10: multi-reply rule, see §5.4)
 
 **2026-11-09 (bareloop ask; RULED; built on feat/four-rules, not released)**
 

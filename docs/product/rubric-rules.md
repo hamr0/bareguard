@@ -124,9 +124,9 @@ Non-empty lines are grouped in blocks of `size`; every listed phrase must appear
 - Red: `zero-lines`, `not-multiple` (line count not divisible by `size`), `block-missing` (items like `block 2:To`); the last two can be joined.
 
 ### `in` / `notIn`
-A string field equals one of / none of the signed `values` (exact `===`).
-- Fields: `field`, `values`.
-- Example: `{ id: "status", rule: "in", field: "status", values: ["done", "blocked"] }`
+A string field equals one of / none of the signed `values` (exact `===`, case-sensitive). The optional boolean `ignoreCase: true` compares `toLowerCase()` of the field with `toLowerCase()` of each value instead: still a whole-value match (no trim, no Unicode normalisation, no punctuation stripping, so "Approved." never matches "approved"). With it, signed values equal after the fold make `createRubric` refuse; a non-boolean value is refused. Absent or `false` changes nothing, including the `rubricSha`. Gaps show the field and signed values as written.
+- Fields: `field`, `values`, `ignoreCase?`.
+- Example: `{ id: "status", rule: "in", field: "status", values: ["done", "blocked"] }`; case-insensitive: `{ id: "ok", rule: "in", field: "firstLine", values: ["approved."], ignoreCase: true }`
 - Red: `not-in` (`in`) / `forbidden` (`notIn`); also `missing`, `unreadable`, `wrong-type`.
 
 ### `atMost`
