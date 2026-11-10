@@ -3,6 +3,17 @@
 All notable changes to bareguard are documented here. Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [SemVer](https://semver.org/).
 
 
+## [0.33.0] - 2026-11-10
+
+### Added
+
+- **`cited` presence decides gain `any` and `edges` (ruling #79; a bareloop ask, BG-4).** A presence decide `{ phrases }` takes two optional booleans; a spec that signs neither keeps its exact `rubricSha` and behaviour.
+  - `any: true` is green when at least one phrase is in the quote (default: every phrase must be there, red `phrase-missing`). When none is, the cited item is red `none-found` (item `#<i>:d<j>:none-found`), with no phrase in it.
+  - `edges: true` finds each phrase with `carriesAny`'s word-edge matcher instead of a case-insensitive substring, so `Changed` is not found in `unchanged`. With `edges`, phrases follow `carriesAny`'s phrase rules: each starts and ends with a letter or digit, only single spaces inside, and no two are equal ignoring case. A non-boolean `any`/`edges`, or `any`/`edges` on a value decide, fails `createRubric`.
+  - Evidence spans: one `phrase` span per found phrase (its first occurrence by the same matcher).
+  - Why: bareloop's real changelog pages had "changed" inside "unchanged" (a substring false green), and 10 of 17 checks its offer POC could not build were "one of these words".
+  - `rubricVocabulary` carries a worked example (`any: true, edges: true`), run green by the tests. On the SemVer surface from 0.33.0: the two decide fields and the `none-found` item.
+
 ## [0.32.0] - 2026-11-09
 
 ### Added
