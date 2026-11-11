@@ -422,7 +422,7 @@ test("rubricVocabulary lists decides on cited with its shapes and conditions; th
 
 test("rubricVocabulary: every EXISTING rule, the common/bounds/checkpoint blocks and the rest of cited are byte-identical to before", () => {
   const h = (x) => sha(JSON.stringify(x));
-  const { cited, cells: _c, table: _t, diff: _df, carriesAny: _ca, listItems: _li, maxParagraphs: _mp, maxLineWords: _mw, jsonValid: _jv, carriesNone: _cn, in: inRule, notIn: notInRule, ...others } = rubricVocabulary.rules; // in/notIn gain the additive ignoreCase (#74), pinned below; cells/table/diff are new (cells-prd.md); carriesAny is new (#69); listItems is new (#73); maxParagraphs, maxLineWords, jsonValid, carriesNone are new (#75-#78)
+  const { cited, cells: _c, table: _t, diff: _df, carriesAny: _ca, listItems: _li, maxListItems: _xl, minListItems: _nl, maxParagraphs: _mp, maxLineWords: _mw, jsonValid: _jv, carriesNone: _cn, in: inRule, notIn: notInRule, ...others } = rubricVocabulary.rules; // in/notIn gain the additive ignoreCase (#74), pinned below; cells/table/diff are new (cells-prd.md); carriesAny is new (#69); listItems is new (#73); maxParagraphs, maxLineWords, jsonValid, carriesNone are new (#75-#78)
   assert.equal(h(others), "6bfa83bd66e3b74ce198bf14ad86185805f8a2811b3d482bee6035ba5bdc7a8d"); // every other rule, sha of the vocabulary entries as on 3bb777e
   // in/notIn (#74): the entries minus the additive ignoreCase field, its description part and the worked example are as on 3bb777e
   const strip = (r) => {
@@ -440,7 +440,7 @@ test("rubricVocabulary: every EXISTING rule, the common/bounds/checkpoint blocks
     text: { type: "explanation", required: false },
   });
   const { schema, common: allCommon, bounds: allBounds, checkpoint, foundational } = rubricVocabulary;
-  const common = { ...allCommon, rule: { ...allCommon.rule, enum: allCommon.rule.enum.filter((r) => !["carriesAny", "listItems", "maxParagraphs", "maxLineWords", "jsonValid", "carriesNone"].includes(r)) } }; // carriesAny (#69) and listItems (#73) are the additive enum entries
+  const common = { ...allCommon, rule: { ...allCommon.rule, enum: allCommon.rule.enum.filter((r) => !["carriesAny", "listItems", "maxListItems", "minListItems", "maxParagraphs", "maxLineWords", "jsonValid", "carriesNone"].includes(r)) } }; // carriesAny (#69) and listItems (#73) are the additive enum entries
   // quoteMaxChars is the one additive bounds entry (hamr-approved); every earlier bound stays byte-identical (carriesAny has no bound, #69 amendment 3)
   const { quoteMaxChars, ...bounds } = allBounds;
   assert.equal(quoteMaxChars, 4000, "bounds.quoteMaxChars is the 4000-char quote cap (red quote-too-long with decides: see the quote-too-long test)");
@@ -448,7 +448,7 @@ test("rubricVocabulary: every EXISTING rule, the common/bounds/checkpoint blocks
   assert.equal(h({ schema, common, bounds, checkpoint, foundational }), "1b8b6b0cb9924bb53c47a6784007d463a47ac4589c708ca128e1fdad418354c9");
   assert.ok(cited.description.startsWith("cited({ id, claims: non-blank string, max 128 chars, source: non-blank string, max 128 chars, decides?: "));
   assert.ok(cited.description.endsWith(", text?: string (the signer's explanation; never decides) })"));
-  assert.deepEqual(Object.keys(rubricVocabulary.rules), "nonEmpty,maxWords,minWords,maxLines,listItems,maxParagraphs,maxLineWords,jsonValid,sections,sectionOrder,sectionWords,allowedKeys,mustCarry,carriesAny,carriesNone,blockLines,in,notIn,atMost,max,min,cited,complete,commandExit,notWorse,patternAbsent,filesChanged,cells,table,diff".split(","));
+  assert.deepEqual(Object.keys(rubricVocabulary.rules), "nonEmpty,maxWords,minWords,maxLines,listItems,maxListItems,minListItems,maxParagraphs,maxLineWords,jsonValid,sections,sectionOrder,sectionWords,allowedKeys,mustCarry,carriesAny,carriesNone,blockLines,in,notIn,atMost,max,min,cited,complete,commandExit,notWorse,patternAbsent,filesChanged,cells,table,diff".split(","));
 });
 
 // --- parseClaimValue (the pure parser) ---------------------------------------------------------------

@@ -253,6 +253,8 @@ export function rubricSha(spec) {
 const STRICT = { type: "boolean", required: false, default: false };
 const FIELD = { type: "name", required: true, nonBlank: true, maxLength: MAX_NAME_LEN };
 const COUNT = { type: "integer", required: true, min: 1, max: null };
+// RULED #81: `maxListItems` alone signs 0 ("no bullets"); every other count field keeps COUNT (min 1)
+const COUNT_FROM_ZERO = { type: "integer", required: true, min: 0, max: null };
 const LIST = { type: "string-list", required: true, minItems: 1, itemType: "string", nonBlank: true, itemMaxLength: MAX_SIGNED_LEN };
 // RULED #74: `in`/`notIn` opt-in case fold (toLowerCase on both sides, whole-value equality; absent or false = exact, byte-for-byte as before)
 const IGNORE_CASE = { type: "boolean", required: false, default: false };
@@ -1364,6 +1366,8 @@ const RULES = {
   minWords: { fields: { field: FIELD, value: COUNT, strict: STRICT }, run: runCountRule((t) => countWords(t, false), "at-least", (n, v) => n < v) },
   maxLines: { fields: { field: FIELD, value: COUNT }, run: runCountRule(countNonEmptyLines, "at-most", (n, v) => n > v) },
   listItems: { fields: { field: FIELD, value: COUNT }, run: runListItems },
+  maxListItems: { fields: { field: FIELD, value: COUNT_FROM_ZERO }, run: runCountRule(countOuterListItems, "at-most", (n, v) => n > v), example: { check: { id: "bullets", rule: "maxListItems", field: "text", value: 2 }, output: { text: "Jobs:\n- Prune the tree\n  - before the frost\n- Fix the tap" } } },
+  minListItems: { fields: { field: FIELD, value: COUNT }, run: runCountRule(countOuterListItems, "at-least", (n, v) => n < v), example: { check: { id: "bullets", rule: "minListItems", field: "text", value: 2 }, output: { text: "Jobs:\n- Prune the tree\n- Fix the tap\n- Turn the compost" } } },
   maxParagraphs: { fields: { field: FIELD, value: COUNT }, run: runMaxParagraphs },
   maxLineWords: { fields: { field: FIELD, value: COUNT }, run: runMaxLineWords },
   jsonValid: { fields: { field: FIELD }, run: runJsonValid },

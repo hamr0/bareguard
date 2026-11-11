@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { createRubric, checkStep } from "../src/index.js";
+import { createRubric, checkStep, renderGaps, rubricVocabulary, rubricSha } from "../src/index.js";
 
 // ---------------------------------------------------------------------------
 // checkStep — shape rules over the output (docs/product/rubric-prd.md §4.1)
@@ -450,6 +450,94 @@ test("listItems: a missing or non-string field carries limit only (no direction)
   assert.equal(g.direction, undefined);
   const w = (await run([{ id: "k", rule: "listItems", field: "f", value: 3 }], { f: 5 })).gaps[0];
   assert.deepEqual([w.kind, w.measured, w.limit, w.direction], ["wrong-type", "type:number", 3, undefined]);
+});
+
+// --- maxListItems / minListItems (ruling #81) ---------------------------------
+
+const bullets = (n, tag = "x") => Array.from({ length: n }, (_, i) => `- ${tag}${i}`).join("\n");
+
+test("maxListItems: AT / UNDER / OVER (4 / 3 / 5); red over carries measured, limit, direction", async () => {
+  for (const [n, verdict] of [[3, "green"], [4, "green"], [5, "red"], [9, "red"]]) {
+    assert.equal((await one("maxListItems", { value: 4 }, bullets(n, "job"))).verdict, verdict, `${n} items`);
+  }
+  const g = gap(await one("maxListItems", { value: 4 }, `Intro line\n${bullets(7, "c")}`));
+  assert.deepEqual(g, { key: "cp:k", checkpoint: "cp", check: "maxListItems", id: "k", field: "text", kind: "over", measured: 7, limit: 4, direction: "at-most" });
+});
+
+test("minListItems: AT / UNDER / OVER (3 / 2 / 4); red under carries measured, limit, direction", async () => {
+  for (const [n, verdict] of [[2, "red"], [3, "green"], [4, "green"], [12, "green"]]) {
+    assert.equal((await one("minListItems", { value: 3 }, bullets(n, "t"))).verdict, verdict, `${n} items`);
+  }
+  const g = gap(await one("minListItems", { value: 3 }, bullets(2, "q")));
+  assert.deepEqual(g, { key: "cp:k", checkpoint: "cp", check: "minListItems", id: "k", field: "text", kind: "under", measured: 2, limit: 3, direction: "at-least" });
+});
+
+test("maxListItems: value 0 = no bullets; zero items is green under any max; minListItems 1 with no list is red under measured 0", async () => {
+  assert.equal((await one("maxListItems", { value: 0 }, "Just prose, no list here.")).verdict, "green");
+  const g = gap(await one("maxListItems", { value: 0 }, "Prose\n- lone bullet"));
+  assert.deepEqual([g.kind, g.measured, g.limit, g.direction], ["over", 1, 0, "at-most"]);
+  assert.equal((await one("maxListItems", { value: 3 }, "Prose only, a paragraph.")).verdict, "green");
+  const m = gap(await one("minListItems", { value: 1 }, "Prose only, a paragraph."));
+  assert.deepEqual([m.kind, m.measured, m.limit, m.direction], ["under", 0, 1, "at-least"]);
+});
+
+test("max/minListItems count only OUTER items (same predicate as listItems)", async () => {
+  const nested = "- a\n  - a1\n  - a2\n- b\n  - b1\n  - b2\n- c";
+  assert.equal((await one("maxListItems", { value: 3 }, nested)).verdict, "green", "3 outer + 4 sub");
+  assert.equal((await one("maxListItems", { value: 2 }, nested)).verdict, "red");
+  assert.equal((await one("minListItems", { value: 3 }, nested)).verdict, "green");
+  assert.equal((await one("minListItems", { value: 4 }, nested)).verdict, "red", "sub-bullets do not lift the count");
+  assert.equal(gap(await one("minListItems", { value: 4 }, nested)).measured, 3);
+  assert.equal((await one("maxListItems", { value: 2 }, "1. one\n2) two\n3. three\n1.5 x\n-x")).verdict, "red", "ordered items count, non-items do not");
+  assert.equal(gap(await one("maxListItems", { value: 1 }, "1. one\n2) two\n3. three\n1.5 x\n-x")).measured, 3);
+});
+
+test("max/minListItems: a missing or wrong-type field carries limit AND direction", async () => {
+  for (const [rule, dir] of [["maxListItems", "at-most"], ["minListItems", "at-least"]]) {
+    const m = (await run([{ id: "k", rule, field: "nope", value: 2 }], { text: "x" })).gaps[0];
+    assert.deepEqual([m.kind, m.limit, m.direction], ["missing", 2, dir], rule);
+    const w = (await run([{ id: "k", rule, field: "f", value: 2 }], { f: 5 })).gaps[0];
+    assert.deepEqual([w.kind, w.measured, w.limit, w.direction], ["wrong-type", "type:number", 2, dir], rule);
+  }
+});
+
+test("max/minListItems: createRubric bounds (max accepts 0; min refuses 0; negative and non-integer refused for both)", () => {
+  const make = (rule, value) => createRubric({ schema: 1, goal: "g", checkpoints: { cp: { gating: true, checks: [{ id: "k", rule, field: "text", value }] } } });
+  assert.doesNotThrow(() => make("maxListItems", 0));
+  assert.doesNotThrow(() => make("maxListItems", 7));
+  assert.doesNotThrow(() => make("minListItems", 1));
+  assert.throws(() => make("minListItems", 0), /integer >= 1/);
+  for (const rule of ["maxListItems", "minListItems"]) for (const v of [-1, 1.5, "2", NaN, null, undefined]) assert.throws(() => make(rule, v), Error, `${rule} ${String(v)}`);
+  assert.throws(() => make("maxListItems", -1), /integer >= 0/);
+  assert.throws(() => make("listItems", 0), /integer >= 1/, "listItems keeps min 1");
+  assert.throws(() => make("maxWords", 0), /integer >= 1/, "COUNT unchanged for the other rules");
+});
+
+test("max/minListItems: renderGaps sentences for each red", async () => {
+  const over = await one("maxListItems", { value: 2 }, bullets(5, "r"));
+  const under = await one("minListItems", { value: 4 }, bullets(1, "s"));
+  assert.equal(renderGaps(over.gaps), '["cp:k","maxListItems","over","text",5,2,"at-most",null,null]');
+  assert.equal(renderGaps(under.gaps), '["cp:k","minListItems","under","text",1,4,"at-least",null,null]');
+});
+
+test("max/minListItems: vocabulary lists both rules; maxListItems.value is min 0, minListItems.value min 1; worked examples run green", async () => {
+  const v = rubricVocabulary.rules;
+  assert.deepEqual(v.maxListItems.fields.value, { type: "integer", required: true, min: 0, max: null });
+  assert.deepEqual(v.minListItems.fields.value, { type: "integer", required: true, min: 1, max: null });
+  assert.deepEqual(v.listItems.fields.value, { type: "integer", required: true, min: 1, max: null });
+  assert.match(v.maxListItems.description, /value: integer >= 0/);
+  assert.match(v.minListItems.description, /value: integer >= 1/);
+  for (const rule of ["maxListItems", "minListItems"]) {
+    const ex = v[rule].example;
+    assert.equal(ex.check.rule, rule);
+    const r = await checkStep(createRubric({ schema: 1, goal: "g", checkpoints: { cp: { gating: true, checks: [ex.check] } } }), "cp", ex.output);
+    assert.equal(r.verdict, "green", rule);
+  }
+});
+
+test("max/minListItems: an existing spec's rubricSha is unchanged by the new rules", () => {
+  const spec = { schema: 1, goal: "g", checkpoints: { cp: { gating: true, checks: [{ id: "k", rule: "listItems", field: "text", value: 3 }, { id: "w", rule: "maxWords", field: "text", value: 50 }] } } };
+  assert.equal(rubricSha(createRubric(spec)), "41498d80e039a9fa5c3ee39c44e9b9d8a50c6b825eebf403433656814c093e06");
 });
 
 // --- jsonValid / carriesNone / maxParagraphs / maxLineWords (rulings #75-#78) ----------------
