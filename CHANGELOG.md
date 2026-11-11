@@ -3,6 +3,16 @@
 All notable changes to bareguard are documented here. Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [SemVer](https://semver.org/).
 
 
+## [0.35.0] - 2026-11-11
+
+### Added
+
+- **`maxListItems` and `minListItems`: inclusive bounds on the number of outer list items (ruling #81; asked by bareloop and fwdloop).** Two new rules, `{ id, rule: "maxListItems" | "minListItems", field, value }`. They count exactly as `listItems` does (the outer reading only, so sub-bullets never count); `listItems` itself is unchanged and stays an exact count. Both are inclusive.
+  - `maxListItems` is green when the outer item count `n` is at most `value`, else red `over` (`measured`, `limit`, `direction: "at-most"`). `value` is an integer >= 0; `value: 0` means "no bullets" and is allowed on this rule only. A field with no list is 0 items, so it is green.
+  - `minListItems` is green when `n` is at least `value`, else red `under` (`measured`, `limit`, `direction: "at-least"`). `value` is an integer >= 1 (0 would always be green). Zero items against `value: 1` is red `under` with `measured: 0`.
+  - A missing, unreadable or wrong-type field is a gap that carries `limit` and `direction`, as with the other count rules. A bad `value` fails `createRubric`.
+  - These are new rule names only, so every existing spec keeps its `rubricSha` and behaviour. Both rules carry a worked example in `rubricVocabulary`.
+
 ## [0.34.1] - 2026-11-10
 
 ### Changed
