@@ -129,7 +129,7 @@ Three roles:
 | Kind | Rule | Checks |
 |---|---|---|
 | Always on | `happened` | The output exists: non-empty text, or an object with a key. |
-| Size | `nonEmpty`, `maxWords`/`minWords`, `maxLines`, `maxParagraphs`, `maxLineWords`, `listItems` | Field has content; word, line, paragraph or words-per-line count within a bound; exactly N outer list items. |
+| Size | `nonEmpty`, `maxWords`/`minWords`, `maxLines`, `maxParagraphs`, `maxLineWords`, `listItems`, `maxListItems`/`minListItems` | Field has content; word, line, paragraph or words-per-line count within a bound; exactly N, at most N or at least N outer list items. |
 | Shape | `sections`, `sectionOrder`, `sectionWords`, `allowedKeys` | Headings present and in order; words per section; no unlisted object keys. |
 | Words | `mustCarry`, `carriesAny`, `carriesNone`, `blockLines`, `in`/`notIn`, `atMost` | All phrases carried; at least one phrase on word edges; none on word edges; per-block phrases; value in or out of a list (exact; opt-in `ignoreCase`); rank cap. |
 | Format | `jsonValid` | The field parses as JSON. |
