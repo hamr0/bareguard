@@ -253,6 +253,8 @@ export function rubricSha(spec) {
 const STRICT = { type: "boolean", required: false, default: false };
 const FIELD = { type: "name", required: true, nonBlank: true, maxLength: MAX_NAME_LEN };
 const COUNT = { type: "integer", required: true, min: 1, max: null };
+// RULED #81: `maxListItems` alone signs 0 ("no bullets"); every other count field keeps COUNT (min 1)
+const COUNT_FROM_ZERO = { type: "integer", required: true, min: 0, max: null };
 const LIST = { type: "string-list", required: true, minItems: 1, itemType: "string", nonBlank: true, itemMaxLength: MAX_SIGNED_LEN };
 // RULED #74: `in`/`notIn` opt-in case fold (toLowerCase on both sides, whole-value equality; absent or false = exact, byte-for-byte as before)
 const IGNORE_CASE = { type: "boolean", required: false, default: false };
@@ -1364,6 +1366,8 @@ const RULES = {
   minWords: { fields: { field: FIELD, value: COUNT, strict: STRICT }, run: runCountRule((t) => countWords(t, false), "at-least", (n, v) => n < v) },
   maxLines: { fields: { field: FIELD, value: COUNT }, run: runCountRule(countNonEmptyLines, "at-most", (n, v) => n > v) },
   listItems: { fields: { field: FIELD, value: COUNT }, run: runListItems },
+  maxListItems: { fields: { field: FIELD, value: COUNT_FROM_ZERO }, run: runCountRule(countOuterListItems, "at-most", (n, v) => n > v), example: { check: { id: "bullets", rule: "maxListItems", field: "text", value: 2 }, output: { text: "Jobs:\n- Prune the tree\n  - before the frost\n- Fix the tap" } } },
+  minListItems: { fields: { field: FIELD, value: COUNT }, run: runCountRule(countOuterListItems, "at-least", (n, v) => n < v), example: { check: { id: "bullets", rule: "minListItems", field: "text", value: 2 }, output: { text: "Jobs:\n- Prune the tree\n- Fix the tap\n- Turn the compost" } } },
   maxParagraphs: { fields: { field: FIELD, value: COUNT }, run: runMaxParagraphs },
   maxLineWords: { fields: { field: FIELD, value: COUNT }, run: runMaxLineWords },
   jsonValid: { fields: { field: FIELD }, run: runJsonValid },
@@ -1478,7 +1482,7 @@ export function describeRule(rule) {
 
 /**
  * Every Day-1 check type, machine-readable and frozen: field names, types,
- * required/optional, bounds (count fields are integers >= 1 with no maximum;
+ * required/optional, bounds (count fields are integers >= 1 with no maximum, except `maxListItems` `value` >= 0;
  * string lists are non-empty arrays of non-blank strings) and defaults (incl.
  * `strict`, default false). `description` is generated from the entry.
  * A text rule reads a string field; a plain-string output is the single field `text`.
@@ -1757,7 +1761,7 @@ function validateCheck(c, where, inputNames) {
 /**
  * Validate a rubric spec and return it frozen. Refuses (throws) rather than bends:
  * an unknown check type, an unknown field, a missing required field, a count that
- * is not an integer >= 1, a list that is empty or holds an empty/whitespace-only
+ * is not an integer >= 1 (`maxListItems` value: >= 0), a list that is empty or holds an empty/whitespace-only
  * string, `blockLines` without both `size` and `phrases`, `commandExit` with `noneExit`, `notWorse` without a
  * `direction`, `__proto__`/`constructor`/`prototype` keys anywhere, and a
  * non-JSON value. The result is a null-prototype deep copy; the caller's object is

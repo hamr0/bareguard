@@ -50,6 +50,25 @@ The field holds EXACTLY `value` outer list items (ruling #73; a fwdloop ask). No
 - Red: `under` (`measured` < `limit`, `direction: "at-least"`) and `over` (`measured` > `limit`, `direction: "at-most"`); 0 items is `under` with `measured: 0`. A missing, unreadable or non-string field is `missing`, `unreadable`, `wrong-type` with `limit` only and NO `direction` (an exact count is neither bound).
 - Cost: one pass over the lines; each line is trimmed once and examined by a fixed-length look at its start. No regex on the text and no rescan, so the work grows in proportion to the field length.
 
+### `maxListItems`
+The field holds AT MOST `value` outer list items (ruling #81; asked by bareloop and fwdloop). Inclusive. No `strict`.
+- Fields: `field`, `value`.
+- Counting is exactly `listItems`'s: the same item line and the OUTER reading only, so sub-bullets never count (3 outer items with 4 sub-bullets is 3).
+- A field with no list at all is 0 items, which is green: 0 <= `value`. There is no "no list" red; to require a list, pair it with `minListItems` `value: 1`.
+- `value` is an integer >= 0. `value: 0` is allowed here (and only here) and means "no bullets"; a negative or non-integer value makes `createRubric` throw.
+- Example: `{ id: "bullets", rule: "maxListItems", field: "text", value: 5 }`
+- Red: `over` (`measured` > `limit`, `direction: "at-most"`); also `missing`, `unreadable`, `wrong-type`, which carry `limit` and `direction`. Inclusive bounds only: the "more than" / "fewer than" conversion is the caller's.
+- Cost: one linear pass, as `listItems`.
+
+### `minListItems`
+The field holds AT LEAST `value` outer list items (ruling #81). Inclusive. No `strict`.
+- Fields: `field`, `value`.
+- Counting is exactly `listItems`'s (outer items only; see `listItems` and `maxListItems`).
+- `value` is an integer >= 1 (`value: 0` would always be green, so `createRubric` throws); a negative or non-integer value throws too. Zero items against `value: 1` is red `under` with `measured: 0`.
+- Example: `{ id: "bullets", rule: "minListItems", field: "text", value: 3 }`
+- Red: `under` (`measured` < `limit`, `direction: "at-least"`); also `missing`, `unreadable`, `wrong-type`, which carry `limit` and `direction`.
+- Cost: one linear pass, as `listItems`.
+
 ### `maxParagraphs`
 The field has at most `value` paragraphs (ruling #77; a bareloop ask). No `strict`.
 - Fields: `field`, `value` (integer >= 1).
