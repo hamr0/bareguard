@@ -1482,7 +1482,7 @@ export function describeRule(rule) {
 
 /**
  * Every Day-1 check type, machine-readable and frozen: field names, types,
- * required/optional, bounds (count fields are integers >= 1 with no maximum;
+ * required/optional, bounds (count fields are integers >= 1 with no maximum, except `maxListItems` `value` >= 0;
  * string lists are non-empty arrays of non-blank strings) and defaults (incl.
  * `strict`, default false). `description` is generated from the entry.
  * A text rule reads a string field; a plain-string output is the single field `text`.
@@ -1761,7 +1761,7 @@ function validateCheck(c, where, inputNames) {
 /**
  * Validate a rubric spec and return it frozen. Refuses (throws) rather than bends:
  * an unknown check type, an unknown field, a missing required field, a count that
- * is not an integer >= 1, a list that is empty or holds an empty/whitespace-only
+ * is not an integer >= 1 (`maxListItems` value: >= 0), a list that is empty or holds an empty/whitespace-only
  * string, `blockLines` without both `size` and `phrases`, `commandExit` with `noneExit`, `notWorse` without a
  * `direction`, `__proto__`/`constructor`/`prototype` keys anywhere, and a
  * non-JSON value. The result is a null-prototype deep copy; the caller's object is
