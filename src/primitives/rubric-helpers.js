@@ -178,6 +178,8 @@ function buildProblems(spec, tables) {
   }
   for (const name of signed.keys()) touch(name); // a signed table nobody reads is still compared
 
+  // fail-closed backstop: createRubric threw on the untouched spec, so the list must carry a `refused`; if nothing placed it, report it as-is
+  if (whole !== null && !front.some((p) => p.kind === "refused") && !perCheck.some((x) => x.p.kind === "refused")) front.push({ kind: "refused", path: whole.path, message: whole.message });
   perCheck.sort((a, b) => a.ci - b.ci || a.n - b.n || a.rank - b.rank); // stable: fields keep COLUMN_FIELDS order
   return [...front, ...tableLevel, ...perCheck.map((x) => x.p), ...(truncated ? [{ kind: "truncated", limit: MAX_REFUSED }] : [])];
 }
@@ -191,10 +193,15 @@ const MAX_REFUSED = 20; // check refusals found by remove-and-retry; one more is
  * or `[`) and a check (`spec.checkpoints.<id>.checks[<k>]` then end, `.` or `[`). A check candidate is dropped when what follows it is a
  * checkpoint field (`checks`, `gating`, `requiresHuman`, `accept`): no check rule has a field of those names (checkKeys + rubricVocabulary
  * rules), so a longer checkpoint id that matches is then the true owner. The one genuine tie, a path that ends exactly at
- * `...<id>.checks[<k>]`, goes to the check, independent of key order.
+ * `...<id>.checks[<k>]`, goes to the check, independent of key order, but only when check <k> EXISTS: `count(cpId)` is the number of checks the
+ * caller resolves against (the original list in `locate`; the CURRENT, shrunk copy in the remove-and-retry loop, which is what createRubric
+ * was just asked about). Otherwise the path falls to the checkpoint that bears that name.
+ * @param {string} path
+ * @param {string[]} cps
+ * @param {(cpId: string) => number} count
  * @returns {{ci: number, cpId: string, k: number|null}|null} k is null for a checkpoint-level path; null when no checkpoint owns it
  */
-function resolvePath(path, cps) {
+function resolvePath(path, cps, count) {
   const edge = (c) => c === undefined || c === "." || c === "[";
   let best = null;
   let bestLen = -1;
@@ -205,15 +212,15 @@ function resolvePath(path, cps) {
     const m = /^\.checks\[(\d+)\]/.exec(path.slice(head.length));
     if (m === null) continue;
     const end = head.length + m[0].length;
-    if (!edge(path[end]) || /^\.(checks|gating|requiresHuman|accept)(?![^.[])/.test(path.slice(end))) continue;
+    if (+m[1] >= count(cps[ci]) || !edge(path[end]) || /^\.(checks|gating|requiresHuman|accept)(?![^.[])/.test(path.slice(end))) continue;
     if (end >= bestLen) { best = { ci, cpId: cps[ci], k: +m[1] }; bestLen = end; }
   }
   return best;
 }
 
 /** The check a createRubric path points into: { cpId, k } with k the index in the CURRENT checks list, or null (spec- or checkpoint-level). */
-function checkAt(path, cps) {
-  const r = resolvePath(path, cps);
+function checkAt(path, cps, count) {
+  const r = resolvePath(path, cps, count);
   return r !== null && r.k !== null ? { cpId: r.cpId, k: r.k } : null;
 }
 
@@ -236,7 +243,8 @@ function removalRefusals(s, first, cps, entries) {
       alive.set(e.cpId, list);
       list.push(e.n);
     }
-    const at0 = checkAt(first.path, cps);
+    const count = (cpId) => alive.get(cpId)?.length ?? 0; // the CURRENT copy's check counts (untouched spec on the first call)
+    const at0 = checkAt(first.path, cps, count);
     if (at0 === null) {
       out.front = locate(first, cps, entries); // spec- or checkpoint-level on the untouched spec: reported once
       return out;
@@ -278,7 +286,7 @@ function removalRefusals(s, first, cps, entries) {
         return out;
       } catch (e) {
         const err = { path: typeof e?.path === "string" ? e.path : "spec", message: e instanceof Error ? clip(e.message, 400) : "invalid rubric" };
-        loc = checkAt(err.path, cps);
+        loc = checkAt(err.path, cps, count);
         if (loc === null || aliveOrig(loc.cpId, loc.k) === undefined) return out; // not inside a check: an artifact of the removals
         const o = record(err, loc);
         take(loc.cpId, o);
@@ -287,7 +295,7 @@ function removalRefusals(s, first, cps, entries) {
     try {
       createRubric(copy());
     } catch (e) {
-      const l = typeof e?.path === "string" ? checkAt(e.path, cps) : null;
+      const l = typeof e?.path === "string" ? checkAt(e.path, cps, count) : null;
       out.truncated = l !== null && aliveOrig(l.cpId, l.k) !== undefined;
     }
   } catch {
@@ -299,7 +307,9 @@ function removalRefusals(s, first, cps, entries) {
 /** Place the one createRubric refusal at the check or checkpoint its path names, else at the front. */
 function locate(whole, cps, entries) {
   const base = { kind: "refused", path: whole.path, message: whole.message };
-  const r = resolvePath(whole.path, cps);
+  const counts = new Map();
+  for (const e of entries) counts.set(e.cpId, (counts.get(e.cpId) ?? 0) + 1);
+  const r = resolvePath(whole.path, cps, (cpId) => counts.get(cpId) ?? 0);
   if (r === null) return { ci: undefined, n: -1, rank: 0, p: base };
   if (r.k !== null) {
     const e = entries.find((x) => x.cpId === r.cpId && x.n === r.k);

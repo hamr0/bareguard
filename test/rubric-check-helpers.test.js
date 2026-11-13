@@ -780,3 +780,37 @@ test("checkTables resolves a path by the LONGEST checkpoint id, independent of k
     assert.deepEqual(refusedAt(checkTables(rr(cps), {})).sort(), ids.map((id) => `${id}[2]`).sort(), order.join("|"));
   }
 });
+
+test("checkTables: a path names a check only when that check exists (colliding id, option 2)", () => {
+  const ok = (id) => ({ id, rule: "maxWords", field: "x", value: 5 });
+  for (const s of [rr({ a: { gating: true, checks: [ok("c0")] }, "a.checks[1]": 5 }), rr({ "a.checks[1]": 5, a: { gating: true, checks: [ok("c0")] } })]) {
+    const ps = checkTables(s, {});
+    assert.deepEqual(ps.map((p) => [p.kind, p.checkpoint, p.index, p.path]), [["refused", "a.checks[1]", undefined, "spec.checkpoints.a.checks[1]"]]);
+  }
+});
+
+test("checkTables INVARIANT: createRubric throws on the untouched spec <=> at least one `refused`", () => {
+  const ok = (id) => ({ id, rule: "maxWords", field: "x", value: 5 });
+  const ids = ["a", "a.checks", "a.checks[0]", "a.checks[1]", "a[0]"];
+  const values = [() => 5, () => ({ gating: 5, checks: [] }), () => ({ gating: true, checks: [badRule("q")] }), () => ({ gating: true, checks: [] }), () => ({ gating: true, checks: [ok("c0"), ok("c1")] }), () => ({ gating: true, checks: [ok("c0"), badRule("c1")] })];
+  let threw = 0, passed = 0, n = 0;
+  const pairs = ids.flatMap((i, x) => ids.slice(x + 1).map((j) => [i, j]));
+  const grid = () => values.flatMap((v1) => values.map((v2) => [v1, v2]));
+  for (const [i, j] of pairs) {
+    for (const [v1, v2] of grid()) {
+      for (const order of [[i, j], [j, i]]) {
+        const vals = { [i]: v1, [j]: v2 };
+        const cps = {};
+        for (const id of order) cps[id] = vals[id]();
+        const spec = rr(cps);
+        let throws = true;
+        try { createRubric(JSON.parse(JSON.stringify(spec))); throws = false; } catch { /* refused */ }
+        const refused = checkTables(spec, {}).filter((p) => p.kind === "refused").length;
+        const label = `${order.join("|")} ${JSON.stringify(spec.checkpoints)}`;
+        if (throws) { threw++; assert.ok(refused >= 1, `throws but no refused: ${label}`); } else { passed++; assert.equal(refused, 0, `passes but refused: ${label}`); }
+        n++;
+      }
+    }
+  }
+  assert.ok(threw > 50 && passed > 5, `sweep covers both outcomes (${threw}/${passed} of ${n})`);
+});
