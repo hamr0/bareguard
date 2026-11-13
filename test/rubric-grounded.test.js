@@ -264,6 +264,9 @@ test("the scan is linear: 4x the text costs under 10x (16 KiB -> 64 KiB, best of
     best(mk(4096)); // warm up
     const small = best(mk(16 * 1024));
     const large = best(mk(64 * 1024));
+    // Cost shape: linear. The text grows 4x (16 KiB -> 64 KiB), so the ideal ratio is ~4x; a quadratic scan lands near 16x.
+    // 10x, not 8x: on an idle machine the worst shape (dollars/chain/dateRuns) measured ~5.6x, and 8x flaked once in a
+    // full-suite run under load. 10x is the margin that still catches a quadratic scan.
     assert.ok(large < Math.max(small, 200_000) * 10, `${name}: ${small} ns -> ${large} ns is not linear`);
   }
 });
