@@ -749,3 +749,34 @@ test("checkTables remove-and-retry: never mutates the spec, never throws on a ho
   assert.equal(JSON.stringify(spec), before);
   assert.doesNotThrow(() => checkTables(rr({ a: new Proxy({}, { get() { throw 1; } }) }), {}));
 });
+
+test("checkTables resolves a path by the LONGEST checkpoint id, independent of key order", () => {
+  const ok = (id) => ({ id, rule: "maxWords", field: "x", value: 5 });
+  const A = () => ({ gating: true, checks: [ok("c0"), ok("c1"), ok("c2")] });
+  const both = (a, b) => [rr({ a: a(), "a.checks[1]": b() }), rr({ "a.checks[1]": b(), a: a() })];
+  // a bad check inside the colliding-id checkpoint: only it is refused, at checkpoint 'a.checks[1]' index 0
+  for (const s of both(A, () => ({ gating: true, checks: [badRule("q")] }))) {
+    const ps = checkTables(s, {});
+    assert.deepEqual(refusedAt(ps), ["a.checks[1][0]"]);
+    assert.equal(ps.length, 1);
+    assert.equal(ps[0].path, "spec.checkpoints.a.checks[1].checks[0].rule");
+  }
+  // a checkpoint-level error on the colliding id lands on that checkpoint, not on a[1] / a[2]
+  for (const s of both(A, () => ({ gating: 5, checks: [] }))) {
+    const ps = checkTables(s, {});
+    assert.deepEqual(ps.map((p) => [p.kind, p.checkpoint, p.index]), [["refused", "a.checks[1]", undefined]]);
+  }
+  // a genuinely bad check of 'a' next to a colliding id: still check a[1], both orders
+  const goodQ = () => ({ gating: true, checks: [ok("q")] });
+  for (const s of [rr({ a: { gating: true, checks: [ok("c0"), badRule("c1")] }, "a.checks[1]": goodQ() }), rr({ "a.checks[1]": goodQ(), a: { gating: true, checks: [ok("c0"), badRule("c1")] } })]) {
+    assert.deepEqual(refusedAt(checkTables(s, {})), ["a[1]"]);
+  }
+  // ids 'a' / 'a.checks' / 'a.checks[1]' / 'a[0]' in every permutation: the bad check in each is found at its own checkpoint
+  const ids = ["a", "a.checks", "a.checks[1]", "a[0]"];
+  const perms = (xs) => (xs.length <= 1 ? [xs] : xs.flatMap((x, i) => perms([...xs.slice(0, i), ...xs.slice(i + 1)]).map((p) => [x, ...p])));
+  for (const order of perms(ids)) {
+    const cps = {};
+    for (const id of order) cps[id] = { gating: true, checks: [ok("c0"), ok("c1"), badRule("bad")] };
+    assert.deepEqual(refusedAt(checkTables(rr(cps), {})).sort(), ids.map((id) => `${id}[2]`).sort(), order.join("|"));
+  }
+});

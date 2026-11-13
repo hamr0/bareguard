@@ -184,15 +184,37 @@ function buildProblems(spec, tables) {
 
 const MAX_REFUSED = 20; // check refusals found by remove-and-retry; one more is a `truncated` problem
 
+/**
+ * The ONE place a createRubric error path is resolved to a checkpoint (and a check). A checkpoint id may itself contain `.checks[`, so
+ * `spec.checkpoints.a.checks[1].id` can be check 1 of `a` OR field `id` of a checkpoint named `a.checks[1]`. Rule: the candidate that
+ * consumes the LONGEST prefix owns the path, whatever the key order. Candidates are a checkpoint (`spec.checkpoints.<id>` then end, `.`
+ * or `[`) and a check (`spec.checkpoints.<id>.checks[<k>]` then end, `.` or `[`). A check candidate is dropped when what follows it is a
+ * checkpoint field (`checks`, `gating`, `requiresHuman`, `accept`): no check rule has a field of those names (checkKeys + rubricVocabulary
+ * rules), so a longer checkpoint id that matches is then the true owner. The one genuine tie, a path that ends exactly at
+ * `...<id>.checks[<k>]`, goes to the check, independent of key order.
+ * @returns {{ci: number, cpId: string, k: number|null}|null} k is null for a checkpoint-level path; null when no checkpoint owns it
+ */
+function resolvePath(path, cps) {
+  const edge = (c) => c === undefined || c === "." || c === "[";
+  let best = null;
+  let bestLen = -1;
+  for (let ci = 0; ci < cps.length; ci++) {
+    const head = `spec.checkpoints.${cps[ci]}`;
+    if (!path.startsWith(head) || !edge(path[head.length])) continue;
+    if (head.length > bestLen) { best = { ci, cpId: cps[ci], k: null }; bestLen = head.length; }
+    const m = /^\.checks\[(\d+)\]/.exec(path.slice(head.length));
+    if (m === null) continue;
+    const end = head.length + m[0].length;
+    if (!edge(path[end]) || /^\.(checks|gating|requiresHuman|accept)(?![^.[])/.test(path.slice(end))) continue;
+    if (end >= bestLen) { best = { ci, cpId: cps[ci], k: +m[1] }; bestLen = end; }
+  }
+  return best;
+}
+
 /** The check a createRubric path points into: { cpId, k } with k the index in the CURRENT checks list, or null (spec- or checkpoint-level). */
 function checkAt(path, cps) {
-  for (const cpId of cps) {
-    const head = `spec.checkpoints.${cpId}.checks`;
-    if (!path.startsWith(`${head}[`)) continue;
-    const m = /^\[(\d+)\]/.exec(path.slice(head.length));
-    if (m !== null) return { cpId, k: +m[1] };
-  }
-  return null;
+  const r = resolvePath(path, cps);
+  return r !== null && r.k !== null ? { cpId: r.cpId, k: r.k } : null;
 }
 
 /**
@@ -277,16 +299,13 @@ function removalRefusals(s, first, cps, entries) {
 /** Place the one createRubric refusal at the check or checkpoint its path names, else at the front. */
 function locate(whole, cps, entries) {
   const base = { kind: "refused", path: whole.path, message: whole.message };
-  for (const e of entries) {
-    const prefix = `spec.checkpoints.${e.cpId}.checks[${e.n}]`;
-    if (whole.path === prefix || whole.path.startsWith(`${prefix}.`) || whole.path.startsWith(`${prefix}[`)) {
-      return { ci: e.ci, n: e.n, rank: 0, p: { ...base, checkpoint: e.cpId, index: e.n, ...(e.id !== undefined ? { id: e.id } : {}) } };
-    }
+  const r = resolvePath(whole.path, cps);
+  if (r === null) return { ci: undefined, n: -1, rank: 0, p: base };
+  if (r.k !== null) {
+    const e = entries.find((x) => x.cpId === r.cpId && x.n === r.k);
+    if (e !== undefined) return { ci: e.ci, n: e.n, rank: 0, p: { ...base, checkpoint: e.cpId, index: e.n, ...(e.id !== undefined ? { id: e.id } : {}) } };
   }
-  for (let ci = 0; ci < cps.length; ci++) {
-    if (whole.path === `spec.checkpoints.${cps[ci]}` || whole.path.startsWith(`spec.checkpoints.${cps[ci]}.`)) return { ci, n: -1, rank: 0, p: { ...base, checkpoint: cps[ci] } };
-  }
-  return { ci: undefined, n: -1, rank: 0, p: base };
+  return { ci: r.ci, n: -1, rank: 0, p: { ...base, checkpoint: r.cpId } };
 }
 
 // --- checkSchema ----------------------------------------------------------------
