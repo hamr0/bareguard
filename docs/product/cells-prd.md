@@ -222,7 +222,7 @@ diff of one changed cell 161 (two tables); worst adversarial (10 columns x 50,00
 100,000 entries are red `claim-too-large`.
 
 
-## 11. Check helpers for callers (RULED #82, 2026-11-13; amended 2026-11-13 with fwdloop and bareloop before the build; no version picked)
+## 11. Check helpers for callers (RULED #82, 2026-11-13; amended 2026-11-13 with fwdloop and bareloop before the build; BUILT, unreleased, no version picked)
 
 Ruling #82 (rubric-prd.md §12), hamr: every rubric check lives in bareguard and callers (fwdloop, bareloop) import it; a whole-input read or a guess stays the caller's; bareguard is bound to receive a specific thing to judge. Settled with fwdloop and bareloop. Source of the need: fwdloop's `src/sheetchecks.js`, `sheetrun.js`, `sheetoffer.js`, `sheetclaims.js` and `src/citedwords.js` (`numbersSaid`) each re-implement a piece of what follows; they were read for shape only, no data copied. All of it is deterministic, no LLM, and nothing is inferred (a literal, a column or a claim shape is said or it is a problem). `checkStep`'s contract does NOT change. Every new function is an export with JSDoc `@when`, so `primitives.json` gains entries (the adoption check is the generator: `git diff primitives.json` shows only additions); the new exports and the additive vocabulary / fault fields are SemVer surface once released (rubric-prd.md §9, "Planned"). Placement of the code (a new `src/primitives/` module next to `rubric-cells.js`, re-exported from `src/index.js`) is the build's call.
 
