@@ -42,7 +42,11 @@ function skipGlue(t, i) {
   return i;
 }
 
-/** An am/pm suffix at d (optionally after ONE space): { ok, pm, end }, { dotted, end } for a.m. / p.m., or null. */
+/**
+ * An am/pm suffix at d (optionally after ONE space): { ok, pm, end }, { dotted, end } for a.m. / p.m., or null.
+ * Deliberately NOT the `cited` rule: any-case am/pm is read here, while readTime in rubric-locate.js calls a lowercase suffix malformed (#34).
+ * Both are pinned side by side in test/rubric-grounded.test.js ("time readers"); change one and that test goes red.
+ */
 function suffixAt(t, d) {
   let p = d;
   if (t.charCodeAt(p) === 32) p++;
@@ -204,13 +208,24 @@ function carry(v) {
   if (Array.isArray(v)) return "array";
   return typeof v;
 }
+/** A finite JS number as a plain decimal string, never an exponent: the shortest repr of the double, exactly (1e-7 is "0.0000001", 1e21 is "1000000000000000000000"). */
+function plainDecimal(v) {
+  const s = String(v);
+  const m = /^(-?)(\d+)(?:\.(\d+))?e([+-]\d+)$/.exec(s);
+  if (m === null) return s;
+  const digits = m[2] + (m[3] ?? "");
+  const point = m[2].length + +m[4]; // where the decimal point falls in `digits`
+  if (point <= 0) return `${m[1]}0.${"0".repeat(-point)}${digits}`;
+  if (point >= digits.length) return m[1] + digits + "0".repeat(point - digits.length);
+  return `${m[1]}${digits.slice(0, point)}.${digits.slice(point)}`;
+}
 /** The canonical form of a literal for its kind, or null when the value is wrong for it. */
 function canonOf(kind, v) {
   if (kind === "number") {
     if (typeof v !== "number" || !Number.isFinite(v)) return null;
-    const s = String(v);
+    const s = plainDecimal(v);
     const neg = s.charCodeAt(0) === 45;
-    const dec = parseGrammar(s, neg ? 1 : 0, s.length); // an exponent form ("1e+21") is not a plain decimal: null
+    const dec = parseGrammar(s, neg ? 1 : 0, s.length);
     if (dec === null) return null;
     if (neg && !(dec.int === "0" && dec.frac === "")) dec.neg = true;
     return decToString(dec);
@@ -244,7 +259,7 @@ const isObj = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
  * @when Reach for this when an AI wrote literals (a threshold, a date, a time) that must have come from the person's own words and you have only the values, not a signed check: it tells you which ones the person never said, so you refuse the invented ones before anything runs. For the literals inside a drafted `cells`/`table` check use `groundedLiterals`, which is built on this.
  * @category rubric
  * @signature groundedValues(values: {kind: "number"|"date"|"time", value: number|string}[], text: string) => { ok: boolean, missing: {index: number, kind: string, value: any}[], why?: string }
- * @fails Never throws. `missing` lists, in order, every entry that is not grounded, with its `index`: an entry that is not a plain object, a `kind` outside number/date/time (reported as kind "invalid"), a value of the wrong type (a numeric string, NaN, Infinity, an exponent-form number such as 1e21, a non-real date, a time that is not exactly "HH:MM") is itself missing. A `values` that is not an array is `{ ok: false, missing: [], why: "not-an-array" }`; a `text` that is not a string grounds nothing, so every entry is missing and `why` is "not-a-string". One linear pass, no work cap.
+ * @fails Never throws. `missing` lists, in order, every entry that is not grounded, with its `index`: an entry that is not a plain object, a `kind` outside number/date/time (reported as kind "invalid"), a value of the wrong type (a numeric string, NaN, Infinity, a non-real date, a time that is not exactly "HH:MM") is itself missing. A `values` that is not an array is `{ ok: false, missing: [], why: "not-an-array" }`; a `text` that is not a string grounds nothing, so every entry is missing and `why` is "not-a-string". One linear pass, no work cap.
  * @example
  * import { groundedValues } from "bareguard";
  * groundedValues([{ kind: "number", value: 150 }, { kind: "number", value: 15 }], "budget $150 by 2026-11-18");
@@ -293,6 +308,7 @@ export function groundedValues(values, text) {
 
 const NUM_VALUE = ["gt", "gte", "lt", "lte", "eq"];
 const DATE_VALUE = ["before", "after", "dateOn"];
+const NO_LITERAL = ["equals", "empty", "notEmpty"];
 
 /**
  * Is every number and date literal a drafted `cells` / `table` check carries something the person said in `text`? The literals read:
@@ -305,7 +321,7 @@ const DATE_VALUE = ["before", "after", "dateOn"];
  * @when Reach for this right after an AI drafted a `cells` or `table` check from the person's request: every threshold, bound and date it wrote must be in what the person said, so the check cannot silently use an invented number. Pass the person's whole instruction as one string. It judges only the literals, not whether the check is valid (that is `createRubric` and `checkTables`).
  * @category rubric
  * @signature groundedLiterals(check: object, text: string) => { ok: boolean, missing: {path: string, kind: string, value: any}[], why?: string }
- * @fails Never throws. `missing` lists, in check order (`where` entries in order, then `asOf`, then `b.const`), each literal the text does not say, with its field `path` (like `where[1].value`, `asOf`, `b.const`) and its kind (number or date). A literal of the wrong type (a numeric string, a non-finite number, a non-ISO or unreal date, an absent `lo`) is itself missing. A `check` that is not a plain object is `missing: [{ path: "", kind: "check", value: <type name> }]`; a throwing getter or Proxy yields missing entries, never a throw. A `text` that is not a string grounds nothing (every literal missing, `why: "not-a-string"`).
+ * @fails Never throws. `missing` lists, in check order (`where` entries in order, then `asOf`, then `b.const`), each literal the text does not say, with its field `path` (like `where[1].value`, `asOf`, `b.const`) and its kind (number or date). A literal of the wrong type (a numeric string, a non-finite number, a non-ISO or unreal date, an absent `lo`) is itself missing. A `check` that is not a plain object is `missing: [{ path: "", kind: "check", value: <type name> }]`; a throwing getter or Proxy yields missing entries, never a throw: a `where` entry that is not a plain object, throws, or has an unreadable or unknown `cmp` is a missing entry with `path` `where[i]` and kind "invalid" (only `equals`, `empty`, `notEmpty` are known to carry no literal). A `text` that is not a string grounds nothing (every literal missing, `why: "not-a-string"`).
  * @example
  * import { groundedLiterals } from "bareguard";
  * const check = { id: "big", rule: "cells", table: "t", claim: "a", op: "countIf", where: [{ column: "Amount", cmp: "gt", value: 500 }, { column: "Due", cmp: "after", value: "2026-11-01" }] };
@@ -330,15 +346,19 @@ export function groundedLiterals(check, text) {
     }
     for (let i = 0; i < len; i++) {
       let w;
+      let cmp;
       try {
         w = where[i];
+        cmp = isObj(w) ? read(w, "cmp") : UNREADABLE;
       } catch {
+        cmp = UNREADABLE;
+      }
+      const kind = NUM_VALUE.includes(cmp) || cmp === "between" ? "number" : DATE_VALUE.includes(cmp) || cmp === "dateBetween" ? "date" : NO_LITERAL.includes(cmp) ? null : "invalid";
+      if (kind === null) continue; // equals, empty, notEmpty: no number or date literal to ground
+      if (kind === "invalid") {
+        lits.push({ path: `where[${i}]`, kind, value: UNREADABLE }); // a non-object or throwing entry, an unreadable or unknown cmp: we cannot tell it has no literal
         continue;
       }
-      if (!isObj(w)) continue;
-      const cmp = read(w, "cmp");
-      const kind = NUM_VALUE.includes(cmp) || cmp === "between" ? "number" : DATE_VALUE.includes(cmp) || cmp === "dateBetween" ? "date" : null;
-      if (kind === null) continue; // equals, empty, notEmpty, or an unknown cmp (checkTables / createRubric refuse that)
       const fields = cmp === "between" || cmp === "dateBetween" ? ["lo", "hi"] : ["value"];
       for (const f of fields) lits.push({ path: `where[${i}].${f}`, kind, value: read(w, f) });
     }

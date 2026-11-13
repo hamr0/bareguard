@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { groundedValues, groundedLiterals, rubricVocabulary } from "../src/index.js";
-import { parseClaimValue } from "../src/primitives/rubric-locate.js";
+import { parseClaimValue, extractValue } from "../src/primitives/rubric-locate.js";
 
 // Ruling #82 (cells-prd.md §11.6): groundedValues / groundedLiterals. Every reader rule has a positive and a negative case; the
 // never-throws surface is fed hostile input; the scan is linear.
@@ -151,8 +151,11 @@ test("numbers compare as exact decimals; exponent forms cannot be grounded; -0 i
   assert.equal(g1("number", 0.3, "0.3"), true);
   assert.equal(g1("number", 5, "5.00"), true);
   assert.equal(g1("number", 5.1, "5.10"), true);
-  assert.equal(g1("number", 1e21, "1000000000000000000000"), false);
-  assert.equal(g1("number", 1e-7, "0.0000001"), false);
+  for (const [n, t] of [[1e-6, "0.000001"], [1e-7, "0.0000001"], [1e21, "1000000000000000000000"], [1.5e-10, "0.00000000015"], [-1.5e-10, "-0.00000000015"], [1.2345e25, "12345000000000000000000000"]]) {
+    assert.equal(g1("number", n, t), true, `${n} is grounded by its plain-decimal text`);
+    assert.equal(g1("number", n, "5"), false);
+  }
+  assert.equal(g1("number", 1e21, "1e21"), false, "the exponent spelling in the text grounds nothing");
   assert.equal(g1("number", 123456789012345680000, "123456789012345680000"), true, "the largest plain-decimal form that String(n) gives");
   assert.equal(g1("number", -0, "0"), true);
   assert.equal(g1("number", 0, "-0"), true);
@@ -188,7 +191,7 @@ test("groundedValues: ok / missing shape, order, index and kinds", () => {
 test("groundedValues: a bad entry is itself missing, never skipped", () => {
   const long = "x".repeat(500);
   const cases = [
-    [{ kind: "number", value: "5" }, "number", "5"], [{ kind: "number", value: NaN }, "number", NaN], [{ kind: "number", value: Infinity }, "number", Infinity], [{ kind: "number", value: 1e21 }, "number", 1e21],
+    [{ kind: "number", value: "5" }, "number", "5"], [{ kind: "number", value: NaN }, "number", NaN], [{ kind: "number", value: Infinity }, "number", Infinity],
     [{ kind: "number", value: null }, "number", "null"], [{ kind: "number", value: [5] }, "number", "array"], [{ kind: "number", value: {} }, "number", "object"], [{ kind: "number" }, "number", "undefined"], [{ kind: "number", value: 5n }, "number", "bigint"],
     [{ kind: "number", value: long }, "number", long.slice(0, 120)],
     [{ kind: "date", value: "2026-02-30" }, "date", "2026-02-30"], [{ kind: "date", value: "2026-1-1" }, "date", "2026-1-1"], [{ kind: "date", value: 20261118 }, "date", 20261118], [{ kind: "date", value: " 2026-11-18" }, "date", " 2026-11-18"],
@@ -244,7 +247,7 @@ test("groundedValues: hostile text (lone surrogates, mixed scripts, every gramma
 
 // ---- linearity: a fast default-suite shape test (the 5 MiB cases are in `npm run bench:rubric`) ----------------------------------------------
 
-test("the scan is linear: 4x the text costs far less than 16x (16 KiB -> 64 KiB, best of 3) for every hostile shape", () => {
+test("the scan is linear: 4x the text costs under 8x (16 KiB -> 64 KiB, best of 3) for every hostile shape", () => {
   const shapes = { digits: "7", commas: "1,", dots: "1.", dashes: "-", colons: ":", dollars: "$", mixed: "09:27 AM 1.2k $5USD (5) -5 −5 a.m. ", dateRuns: "1-1-", amounts: "$1$", chain: "1.1.1.", numbers: "1 ", times: "12:05 AM " };
   const values = [{ kind: "number", value: 5 }, { kind: "date", value: "2026-11-18" }, { kind: "time", value: "09:00" }];
   const best = (text) => {
@@ -261,7 +264,7 @@ test("the scan is linear: 4x the text costs far less than 16x (16 KiB -> 64 KiB,
     best(mk(4096)); // warm up
     const small = best(mk(16 * 1024));
     const large = best(mk(64 * 1024));
-    assert.ok(large < Math.max(small, 200_000) * 16, `${name}: ${small} ns -> ${large} ns is not linear`);
+    assert.ok(large < Math.max(small, 200_000) * 8, `${name}: ${small} ns -> ${large} ns is not linear`);
   }
 });
 
@@ -304,7 +307,8 @@ test("groundedLiterals: fields that are not literals the AI invents are NOT read
   };
   assert.deepEqual(gl(check, "nothing"), { ok: true, missing: [] });
   assert.deepEqual(gl({ ...check, b: { const: 5 } }, "nothing").missing.map((m) => m.path), ["b.const"], "only b.const among them");
-  assert.deepEqual(gl({ where: [{ cmp: "weird", value: "x" }, null, 5, "s", []] }, "nothing"), { ok: true, missing: [] }, "an unknown cmp or a non-object entry is not a literal");
+  assert.deepEqual(gl({ where: [{ cmp: "equals", value: "x" }, { cmp: "empty" }, { cmp: "notEmpty" }] }, "nothing"), { ok: true, missing: [] }, "equals, empty, notEmpty carry no literal");
+  assert.deepEqual(gl({ where: [{ cmp: "weird", value: "x" }, null, 5, "s", [], {}] }, "nothing").missing.map((m) => [m.path, m.kind]), [0, 1, 2, 3, 4, 5].map((i) => [`where[${i}]`, "invalid"]), "an unknown cmp or a non-object entry is missing: we cannot tell it has no literal");
 });
 
 test("groundedLiterals: a literal of the wrong type is itself missing, with its path", () => {
@@ -338,7 +342,12 @@ test("groundedLiterals: a non-object check and a non-string text", () => {
 test("groundedLiterals never throws on a hostile check: getters, Proxies, inherited fields, __proto__ keys; own properties only", () => {
   const boom = () => { throw new Error("boom"); };
   assert.deepEqual(gl({ get where() { boom(); } }, "x").missing.map((m) => [m.path, m.kind, m.value]), [["where", "invalid", "unreadable"]]);
-  assert.deepEqual(gl({ where: [{ get cmp() { boom(); }, value: 1 }] }, "x"), { ok: true, missing: [] });
+  assert.deepEqual(gl({ where: [{ get cmp() { boom(); }, value: 1 }] }, "x").missing.map((m) => [m.path, m.kind, m.value]), [["where[0]", "invalid", "unreadable"]]);
+  assert.equal(gl({ where: [new Proxy({}, { get() { throw 1; }, ownKeys() { throw 1; }, getOwnPropertyDescriptor() { throw 1; }, has() { throw 1; } })] }, "5").ok, false);
+  assert.deepEqual(gl({ where: [new Proxy({}, { get() { throw 1; }, ownKeys() { throw 1; }, getOwnPropertyDescriptor() { throw 1; }, has() { throw 1; } })] }, "5").missing.map((m) => m.path), ["where[0]"]);
+  const thrower = [];
+  Object.defineProperty(thrower, 0, { get() { throw 1; } });
+  assert.deepEqual(gl({ where: thrower }, "5").missing.map((m) => m.path), ["where[0]"]);
   assert.deepEqual(gl({ where: [{ cmp: "gt", get value() { boom(); } }] }, "x").missing.map((m) => [m.path, m.value]), [["where[0].value", "unreadable"]]);
   assert.deepEqual(gl({ where: [{ column: "A", cmp: "gt", value: 1 }], get asOf() { boom(); } }, "1").missing.map((m) => [m.path, m.value]), [["asOf", "unreadable"]]);
   assert.deepEqual(gl({ get b() { boom(); } }, "x"), { ok: true, missing: [] }, "an unreadable b is not a const literal");
@@ -400,4 +409,16 @@ test("differential: a text the cited `number` reader reads as one value is groun
     assert.equal(g1("number", v, s), true, `cited reads ${JSON.stringify(s)} as ${c.canon}; groundedValues does not ground it`);
   }
   assert.ok(agreed > 500, `${agreed} texts read by both`);
+});
+
+// ---- the two time readers disagree on purpose: pinned side by side ------------------------------------------------------
+
+test("time readers: grounded reads any-case am/pm, the cited time reader calls lowercase malformed (a change to either goes red)", () => {
+  // groundedValues (suffixAt in rubric-grounded.js): "9:27 am" grounds 09:27. cited (readTime in rubric-locate.js, #34): malformed.
+  assert.equal(g1("time", "09:27", "9:27 am"), true);
+  assert.equal(g1("time", "09:27", "9:27 AM"), true);
+  assert.equal(g1("time", "09:27", "9:27 a.m."), false, "dotted: refused by both");
+  assert.equal(extractValue({ valueKind: "time" }, "9:27 AM").value, 567);
+  assert.equal(extractValue({ valueKind: "time" }, "9:27 am").kind, "value-malformed");
+  assert.equal(extractValue({ valueKind: "time" }, "9:27 a.m.").kind, "value-malformed");
 });
