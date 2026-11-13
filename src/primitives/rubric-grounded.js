@@ -205,8 +205,8 @@ function carry(v) {
   if (typeof v === "string") return clip(v, CLIP);
   if (v === UNREADABLE) return "unreadable";
   if (v === null) return "null";
-  if (Array.isArray(v)) return "array";
-  return typeof v;
+  if (isArr(v) === true) return "array";
+  return isArr(v) === null ? "unreadable" : typeof v;
 }
 /** A finite JS number as a plain decimal string, never an exponent: the shortest repr of the double, exactly (1e-7 is "0.0000001", 1e21 is "1000000000000000000000"). */
 function plainDecimal(v) {
@@ -244,7 +244,24 @@ const read = (o, k) => {
     return UNREADABLE;
   }
 };
-const isObj = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+/** Array.isArray that cannot throw: true, false, or null when the value is unreadable (a REVOKED Proxy throws on it). */
+function isArr(v) {
+  try {
+    return Array.isArray(v);
+  } catch {
+    return null;
+  }
+}
+const isObj = (v) => v !== null && typeof v === "object" && isArr(v) === false;
+/** The length of an array-like read once, or null when it throws or is not a non-negative safe integer (a Proxy may answer anything). */
+function lengthOf(a) {
+  try {
+    const n = a.length;
+    return Number.isSafeInteger(n) && n >= 0 ? n : null;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Is each number, date and time in `values` something the person said in `text`? One scan of `text`, each match one whole token
@@ -266,13 +283,9 @@ const isObj = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
  * // { ok: false, missing: [{ index: 1, kind: "number", value: 15 }] }
  */
 export function groundedValues(values, text) {
-  if (!Array.isArray(values)) return { ok: false, missing: [], why: "not-an-array" };
-  let len;
-  try {
-    len = values.length;
-  } catch {
-    return { ok: false, missing: [], why: "not-an-array" };
-  }
+  if (isArr(values) !== true) return { ok: false, missing: [], why: "not-an-array" }; // not an array, or a revoked Proxy
+  const len = lengthOf(values);
+  if (len === null) return { ok: false, missing: [], why: "not-an-array" };
   const textOk = typeof text === "string";
   let said = null;
   if (textOk) {
@@ -337,11 +350,11 @@ export function groundedLiterals(check, text) {
   const lits = [];
   const where = read(check, "where");
   if (where === UNREADABLE) lits.push({ path: "where", kind: "invalid", value: UNREADABLE });
-  else if (Array.isArray(where)) {
-    let len = 0;
-    try {
-      len = where.length;
-    } catch {
+  else if (isArr(where) === null) lits.push({ path: "where", kind: "invalid", value: UNREADABLE });
+  else if (isArr(where) === true) {
+    let len = lengthOf(where);
+    if (len === null) {
+      len = 0;
       lits.push({ path: "where", kind: "invalid", value: UNREADABLE });
     }
     for (let i = 0; i < len; i++) {
@@ -366,7 +379,8 @@ export function groundedLiterals(check, text) {
   const asOf = read(check, "asOf");
   if (asOf !== undefined) lits.push({ path: "asOf", kind: "date", value: asOf });
   const b = read(check, "b");
-  if (isObj(b)) {
+  if (isArr(b) === null) lits.push({ path: "b", kind: "invalid", value: UNREADABLE }); // a revoked Proxy hides b.const
+  else if (isObj(b)) {
     const k = read(b, "const");
     if (k !== undefined) lits.push({ path: "b.const", kind: "number", value: k });
   }

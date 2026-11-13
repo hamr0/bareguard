@@ -367,8 +367,16 @@ function fieldSchema(name, d, ctx) {
   }
 }
 
+/** Array.isArray that is false, not a throw, for a revoked Proxy (so the caller-misuse TypeError below is the clear one). */
+function isArr(v) {
+  try {
+    return Array.isArray(v);
+  } catch {
+    return false;
+  }
+}
 function stringArray(v, what) {
-  if (!Array.isArray(v) || v.some((x) => typeof x !== "string")) throw new TypeError(`checkSchema: ${what} must be an array of strings`);
+  if (!isArr(v) || v.some((x) => typeof x !== "string")) throw new TypeError(`checkSchema: ${what} must be an array of strings`);
   return [...new Set(v)];
 }
 
@@ -396,9 +404,9 @@ export function checkSchema(args) {
     columns = args.columns;
     tables = args.tables;
   } catch (e) {
-    throw e instanceof TypeError ? e : new TypeError("checkSchema: args is unreadable");
+    throw e instanceof TypeError && /^checkSchema: /.test(e.message) ? e : new TypeError("checkSchema: args is unreadable");
   }
-  if (!Array.isArray(rules) || rules.length === 0 || rules.some((r) => !SCHEMA_RULES.includes(r))) throw new TypeError('checkSchema: rules must be a non-empty array of "cells" and/or "table"');
+  if (!isArr(rules) || rules.length === 0 || rules.some((r) => !SCHEMA_RULES.includes(r))) throw new TypeError('checkSchema: rules must be a non-empty array of "cells" and/or "table"');
   const ruleList = [...new Set(rules)];
   const cols = stringArray(columns, "columns");
   const tabs = stringArray(tables, "tables");

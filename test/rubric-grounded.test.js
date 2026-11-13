@@ -425,3 +425,49 @@ test("time readers: grounded reads any-case am/pm, the cited time reader calls l
   assert.equal(extractValue({ valueKind: "time" }, "9:27 am").kind, "value-malformed");
   assert.equal(extractValue({ valueKind: "time" }, "9:27 a.m.").kind, "value-malformed");
 });
+
+// ---- a REVOKED Proxy: Array.isArray throws on it, so every inspection of a caller value must be guarded ------------------
+
+const revoked = (target = {}) => {
+  const r = Proxy.revocable(target, {});
+  r.revoke();
+  return r.proxy;
+};
+const lenProxy = (n) => new Proxy([], { get: (t, k) => (k === "length" ? n : t[k]) });
+
+test("revoked Proxy: groundedValues never throws, at the top and in every entry position", () => {
+  assert.deepEqual(groundedValues(revoked(), "x"), { ok: false, missing: [], why: "not-an-array" });
+  assert.deepEqual(groundedValues(revoked([]), "x"), { ok: false, missing: [], why: "not-an-array" });
+  assert.deepEqual(groundedValues([revoked()], "x").missing, [{ index: 0, kind: "invalid", value: "unreadable" }]);
+  assert.deepEqual(groundedValues([revoked([])], "x").missing, [{ index: 0, kind: "invalid", value: "unreadable" }]);
+  assert.deepEqual(groundedValues([{ kind: "number", value: revoked() }], "x").missing, [{ index: 0, kind: "number", value: "unreadable" }]);
+  assert.deepEqual(groundedValues([{ kind: "number", value: revoked([]) }], "x").missing, [{ index: 0, kind: "number", value: "unreadable" }]);
+  assert.deepEqual(groundedValues([{ kind: revoked(), value: 1 }], "x").missing, [{ index: 0, kind: "invalid", value: 1 }]);
+  assert.equal(groundedValues([{ kind: "number", value: 1 }], revoked()).why, "not-a-string");
+});
+
+test("a Proxy length that is not a non-negative safe integer is not-an-array, never a loop", () => {
+  for (const n of [Infinity, -1, 1.5, NaN, "2", 2 ** 60]) {
+    assert.deepEqual(groundedValues(lenProxy(n), "x"), { ok: false, missing: [], why: "not-an-array" }, String(n));
+    assert.deepEqual(groundedLiterals({ where: lenProxy(n) }, "x").missing, [{ path: "where", kind: "invalid", value: "unreadable" }], String(n));
+  }
+});
+
+test("revoked Proxy: groundedLiterals never throws, at the top and in every field", () => {
+  const miss = (check) => groundedLiterals(check, "x").missing;
+  assert.deepEqual(miss(revoked()), [{ path: "", kind: "check", value: "unreadable" }]);
+  assert.deepEqual(miss(revoked([])), [{ path: "", kind: "check", value: "unreadable" }]);
+  assert.deepEqual(miss({ where: revoked() }), [{ path: "where", kind: "invalid", value: "unreadable" }]);
+  assert.deepEqual(miss({ where: revoked([]) }), [{ path: "where", kind: "invalid", value: "unreadable" }]);
+  assert.deepEqual(miss({ where: [revoked()] }), [{ path: "where[0]", kind: "invalid", value: "unreadable" }]);
+  assert.deepEqual(miss({ where: [revoked([])] }), [{ path: "where[0]", kind: "invalid", value: "unreadable" }]);
+  assert.deepEqual(miss({ where: [{ cmp: revoked(), value: 1 }] }), [{ path: "where[0]", kind: "invalid", value: "unreadable" }]);
+  assert.deepEqual(miss({ where: [{ cmp: "gt", value: revoked() }] }), [{ path: "where[0].value", kind: "number", value: "unreadable" }]);
+  assert.deepEqual(miss({ where: [{ cmp: "between", lo: 1, hi: revoked([]) }] }).map((m) => m.path), ["where[0].lo", "where[0].hi"]);
+  assert.deepEqual(miss({ asOf: revoked() }), [{ path: "asOf", kind: "date", value: "unreadable" }]);
+  assert.deepEqual(miss({ asOf: revoked([]) }), [{ path: "asOf", kind: "date", value: "unreadable" }]);
+  assert.deepEqual(miss({ b: revoked() }), [{ path: "b", kind: "invalid", value: "unreadable" }]);
+  assert.deepEqual(miss({ b: revoked([]) }), [{ path: "b", kind: "invalid", value: "unreadable" }]);
+  assert.deepEqual(miss({ b: { const: revoked() } }), [{ path: "b.const", kind: "number", value: "unreadable" }]);
+  assert.equal(groundedLiterals({ b: revoked() }, "x").ok, false);
+});

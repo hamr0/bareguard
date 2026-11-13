@@ -836,3 +836,18 @@ test("checkTables with odd checkpoint ids: one unplaced refusal, never a sound c
   }
   assert.ok(n > 500 && threw > 100 && n > threw, `${n}/${threw}`);
 });
+
+// ---- checkSchema: a REVOKED Proxy anywhere in args is caller misuse with checkSchema's own clear message ----------------------
+
+test("checkSchema: a revoked Proxy as args, rules, columns or tables throws the clear TypeError, never a native one", () => {
+  const revoked = (target) => { const r = Proxy.revocable(target, {}); r.revoke(); return r.proxy; };
+  const ok = { rules: ["cells"], columns: ["a"], tables: ["t"] };
+  for (const mk of [() => revoked({}), () => revoked([])]) {
+    assert.throws(() => checkSchema(mk()), { name: "TypeError", message: "checkSchema: args is unreadable" });
+    assert.throws(() => checkSchema({ ...ok, rules: mk() }), { name: "TypeError", message: /^checkSchema: rules must be/ });
+    assert.throws(() => checkSchema({ ...ok, columns: mk() }), { name: "TypeError", message: "checkSchema: columns must be an array of strings" });
+    assert.throws(() => checkSchema({ ...ok, tables: mk() }), { name: "TypeError", message: "checkSchema: tables must be an array of strings" });
+  }
+  assert.throws(() => checkSchema({ ...ok, columns: [revoked({})] }), { message: "checkSchema: columns must be an array of strings" });
+  assert.ok(checkSchema(ok));
+});

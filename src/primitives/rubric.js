@@ -356,7 +356,11 @@ function textField(ctx, name, base = {}) {
 
 function typeName(v) {
   if (v === null) return "type:null";
-  if (Array.isArray(v)) return "type:array";
+  try {
+    if (Array.isArray(v)) return "type:array";
+  } catch {
+    // a revoked Proxy: Array.isArray throws on it; it is an object for the message
+  }
   return `type:${typeof v}`;
 }
 
@@ -2393,7 +2397,13 @@ export function runTableChecks(rubric, checkpoint, tables) {
   if (typeof checkpoint !== "string" || !Object.hasOwn(spec.checkpoints, checkpoint)) {
     throw new TypeError(`runTableChecks: unknown checkpoint ${typeof checkpoint === "string" ? JSON.stringify(clip(checkpoint)) : typeName(checkpoint)}`);
   }
-  if (tables === null || typeof tables !== "object" || Array.isArray(tables)) throw new TypeError("runTableChecks: tables must be an object");
+  let tablesOk = tables !== null && typeof tables === "object";
+  try {
+    if (tablesOk && Array.isArray(tables)) tablesOk = false;
+  } catch {
+    tablesOk = false; // a revoked Proxy throws on Array.isArray
+  }
+  if (!tablesOk) throw new TypeError("runTableChecks: tables must be an object");
   const ctx = { rubric: spec, fields: Object.create(null), opts: { tables: { v: tables } }, baselines: Object.create(null), callerItems: Object.create(null) };
   const out = [];
   for (const c of spec.checkpoints[checkpoint].checks) {

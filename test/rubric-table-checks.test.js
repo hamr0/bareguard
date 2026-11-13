@@ -277,3 +277,15 @@ test("fault.inputs: the audit line of the fault stays within the line bound with
   assert.ok(Buffer.byteLength(line, "utf8") + 1 <= 3500, `${Buffer.byteLength(line, "utf8")} bytes`);
   assert.equal(JSON.parse(line).verdict, "stopped");
 });
+
+// ---- a REVOKED Proxy is caller misuse like any non-object: the same clear TypeError, never a native "IsArray" one ----------
+
+test("runTableChecks: a revoked Proxy as tables or checkpoint gets the clear caller-misuse TypeError", () => {
+  const sheet = { header: ["Id"], rows: [{ rowNumber: 2, cells: ["a"] }] };
+  const rubric = createRubric({ schema: 1, goal: "g", inputs: [{ name: "t", sha256: tableSha(sheet) }],
+    checkpoints: { s: { gating: true, checks: [{ id: "ids", rule: "table", table: "t", op: "noDuplicates", column: "Id" }] } } });
+  const revoked = (target) => { const r = Proxy.revocable(target, {}); r.revoke(); return r.proxy; };
+  for (const t of [revoked({}), revoked([])]) assert.throws(() => runTableChecks(rubric, "s", t), { name: "TypeError", message: "runTableChecks: tables must be an object" });
+  for (const c of [revoked({}), revoked([])]) assert.throws(() => runTableChecks(rubric, c, { t: sheet }), { name: "TypeError", message: /^runTableChecks: unknown checkpoint type:/ });
+  assert.equal(runTableChecks(rubric, "s", { t: sheet })[0].verdict, "green");
+});
