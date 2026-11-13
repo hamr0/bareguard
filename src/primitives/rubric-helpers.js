@@ -61,7 +61,7 @@ function columnRefs(c) {
  * @when Reach for this right after an AI drafted a rubric spec over the person's tables and BEFORE signing or running it: one call lists everything that would stop it (a check naming a table or column that is not there, a table that cannot be read, a table that does not match its signed sha256, a spec `createRubric` would refuse), so you send one repair prompt instead of discovering each at step time. Empty array = ok. It checks the draft against the data; `createRubric` and `checkStep` still run as before.
  * @category rubric
  * @signature checkTables(spec: object, tables: object) => { kind: string, checkpoint?: string, index?: number, id?: string, table?: string, column?: string, field?: string, path?: string, message?: string }[]
- * @fails Never throws: a hostile spec or table, a throwing getter, a Proxy, `__proto__` keys or a non-object argument all return problems (a spec that cannot be read is one `refused`). A fresh array of fresh objects each call; inputs are not mutated. `refused` is reported for EVERY failing cells/table/diff check (the path as `createRubric` forms it) and, when none of those failed but `createRubric` would still throw, once (the first refusal). A check that is `refused` gets no table or column problems. Problems with no check (`unreadable-table`, `sha-mismatch`, a spec-level `refused`) come first, then each check's, in checkpoint and check order. A diff's `after` table is the artifact checked later, not signed: it is reported only when given and unreadable, and checked for `keyColumn` and a `newColumnRule`'s `a`, `b`, `result`, `where` and `dateFormats` columns when given.
+ * @fails Never throws: a hostile spec or table, a throwing getter, a Proxy, `__proto__` keys or a non-object argument all return problems (a spec that cannot be read is one `refused`). A fresh array of fresh objects each call; inputs are not mutated. `refused` is reported for EVERY failing check (the path as `createRubric` forms it): a cells/table/diff check by the validator's own function, any other check (a non-object entry too) by `createRubric` run on that check alone in a minimal spec, with the path and message moved to the check's real index; a refusal that belongs to the spec or a checkpoint (not to a check) is reported once, and only when no check-level refusal was found. A check that is `refused` gets no table or column problems. Problems with no check (`unreadable-table`, `sha-mismatch`, a spec-level `refused`) come first, then each check's, in checkpoint and check order. A diff's `after` table is the artifact checked later, not signed: it is reported only when given and unreadable, and checked for `keyColumn` and a `newColumnRule`'s `a`, `b`, `result`, `where` and `dateFormats` columns when given.
  * @example
  * import { checkTables } from "bareguard";
  * const sheet = { header: ["Id", "Amount"], rows: [{ rowNumber: 2, cells: ["a", "5"] }] };
@@ -127,6 +127,16 @@ function buildProblems(spec, tables) {
     else perCheck.push(locatedWhole);
   }
 
+  // every non-cells check on its own: createRubric stops at its first refusal, so each is validated in a minimal spec (gating checkpoint, no
+  // inputs) to report all of them in one call; the one already placed above is not reported twice
+  if (whole !== null) {
+    for (const e of entries) {
+      if (e.cells || (locatedWhole !== null && locatedWhole.ci === e.ci && locatedWhole.n === e.n)) continue;
+      const alone = isolatedRefusal(e.c, e.cpId, e.n);
+      if (alone !== null) perCheck.push({ ci: e.ci, n: e.n, rank: 0, p: { kind: "refused", checkpoint: e.cpId, index: e.n, ...(e.id !== undefined ? { id: e.id } : {}), path: alone.path, message: alone.message } });
+    }
+  }
+
   const seen = new Set();
   const states = new Map();
   const stateOf = (name) => {
@@ -174,6 +184,20 @@ function buildProblems(spec, tables) {
 
   perCheck.sort((a, b) => a.ci - b.ci || a.n - b.n || a.rank - b.rank); // stable: fields keep COLUMN_FIELDS order
   return [...front, ...tableLevel, ...perCheck.map((x) => x.p)];
+}
+
+/** What createRubric says about ONE check alone in a minimal spec, with the path moved to the check's real place; null when it passes alone. */
+function isolatedRefusal(c, cpId, n) {
+  try {
+    createRubric({ schema: 1, goal: "g", inputs: [], checkpoints: { [cpId]: { gating: true, checks: [c] } } });
+    return null;
+  } catch (e) {
+    const at = `spec.checkpoints.${cpId}.checks[0]`;
+    const path = typeof e?.path === "string" ? e.path : at;
+    const real = `spec.checkpoints.${cpId}.checks[${n}]`;
+    const move = (t) => (t.startsWith(at) ? real + t.slice(at.length) : t);
+    return { path: move(path), message: e instanceof Error ? clip(e.message.split(at).join(real), 400) : "invalid rubric" };
+  }
 }
 
 /** Place the one createRubric refusal at the check or checkpoint its path names, else at the front. */
@@ -320,7 +344,7 @@ export function checkSchema(args) {
  * @when Reach for this when a worker must hand back a `cells` claim as structured output: it gives the exact schema of that one check's answer box, so a numeric string or a float row number is impossible instead of a red `claim-malformed` after a retry. Per check only: a caller that puts several claims in one box merges the schemas itself.
  * @category rubric
  * @signature claimSchema(check: object) => object | null
- * @fails Never throws. Returns null for a `table` or `diff` check (they have no claim), anything that is not a valid `cells` check (unknown op, a missing field, a hostile object), and a non-object. It also returns null for a check carrying a field bareguard does not know (a caller's own `covers`, say): the validator refuses any unrecognised field, so pass the bareguard-shaped check and strip your own fields first. A fresh object each call. For an op with alternative keys (`rows`, `topN`, `duplicates`) the schema requires at least one of them (`anyOf`, so an empty box `{}` is rejected); it allows both together (no `oneOf`), and both present stays red `claim-malformed` at `checkStep`.
+ * @fails Never throws. Returns null for a `table` or `diff` check (they have no claim), anything that is not a valid `cells` check (unknown op, a missing field, a hostile object), and a non-object. It also returns null for a check carrying a field bareguard does not know (a caller's own `covers`, say): the validator refuses any unrecognised field, so pass the bareguard-shaped check and strip your own fields first. A fresh object each call. A box that offers exactly one key (every single-form op, and `rows` without `keyColumn`) lists it in `required`. An op with two alternative keys (`rows` with `keyColumn`, `topN`, `duplicates`) gets `minProperties: 1` and an `anyOf` of one `required` per key (so an empty box `{}` is rejected); it allows both together (no `oneOf`), and both present stays red `claim-malformed` at `checkStep`. Keywords emitted, exactly: `type`, `properties`, `required`, `additionalProperties` (`false`, or a schema for the row-number maps of `band` / `daysSince`), `items`, `minimum`, `minProperties`, `anyOf`, `propertyNames` with a `pattern`, and `description`. A provider that rejects `propertyNames`, a schema-valued `additionalProperties`, `minProperties` or a root `anyOf` will refuse the `band`, `daysSince`, `rows`, `topN` and `duplicates` boxes; bareguard does not emit a reduced subset.
  * @example
  * import { claimSchema } from "bareguard";
  * claimSchema({ id: "n", rule: "cells", table: "t", claim: "answer", op: "sum", column: "Amount" });

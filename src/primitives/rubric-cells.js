@@ -241,8 +241,8 @@ export function claimSchemaOf(c) {
   const properties = {};
   for (const f of forms) for (const [k, t] of f.props) if (!(c.op === "rows" && k === "keys" && c.keyColumn === undefined)) properties[k] = t.schema(c);
   const keys = Object.keys(properties);
-  // alternative keys: at least one is required (anyOf, never oneOf: both present stays red claim-malformed at checkStep)
-  const out = { type: "object", properties, ...(spec.merge ? { minProperties: 1, ...(keys.length > 1 ? { anyOf: keys.map((k) => ({ required: [k] })) } : {}) } : { required: keys }), additionalProperties: false };
+  // exactly one key offered: it is required. Alternative keys (two or more): at least one is required (anyOf, never oneOf: both present stays red claim-malformed at checkStep)
+  const out = { type: "object", properties, ...(spec.merge && keys.length > 1 ? { minProperties: 1, anyOf: keys.map((k) => ({ required: [k] })) } : { required: keys }), additionalProperties: false };
   return out;
 }
 

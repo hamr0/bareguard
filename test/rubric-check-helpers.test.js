@@ -225,7 +225,7 @@ test("claimSchema: the exact schemas of the integer / number / boolean / map sha
   assert.deepEqual(days.required, ["days"]);
   const cell = c("daysSince", { cell: { column: "Due", row: 2 }, asOf: "2026-10-31", dateFormats: [{ column: "Due", format: "YYYY-MM-DD" }] });
   assert.deepEqual(Object.keys(cell.properties), ["value"]);
-  for (const op of ["rows", "topN", "duplicates"]) assert.equal(claimSchema(cellsExamples.find((e) => e.op === op).check).minProperties, 1);
+  for (const op of ["topN", "duplicates"]) assert.equal(claimSchema(cellsExamples.find((e) => e.op === op).check).minProperties, 1);
 });
 
 test("claimSchema: ops with alternative keys require at least one (anyOf, never oneOf): an empty box is rejected, each single-key box accepted", () => {
@@ -246,10 +246,13 @@ test("claimSchema: ops with alternative keys require at least one (anyOf, never 
   }
   // every other op is single-form: a required key, so {} is rejected too
   for (const e of cellsExamples) assert.notEqual(validate(claimSchema(e.check), {}).length, 0, `${e.op}: {} must not pass`);
-  // rows without keyColumn offers one key only: no anyOf needed, {} still rejected
+  // rows without keyColumn offers one key only: that key is required (no anyOf, no minProperties), {} rejected
   const only = claimSchema(c("rows", { where: [{ column: "Amount", cmp: "gt", value: 1 }] }));
   assert.equal(only.anyOf, undefined);
+  assert.equal(only.minProperties, undefined);
+  assert.deepEqual(only.required, ["rows"]);
   assert.notEqual(validate(only, {}).length, 0);
+  assert.deepEqual(validate(only, { rows: [2] }), []);
   // an unknown field (a caller's own covers) makes the check unreadable to bareguard: null
   assert.equal(claimSchema(c("sum", { column: "Amount", covers: [1] })), null);
 });
@@ -483,7 +486,7 @@ test("checkTables: sha-mismatch (one cell off), also for a table nobody reads; a
   assert.deepEqual(checkTables(spec, { t: EX.t }), [], "an input that is not given and not read is silent");
 });
 
-test("checkTables: refused is every failing cells/table/diff check, with createRubric's path and message; else the first refusal only", () => {
+test("checkTables: refused is every failing check, with createRubric's path and message", () => {
   const bad1 = { id: "b1", rule: "cells", table: "t", claim: "a", op: "bogus", column: "Amount" };
   const bad2 = { id: "b2", rule: "table", table: "t", op: "rowCount" }; // n missing
   const ok = cellsCheck({ id: "ok" });
@@ -507,7 +510,13 @@ test("checkTables: refused is every failing cells/table/diff check, with createR
   const one = checkTables(specOf([other, cellsCheck({ column: "nope" })]), tabs());
   assert.deepEqual(one.map((p) => [p.kind, p.index]), [["refused", 0], ["not-a-column", 1]], "located at its check, the valid cells check still gets its problems");
   assert.equal(one[0].id, "w");
-  assert.deepEqual(checkTables(specOf([other, bad1]), tabs()).map((p) => p.kind), ["refused"], "only the cells-family refusal when one exists");
+  const both = checkTables(specOf([other, bad1]), tabs());
+  assert.deepEqual(both.map((p) => [p.kind, p.index, p.id]), [["refused", 0, "w"], ["refused", 1, "b1"]], "a non-cells refusal is reported next to a cells-family one");
+  assert.equal(both[0].path, "spec.checkpoints.cp.checks[0].value");
+  assert.ok(both[0].message.includes("checks[0].value"));
+  // a valid non-cells check next to a refused cells one is NOT reported
+  const fine = { id: "v", rule: "maxWords", field: "text", value: 5 };
+  assert.deepEqual(checkTables(specOf([fine, bad1]), tabs()).map((p) => [p.kind, p.index]), [["refused", 1]]);
   // a spec-level refusal comes first and has no locator
   const noGoal = checkTables({ ...specOf([cellsCheck()]), goal: "" }, tabs());
   assert.deepEqual(noGoal, [{ kind: "refused", path: "spec.goal", message: "invalid rubric: spec.goal must be a non-blank string" }]);
@@ -630,4 +639,60 @@ test("checkTables vs createRubric + checkStep: a clean answer means no table or 
     }
   }
   assert.ok(clean >= 20 && broken >= 100, `${clean} clean, ${broken} broken`);
+});
+
+test("claimSchema: every op example's box has required keys, or an anyOf of required keys when two or more are offered", () => {
+  for (const e of cellsExamples) {
+    const s = claimSchema(e.check);
+    const keys = Object.keys(s.properties);
+    if (keys.length === 1) {
+      assert.deepEqual(s.required, keys, `${e.op}: one offered key is required`);
+      assert.equal(s.anyOf, undefined, `${e.op}: no anyOf for one key`);
+    } else if (s.required !== undefined) {
+      assert.deepEqual(s.required, keys, `${e.op}`);
+    } else {
+      assert.ok(keys.length >= 2, `${e.op}`);
+      assert.deepEqual(s.anyOf, keys.map((k) => ({ required: [k] })), `${e.op}: anyOf of requireds`);
+    }
+    assert.ok(s.required !== undefined || (Array.isArray(s.anyOf) && s.anyOf.every((a) => Array.isArray(a.required))), `${e.op}: required or anyOf of required`);
+  }
+  assert.equal(cellsExamples.length, 23);
+});
+
+// The documented keyword lists (claimSchema JSDoc, cells-prd 11.5): a caller with a strict structured-output provider reads them.
+const keywordsOf = (schema) => {
+  const out = new Set();
+  const walk = (s) => {
+    if (Array.isArray(s)) return s.forEach(walk);
+    if (s === null || typeof s !== "object") return;
+    for (const [k, v] of Object.entries(s)) {
+      if (k === "properties") Object.values(v).forEach(walk);
+      else {
+        out.add(k);
+        if (["items", "additionalProperties", "anyOf", "propertyNames"].includes(k)) walk(v);
+      }
+    }
+  };
+  walk(schema);
+  return [...out].sort();
+};
+
+test("claimSchema / checkSchema: the JSON-schema keywords they emit are exactly the documented ones", () => {
+  const claimKw = new Set();
+  for (const e of cellsExamples) keywordsOf(claimSchema(e.check)).forEach((k) => claimKw.add(k));
+  assert.deepEqual([...claimKw].sort(), ["additionalProperties", "anyOf", "description", "items", "minProperties", "minimum", "propertyNames", "pattern", "required", "type"].sort());
+  const checkKw = new Set();
+  for (const rules of [["cells"], ["table"], ["cells", "table"]]) keywordsOf(checkSchema({ rules, columns: HEADER, tables: ["t", "a"] })).forEach((k) => checkKw.add(k));
+  assert.deepEqual([...checkKw].sort(), ["additionalProperties", "anyOf", "description", "enum", "items", "maxItems", "maxLength", "minItems", "minLength", "minimum", "required", "type"]);
+});
+
+test("checkTables: every refused check is surfaced in one call, non-cells and non-object entries included, in check order", () => {
+  const bad = { id: "w", rule: "maxWords", field: "text", value: 0 };
+  const ps = checkTables(specOf([null, 5, "x", [], { rule: "cells" }, bad]), {});
+  assert.deepEqual(ps.filter((p) => p.kind === "refused").map((p) => p.index), [0, 1, 2, 3, 4, 5]);
+  for (const p of ps.slice(0, 4)) assert.equal(p.path, `spec.checkpoints.cp.checks[${p.index}]`);
+  assert.ok(ps.every((p) => !/checks\[0\]/.test(p.message) || p.index === 0), "messages name the real index, not the isolated one");
+  assert.equal(ps[5].id, "w");
+  // a spec-level refusal is still one front entry, and never throws
+  assert.doesNotThrow(() => checkTables({ ...specOf([null, 5]), goal: "" }, {}));
 });
