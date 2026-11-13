@@ -3,6 +3,23 @@
 All notable changes to bareguard are documented here. Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [SemVer](https://semver.org/).
 
 
+## [0.36.0] - 2026-11-13
+
+### Added
+
+- **Check helpers for the callers that draft and run `cells` / `table` / `diff` checks (ruling #82, `docs/product/cells-prd.md` §11; asked by fwdloop and bareloop).** Six new exports, all deterministic and at $0 (no LLM, nothing inferred); each carries JSDoc `@when`, so `primitives.json` gains six entries and nothing else changes.
+  - `checkTables(spec, tables)` returns every problem a raw drafted spec has with the typed tables, in one call: `no-table`, `unreadable-table`, `not-a-column` (carries `table`, `column`, `field`), `sha-mismatch`, `refused` (`createRubric`'s `path` and message; one per failing check, a non-cells check found by remove-and-retry on the real spec, at most 20 then a `truncated` problem; a spec- or checkpoint-level refusal only when first; when any checkpoint id contains `.`, `[` or `]` the path cannot be placed, so the spec's single refusal is reported without checkpoint, index or id). Typed objects only, never throws, empty array = ok.
+  - `runTableChecks(rubric, checkpoint, tables)` runs only the `table` checks of a checkpoint with no step output and returns `[{ id, verdict, gaps, fault? }]` (frozen). It shares `checkStep`'s evaluation path and the same signed-table sha lock, so the verdicts are the same. `TypeError` only for a rubric not from `createRubric`, an unknown checkpoint or a non-object `tables`.
+  - `checkSchema({ rules, columns, tables })` is the JSON schema of ONE `cells` and/or `table` check, generated from `rubricVocabulary`: column fields an enum of the exact header strings, `table` an enum of the table names, one `op` enum (no `oneOf`), `additionalProperties: false`. Call it once per table. `null` for empty `columns` or `tables`; `TypeError` for caller misuse.
+  - `claimSchema(check)` is the JSON schema of that `cells` check's claim, exact to the strict claim types; `null` for a `table` / `diff` check or any invalid or hostile input. A box with exactly one offered key lists it in `required`; two alternative keys get `minProperties: 1` and an `anyOf` of `required`s. The schema allows `rows` and `keys` together; both present stays red `claim-malformed` at `checkStep`. The JSON-schema keywords it emits are listed in its JSDoc.
+  - `groundedValues(values, text)` and `groundedLiterals(check, text)` say which number, date and time literals an AI wrote are not in the person's own words: one strict, linear scan of one string (`$150` does not say 15; `-5` says -5 and not 5; `5k`, `400USD`, `.5` and `(500)` say nothing; proper thousands groups only; a time is `HH:MM` and grounded by `H:MM`, `HH:MM` or `H am|pm` in any case, a bare `5:00` says only 05:00; only a real ISO date grounds a date; any other three-group digit shape is opaque). `groundedLiterals` reads the `where` number and date literals, `asOf` and the row-math `b.const`.
+- **`rubricVocabulary` gains `columnAt` and `cmps` / `cmpKinds` (additive).** `columnAt` marks every column-bearing field of the cells/table/diff rules (`self`, `self.column`, `each.column`, `each`); `where` lists its comparisons as `cmps` and groups them as `cmpKinds` (`number`, `date`, `text`, `none`). Every existing vocabulary string, including each op's `claim` prose, is byte-identical; the prose is now generated from a structured claim table.
+- **`fault.inputs` on a table sha mismatch (additive).** A `stopped` `missing-measurement` from a table that does not hash to its signed sha256 now also carries `inputs`: the signed names of every table given in `opts.tables` that does not hash to its sha256, in `spec.inputs` order, at most 20 (`inputsTotal` when cut). `kind`, `detail` and `key` are unchanged; a green run does no extra hashing.
+
+### Notes
+
+- Every existing `rubricSha` is unchanged and `checkStep`'s results over every worked example are unchanged (a golden test pins them).
+
 ## [0.35.0] - 2026-11-11
 
 ### Added

@@ -11,6 +11,15 @@
       "example": "import { Gate, addToGates } from \"bareguard\";\nconst gates = [\"searcher\", \"booker\"].map((agent) => new Gate({\n  audit: { path: null },\n  rwx: { agent, agents: { searcher: \"r--\", booker: \"rw-\" }, tools: {} },\n  humanChannel: async () => ({ decision: \"deny\" }),\n}));\nawait Promise.all(gates.map((g) => g.init()));\nconst results = await addToGates(gates, { search: \"r\" });\nresults.every((r) => r.ok); // true — both gates now admit \"search\""
     },
     {
+      "name": "checkSchema",
+      "category": "rubric",
+      "when": "Reach for this when an AI must draft a `cells` or `table` check as structured output: it gives the exact schema for one check, so a column it names is one of the real headers and a table is one of the real tables, instead of you hand-writing (and drifting from) the field list. Build one schema per table, wrap it in your own array, and still run `createRubric` and `checkTables` on the result: a schema cannot say which fields an op requires.",
+      "import": "import { checkSchema } from 'bareguard'",
+      "signature": "checkSchema(args: { rules: string[], columns: string[], tables: string[] }) => object | null",
+      "fails": "Throws a TypeError only for caller misuse: `args` not an object, `rules` empty or holding anything but \"cells\" / \"table\", `columns` or `tables` not an array of strings. Returns null when `columns` or `tables` is empty (an empty enum cannot be built). Header strings of any shape (empty, \"__proto__\", very long) become plain enum data. A fresh object each call with a stable key order.",
+      "example": "import { checkSchema } from \"bareguard\";\nconst schema = checkSchema({ rules: [\"cells\", \"table\"], columns: [\"Id\", \"Amount\"], tables: [\"invoices\"] });\nschema.properties.column.enum; // [\"Id\", \"Amount\"]"
+    },
+    {
       "name": "checkStep",
       "category": "rubric",
       "when": "Reach for this each time an agent hands over output at a checkpoint: it grades the output against the signed rubric and returns the verdict, the structured gap to feed the retry, or the fault for the runner. Take any command/count measurements yourself first and pass them in — bareguard compares, it never runs a tool. For `cells`/`table`/`diff` checks also pass the typed rows in `opts.tables[name]`; a table named in `spec.inputs` must hash to its signed sha256 (`tableSha`) or the check is `stopped`. For cited checks with `decides`, `full.evidence` says where in each claim's quote the check read the anchor/value/unit (ruling #66).",
@@ -18,6 +27,24 @@
       "signature": "checkStep(rubric: Rubric, checkpoint: string, output: string|object, opts?: { measurements?: object, items?: object, inputs?: object, tables?: object, priorBaselines?: object, outputBytes?: string|Uint8Array }) => Promise<StepResult>",
       "fails": "Rejects with a TypeError only for CALLER misuse: a rubric not made by `createRubric`, an unknown checkpoint, a non-object `opts`, or a `judge` option (the judge path is not available yet — refused, not ignored). Never rejects because of the output: any shape, a throwing getter or a Proxy yields red (`happened`/field checks) and a throwing measurement yields stopped. An output that is not a string or a non-array object is red.",
       "example": "import { createRubric, checkStep } from \"bareguard\";\nconst rubric = createRubric({ schema: 1, goal: \"g\", checkpoints: { resume: { gating: true,\n  checks: [{ id: \"words-cap\", rule: \"maxWords\", field: \"text\", value: 600 }] } } });\nconst r = await checkStep(rubric, \"resume\", \"word \".repeat(633));\n// r.verdict === \"red\"; r.gaps[0] -> { key: \"resume:words-cap\", measured: 633, limit: 600, direction: \"at-most\", ... }"
+    },
+    {
+      "name": "checkTables",
+      "category": "rubric",
+      "when": "Reach for this right after an AI drafted a rubric spec over the person's tables and BEFORE signing or running it: one call lists everything that would stop it (a check naming a table or column that is not there, a table that cannot be read, a table that does not match its signed sha256, a spec `createRubric` would refuse), so you send one repair prompt instead of discovering each at step time. Empty array = ok. It checks the draft against the data; `createRubric` and `checkStep` still run as before.",
+      "import": "import { checkTables } from 'bareguard'",
+      "signature": "checkTables(spec: object, tables: object) => { kind: string, limit?: number, checkpoint?: string, index?: number, id?: string, table?: string, column?: string, field?: string, path?: string, message?: string }[]",
+      "fails": "Never throws: a hostile spec or table, a throwing getter, a Proxy, `__proto__` keys or a non-object argument all return problems (a spec that cannot be read is one `refused`). A fresh array of fresh objects each call; inputs are not mutated. `refused` is reported for EVERY failing check (the path as `createRubric` forms it): a cells/table/diff check by the validator's own function, any other check (a non-object entry too) by remove-and-retry on the REAL spec: `createRubric` throws, that check is taken out of a copy, it is asked again, and so on (so a sound check is never refused for lacking its inputs or neighbours). It stops when `createRubric` passes, when a refusal is not inside a check, or after 20 such checks; a 21st still refused adds one last problem `{ kind: \"truncated\", limit: 20 }` (more may exist). A refusal that belongs to the spec or a checkpoint is reported only when it is the FIRST one, on the untouched spec; one that appears only after removals is dropped. Stated limit: when ANY checkpoint id contains `.`, `[` or `]` the path text cannot say which check or checkpoint it names, so remove-and-retry does not run and the untouched spec's single `createRubric` refusal is reported UNPLACED (`{ kind: \"refused\", path, message }`, no checkpoint, index or id); cells/table/diff refusals found by their own validator stay placed. A check that is `refused` gets no table or column problems. Problems with no check (`unreadable-table`, `sha-mismatch`, a spec-level `refused`) come first, then each check's, in checkpoint and check order. A diff's `after` table is the artifact checked later, not signed: it is reported only when given and unreadable, and checked for `keyColumn` and a `newColumnRule`'s `a`, `b`, `result`, `where` and `dateFormats` columns when given.",
+      "example": "import { checkTables } from \"bareguard\";\nconst sheet = { header: [\"Id\", \"Amount\"], rows: [{ rowNumber: 2, cells: [\"a\", \"5\"] }] };\nconst spec = { schema: 1, goal: \"g\", inputs: [{ name: \"t\", sha256: \"0\".repeat(64) }], checkpoints: { s: { gating: true,\n  checks: [{ id: \"sum\", rule: \"cells\", table: \"t\", claim: \"ans\", op: \"sum\", column: \"amount\" }] } } };\ncheckTables(spec, { t: sheet }).map((p) => p.kind); // [\"sha-mismatch\", \"not-a-column\"]"
+    },
+    {
+      "name": "claimSchema",
+      "category": "rubric",
+      "when": "Reach for this when a worker must hand back a `cells` claim as structured output: it gives the exact schema of that one check's answer box, so a numeric string or a float row number is impossible instead of a red `claim-malformed` after a retry. Per check only: a caller that puts several claims in one box merges the schemas itself.",
+      "import": "import { claimSchema } from 'bareguard'",
+      "signature": "claimSchema(check: object) => object | null",
+      "fails": "Never throws. Returns null for a `table` or `diff` check (they have no claim), anything that is not a valid `cells` check (unknown op, a missing field, a hostile object), and a non-object. It also returns null for a check carrying a field bareguard does not know (a caller's own `covers`, say): the validator refuses any unrecognised field, so pass the bareguard-shaped check and strip your own fields first. A fresh object each call. A box that offers exactly one key (every single-form op, and `rows` without `keyColumn`) lists it in `required`. An op with two alternative keys (`rows` with `keyColumn`, `topN`, `duplicates`) gets `minProperties: 1` and an `anyOf` of one `required` per key (so an empty box `{}` is rejected); it allows both together (no `oneOf`), and both present stays red `claim-malformed` at `checkStep`. Keywords emitted, exactly: `type`, `properties`, `required`, `additionalProperties` (`false`, or a schema for the row-number maps of `band` / `daysSince`), `items`, `minimum`, `minProperties`, `anyOf`, `propertyNames` with a `pattern`, and `description`. A provider that rejects `propertyNames`, a schema-valued `additionalProperties`, `minProperties` or a root `anyOf` will refuse the `band`, `daysSince`, `rows`, `topN` and `duplicates` boxes; bareguard does not emit a reduced subset.",
+      "example": "import { claimSchema } from \"bareguard\";\nclaimSchema({ id: \"n\", rule: \"cells\", table: \"t\", claim: \"answer\", op: \"sum\", column: \"Amount\" });\n// { type: \"object\", properties: { value: { type: \"number\" } }, required: [\"value\"], additionalProperties: false }"
     },
     {
       "name": "classifyCommand",
@@ -128,6 +155,24 @@
       "example": "import { globToRegex } from \"bareguard\";\nglobToRegex(\"read_*\").test(\"read_file\"); // true"
     },
     {
+      "name": "groundedLiterals",
+      "category": "rubric",
+      "when": "Reach for this right after an AI drafted a `cells` or `table` check from the person's request: every threshold, bound and date it wrote must be in what the person said, so the check cannot silently use an invented number. Pass the person's whole instruction as one string. It judges only the literals, not whether the check is valid (that is `createRubric` and `checkTables`).",
+      "import": "import { groundedLiterals } from 'bareguard'",
+      "signature": "groundedLiterals(check: object, text: string) => { ok: boolean, missing: {path: string, kind: string, value: any}[], why?: string }",
+      "fails": "Never throws. `missing` lists, in check order (`where` entries in order, then `asOf`, then `b.const`), each literal the text does not say, with its field `path` (like `where[1].value`, `asOf`, `b.const`) and its kind (number or date). A literal of the wrong type (a numeric string, a non-finite number, a non-ISO or unreal date, an absent `lo`) is itself missing. A `check` that is not a plain object is `missing: [{ path: \"\", kind: \"check\", value: <type name> }]`; a throwing getter or Proxy yields missing entries, never a throw: a `where` entry that is not a plain object, throws, or has an unreadable or unknown `cmp` is a missing entry with `path` `where[i]` and kind \"invalid\" (only `equals`, `empty`, `notEmpty` are known to carry no literal). A `text` that is not a string grounds nothing (every literal missing, `why: \"not-a-string\"`).",
+      "example": "import { groundedLiterals } from \"bareguard\";\nconst check = { id: \"big\", rule: \"cells\", table: \"t\", claim: \"a\", op: \"countIf\", where: [{ column: \"Amount\", cmp: \"gt\", value: 500 }, { column: \"Due\", cmp: \"after\", value: \"2026-11-01\" }] };\ngroundedLiterals(check, \"count invoices over $500 due after 2026-11-30\");\n// { ok: false, missing: [{ path: \"where[1].value\", kind: \"date\", value: \"2026-11-01\" }] }"
+    },
+    {
+      "name": "groundedValues",
+      "category": "rubric",
+      "when": "Reach for this when an AI wrote literals (a threshold, a date, a time) that must have come from the person's own words and you have only the values, not a signed check: it tells you which ones the person never said, so you refuse the invented ones before anything runs. For the literals inside a drafted `cells`/`table` check use `groundedLiterals`, which is built on this.",
+      "import": "import { groundedValues } from 'bareguard'",
+      "signature": "groundedValues(values: {kind: \"number\"|\"date\"|\"time\", value: number|string}[], text: string) => { ok: boolean, missing: {index: number, kind: string, value: any}[], why?: string }",
+      "fails": "Never throws. `missing` lists, in order, every entry that is not grounded, with its `index`: an entry that is not a plain object, a `kind` outside number/date/time (reported as kind \"invalid\"), a value of the wrong type (a numeric string, NaN, Infinity, a non-real date, a time that is not exactly \"HH:MM\") is itself missing. A `values` that is not an array is `{ ok: false, missing: [], why: \"not-an-array\" }`; a `text` that is not a string grounds nothing, so every entry is missing and `why` is \"not-a-string\". One linear pass, no work cap.",
+      "example": "import { groundedValues } from \"bareguard\";\ngroundedValues([{ kind: \"number\", value: 150 }, { kind: \"number\", value: 15 }], \"budget $150 by 2026-11-18\");\n// { ok: false, missing: [{ index: 1, kind: \"number\", value: 15 }] }"
+    },
+    {
       "name": "INTERPRETER_PATTERNS",
       "category": "classify",
       "when": "Opt in to a coarse speed-bump on inline interpreter code (`python3 -c`, `node -e`, `php -r`) by passing it as `extraDestructive`. Deliberately in NO default set: the same action via `python3 script.py` stays `safe`, so a default escalation would be a false-positive flip for every consumer without closing the hole.",
@@ -216,6 +261,15 @@
       "signature": "rubricVocabulary: unknown",
       "fails": "Plain frozen data; reading never throws, and mutating it throws in strict mode (it is deep-frozen). Day 1 lists the deterministic rules only — `judged`, `locate`/`verdict` judges and soft-green are not in it.",
       "example": "import { rubricVocabulary } from \"bareguard\";\nrubricVocabulary.rules.maxWords.fields.value; // { type: \"integer\", required: true, min: 1, max: null }"
+    },
+    {
+      "name": "runTableChecks",
+      "category": "rubric",
+      "when": "Reach for this when the person's data can already be checked before any step output exists: it runs just the `table` checks of a checkpoint (every cell numeric, no duplicate ids, row math) over the typed rows and tells you which would be green, red or stopped, so a bad table is caught before the worker is asked anything. A checkpoint with no `table` check returns []. A `cells` or `diff` check needs a claim or an after-table and is not run here.",
+      "import": "import { runTableChecks } from 'bareguard'",
+      "signature": "runTableChecks(rubric: Rubric, checkpoint: string, tables: object) => { id: string, verdict: \"green\"|\"red\"|\"stopped\", gaps: Gap[], fault?: Fault }[]",
+      "fails": "Throws a TypeError only for CALLER misuse: a rubric not made by `createRubric`, an unknown checkpoint, or a `tables` that is not an object. Everything about the DATA never throws: a missing, ragged, hostile or oversize table is a per-check `stopped` (`table-invalid`, `missing-measurement`) or red (`table-too-large`) result. The array is frozen and fresh per call.",
+      "example": "import { createRubric, runTableChecks, tableSha } from \"bareguard\";\nconst sheet = { header: [\"Id\"], rows: [{ rowNumber: 2, cells: [\"a\"] }, { rowNumber: 3, cells: [\"a\"] }] };\nconst rubric = createRubric({ schema: 1, goal: \"g\", inputs: [{ name: \"t\", sha256: tableSha(sheet) }],\n  checkpoints: { s: { gating: true, checks: [{ id: \"ids\", rule: \"table\", table: \"t\", op: \"noDuplicates\", column: \"Id\" }] } } });\nrunTableChecks(rubric, \"s\", { t: sheet })[0].verdict; // \"red\": rows 2 and 3 share a value"
     },
     {
       "name": "SAFE_DEFAULT_ASK_PATTERNS",

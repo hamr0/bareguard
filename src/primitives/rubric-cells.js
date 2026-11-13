@@ -105,7 +105,7 @@ class Invalid extends Error { // the SIGNED check is malformed (createRubric ref
   constructor(path, msg) { super(msg); this.path = path; }
 }
 class Stop extends Error { // the instrument cannot measure: stopped
-  constructor(kind, detail) { super(kind); this.kind = kind; this.detail = detail; }
+  constructor(kind, detail, sha = false) { super(kind); this.kind = kind; this.detail = detail; this.sha = sha; } // `sha`: a signed table did not hash to its sha256 (RULED #82: the caller lists every such table, `fault.inputs`)
 }
 class Bad extends Error { // the claim (or a cell the worker produced) is bad: red
   constructor(kind, detail) { super(kind); this.kind = kind; this.detail = detail; }
@@ -122,29 +122,29 @@ const R = "range";
 /** @type {Record<string, Record<string, {req: string[], opt: string[], claim?: string, float?: boolean, summary: string}>>} */
 const OPS = {
   cells: {
-    count: { req: ["column"], opt: [R], claim: "{ value: integer }", summary: "non-blank cells of column" },
-    countEmpty: { req: ["column"], opt: [R], claim: "{ value: integer }", summary: "blank cells of column" },
-    countIf: { req: ["where"], opt: [R], claim: "{ value: integer }", summary: "rows matching where" },
-    sum: { req: ["column"], opt: [R, "tolerance"], float: true, claim: "{ value: number }", summary: "sum of column (blanks skipped)" },
-    sumIf: { req: ["column", "where"], opt: [R, "tolerance"], float: true, claim: "{ value: number }", summary: "sum of column over rows matching where" },
-    average: { req: ["column"], opt: [R, "tolerance"], float: true, claim: "{ value: number }", summary: "mean of column (blanks skipped; none = red no-values)" },
-    averageIf: { req: ["column", "where"], opt: [R, "tolerance"], float: true, claim: "{ value: number }", summary: "mean of column over rows matching where" },
-    median: { req: ["column"], opt: [R, "where", "tolerance"], float: true, claim: "{ value: number }", summary: "median of column (even count: mean of the middle two)" },
-    min: { req: ["column"], opt: [R, "where", "tolerance"], float: true, claim: "{ value: number }", summary: "smallest number of column" },
-    max: { req: ["column"], opt: [R, "where", "tolerance"], float: true, claim: "{ value: number }", summary: "largest number of column" },
-    found: { req: ["column", "needle"], opt: [R, "valueKind"], claim: "{ value: boolean }", summary: "needle is (or is not) a cell of column; valueKind text (exact) or number" },
-    lookup: { req: ["column", "keyColumn", "keyValue", "valueKind"], opt: [R, "dateFormats", "tolerance"], float: true, claim: "{ value: string|number }", summary: "the cell of column on the one row whose keyColumn equals keyValue (0 or 2+ matches = red)" },
-    rows: { req: ["where"], opt: [R, "keyColumn", "valueKind"], claim: "{ rows: integer[] } or { keys: string[] } (keys needs keyColumn; valueKind text|number, default text)", summary: "the claimed row numbers EQUAL the matching rows: none missing, none extra" },
-    topN: { req: ["column", "n"], opt: [R, "where", "order", "ties", "tolerance"], float: true, claim: "{ rows: integer[] } or { values: number[] }", summary: "the n largest (order desc) or smallest (asc); ties any (default) or all" },
-    uniqueCount: { req: ["column"], opt: [R, "valueKind"], claim: "{ value: integer }", summary: "distinct non-blank values of column" },
-    duplicates: { req: ["column"], opt: [R], claim: "{ values: string[] } and/or { rows: integer[] }", summary: "values (and the rows) that occur more than once in column; a value claimed twice is red" },
-    groupTotals: { req: ["column", "groupColumn"], opt: [R, "where", "tolerance"], float: true, claim: "{ totals: [{ group: string, total: number }] }", summary: "sum of column per distinct groupColumn value" },
-    percentOfTotal: { req: ["column", "where"], opt: [R, "tolerance"], float: true, claim: "{ value: number }", summary: "sum over rows matching where as a percent of the column's total" },
-    band: { req: ["column", "bands"], opt: [R, "where", "asOf", "dateFormats", "allowEmpty"], claim: "{ bands: { \"<rowNumber>\": \"<band name>\" } }", summary: "each row's number (or, with asOf, its days since the date column) falls in one signed band" },
-    daysBetween: { req: ["from", "to", "dateFormats"], opt: [], claim: "{ value: integer }", summary: "whole days from the date cell `from` to the date cell `to` (signed)" },
-    daysSince: { req: ["asOf", "dateFormats"], opt: ["cell", "column", R, "where", "allowEmpty"], claim: "{ value: integer } with `cell`; { days: { \"<rowNumber>\": integer } } with `column` (exactly one of cell, column)", summary: "whole days from a date to the signed asOf date (asOf minus the date)" },
-    earliest: { req: ["column", "dateFormats"], opt: [R], claim: "{ value: date in the column's signed format }", summary: "the earliest date of column" },
-    latest: { req: ["column", "dateFormats"], opt: [R], claim: "{ value: date in the column's signed format }", summary: "the latest date of column" },
+    count: { req: ["column"], opt: [R], summary: "non-blank cells of column" },
+    countEmpty: { req: ["column"], opt: [R], summary: "blank cells of column" },
+    countIf: { req: ["where"], opt: [R], summary: "rows matching where" },
+    sum: { req: ["column"], opt: [R, "tolerance"], float: true, summary: "sum of column (blanks skipped)" },
+    sumIf: { req: ["column", "where"], opt: [R, "tolerance"], float: true, summary: "sum of column over rows matching where" },
+    average: { req: ["column"], opt: [R, "tolerance"], float: true, summary: "mean of column (blanks skipped; none = red no-values)" },
+    averageIf: { req: ["column", "where"], opt: [R, "tolerance"], float: true, summary: "mean of column over rows matching where" },
+    median: { req: ["column"], opt: [R, "where", "tolerance"], float: true, summary: "median of column (even count: mean of the middle two)" },
+    min: { req: ["column"], opt: [R, "where", "tolerance"], float: true, summary: "smallest number of column" },
+    max: { req: ["column"], opt: [R, "where", "tolerance"], float: true, summary: "largest number of column" },
+    found: { req: ["column", "needle"], opt: [R, "valueKind"], summary: "needle is (or is not) a cell of column; valueKind text (exact) or number" },
+    lookup: { req: ["column", "keyColumn", "keyValue", "valueKind"], opt: [R, "dateFormats", "tolerance"], float: true, summary: "the cell of column on the one row whose keyColumn equals keyValue (0 or 2+ matches = red)" },
+    rows: { req: ["where"], opt: [R, "keyColumn", "valueKind"], summary: "the claimed row numbers EQUAL the matching rows: none missing, none extra" },
+    topN: { req: ["column", "n"], opt: [R, "where", "order", "ties", "tolerance"], float: true, summary: "the n largest (order desc) or smallest (asc); ties any (default) or all" },
+    uniqueCount: { req: ["column"], opt: [R, "valueKind"], summary: "distinct non-blank values of column" },
+    duplicates: { req: ["column"], opt: [R], summary: "values (and the rows) that occur more than once in column; a value claimed twice is red" },
+    groupTotals: { req: ["column", "groupColumn"], opt: [R, "where", "tolerance"], float: true, summary: "sum of column per distinct groupColumn value" },
+    percentOfTotal: { req: ["column", "where"], opt: [R, "tolerance"], float: true, summary: "sum over rows matching where as a percent of the column's total" },
+    band: { req: ["column", "bands"], opt: [R, "where", "asOf", "dateFormats", "allowEmpty"], summary: "each row's number (or, with asOf, its days since the date column) falls in one signed band" },
+    daysBetween: { req: ["from", "to", "dateFormats"], opt: [], summary: "whole days from the date cell `from` to the date cell `to` (signed)" },
+    daysSince: { req: ["asOf", "dateFormats"], opt: ["cell", "column", R, "where", "allowEmpty"], summary: "whole days from a date to the signed asOf date (asOf minus the date)" },
+    earliest: { req: ["column", "dateFormats"], opt: [R], summary: "the earliest date of column" },
+    latest: { req: ["column", "dateFormats"], opt: [R], summary: "the latest date of column" },
   },
   table: {
     allNumbers: { req: ["column"], opt: [R, "allowEmpty"], summary: "every cell of column reads as a number (a blank is a violation unless allowEmpty)" },
@@ -169,6 +169,82 @@ const CMP_NUM = ["gt", "gte", "lt", "lte", "eq", "between"];
 const CMP_DATE = ["before", "after", "dateBetween", "dateOn"];
 const CMP_ALL = [...CMP_NUM, ...CMP_DATE, "equals", "empty", "notEmpty"];
 const FNS = ["add", "sub", "mul", "div", "pct"];
+const MAX_DATE_FORMATS = 50; // entries of a `dateFormats` list
+/** The bounds the validator enforces, for the schema builder (never a second list: `checkSchema` reads these). */
+export const SIGNED_LIMITS = Object.freeze({ conds: MAX_CONDS, bands: MAX_BANDS, dateFormats: MAX_DATE_FORMATS, keys: MAX_KEYS, name: MAX_NAME, signed: MAX_SIGNED });
+/** `where` comparisons by what they take: `value` (number, date or text), `lo` + `hi` (between, dateBetween), or nothing. From the constants the validator uses. */
+export const CMP_KINDS = Object.freeze({ number: Object.freeze([...CMP_NUM]), date: Object.freeze([...CMP_DATE]), text: Object.freeze(["equals"]), none: Object.freeze(["empty", "notEmpty"]) });
+export const CMP_LIST = Object.freeze([...CMP_ALL]);
+
+// --- the structured claim table (RULED #82) -----------------------------------------
+// One entry per `cells` op: the claim's keys, each key's type, and how the forms combine. BOTH the vocabulary's prose `claim` string
+// (byte-identical to the strings that were hand-written here before) and `claimSchemaFor` (the JSON schema of the claim) are generated
+// from it; a test pins the keys and types to the claim reader below. A type has `prose` and `schema(check)` (the check's signed fields
+// pick the type where the reader does: `valueKind`, the date format).
+const rowKeyMap = (item) => ({ type: "object", propertyNames: { pattern: "^[1-9][0-9]*$" }, additionalProperties: item });
+const dateSchema = (c) => {
+  const f = Array.isArray(c.dateFormats) ? c.dateFormats.find((e) => e.column === c.column)?.format : undefined;
+  return { type: "string", ...(f !== undefined ? { description: `a date in the format ${f}` } : {}) };
+};
+const T = {
+  int: { prose: "integer", schema: () => ({ type: "integer" }) },
+  num: { prose: "number", schema: () => ({ type: "number" }) },
+  bool: { prose: "boolean", schema: () => ({ type: "boolean" }) },
+  lookupValue: { prose: "string|number", schema: (c) => (c.valueKind === "number" ? { type: "number" } : c.valueKind === "date" ? dateSchema(c) : { type: "string" }) },
+  rowList: { prose: "integer[]", schema: () => ({ type: "array", items: { type: "integer", minimum: 2 } }) },
+  keyList: { prose: "string[]", schema: (c) => ({ type: "array", items: { type: c.valueKind === "number" ? "number" : "string" } }) },
+  numList: { prose: "number[]", schema: () => ({ type: "array", items: { type: "number" } }) },
+  strList: { prose: "string[]", schema: () => ({ type: "array", items: { type: "string" } }) },
+  pairs: { prose: "[{ group: string, total: number }]", schema: () => ({ type: "array", items: { type: "object", properties: { group: { type: "string" }, total: { type: "number" } }, required: ["group", "total"], additionalProperties: false } }) },
+  bandMap: { prose: '{ "<rowNumber>": "<band name>" }', schema: () => rowKeyMap({ type: "string" }) },
+  dayMap: { prose: '{ "<rowNumber>": integer }', schema: () => rowKeyMap({ type: "integer" }) },
+  dateValue: { prose: "date in the column's signed format", schema: (c) => dateSchema(c) },
+};
+const one = (t) => ({ forms: [{ props: [["value", t]] }] });
+/** @type {Record<string, {forms: {props: any[][], with?: string, when?: string}[], join?: string, suffix?: string, merge?: boolean}>} */
+const CLAIM_SPEC = {
+  count: one(T.int), countEmpty: one(T.int), countIf: one(T.int), uniqueCount: one(T.int), daysBetween: one(T.int),
+  sum: one(T.num), sumIf: one(T.num), average: one(T.num), averageIf: one(T.num), median: one(T.num), min: one(T.num), max: one(T.num), percentOfTotal: one(T.num),
+  found: one(T.bool),
+  lookup: one(T.lookupValue),
+  rows: { forms: [{ props: [["rows", T.rowList]] }, { props: [["keys", T.keyList]] }], suffix: "(keys needs keyColumn; valueKind text|number, default text)", merge: true },
+  topN: { forms: [{ props: [["rows", T.rowList]] }, { props: [["values", T.numList]] }], merge: true },
+  duplicates: { forms: [{ props: [["values", T.strList]] }, { props: [["rows", T.rowList]] }], join: " and/or ", merge: true },
+  groupTotals: { forms: [{ props: [["totals", T.pairs]] }] },
+  band: { forms: [{ props: [["bands", T.bandMap]] }] },
+  daysSince: { forms: [{ props: [["value", T.int]], with: "`cell`", when: "cell" }, { props: [["days", T.dayMap]], with: "`column`", when: "column" }], join: "; ", suffix: "(exactly one of cell, column)" },
+  earliest: one(T.dateValue), latest: one(T.dateValue),
+};
+function claimProse(spec) {
+  const forms = spec.forms.map((f) => `{ ${f.props.map(([k, t]) => `${k}: ${t.prose}`).join(", ")} }${f.with !== undefined ? ` with ${f.with}` : ""}`);
+  return forms.join(spec.join ?? " or ") + (spec.suffix !== undefined ? ` ${spec.suffix}` : "");
+}
+for (const op of Object.keys(OPS.cells)) {
+  if (!Object.hasOwn(CLAIM_SPEC, op)) throw new Error(`rubric-cells: cells op ${op} has no CLAIM_SPEC entry`);
+  OPS.cells[op].claim = claimProse(CLAIM_SPEC[op]);
+}
+for (const op of Object.keys(CLAIM_SPEC)) if (!Object.hasOwn(OPS.cells, op)) throw new Error(`rubric-cells: CLAIM_SPEC names unknown op ${op}`);
+/** The claim keys of an op as the structured table has them: `{ key: prose type }` per form (for the test that pins the table to the reader). */
+export const CLAIM_KEYS_BY_OP = Object.freeze(Object.fromEntries(Object.entries(CLAIM_SPEC).map(([op, sp]) => [op, Object.freeze(sp.forms.flatMap((f) => f.props.map(([k]) => k)))])));
+
+/**
+ * The JSON schema of the claim a signed `cells` check expects (the object under its `claim` field name), built from CLAIM_SPEC and the
+ * check's signed fields; null when the check is not a valid `cells` check. Fresh object per call. Pure; the caller passes a plain copy.
+ * @param {any} c a signed check copy
+ */
+export function claimSchemaOf(c) {
+  if (!plain(c) || c.rule !== "cells" || signedProblem("cells", c) !== null) return null;
+  const spec = CLAIM_SPEC[c.op];
+  if (spec === undefined) return null;
+  const forms = spec.merge ? spec.forms : [spec.forms.find((f) => f.when === undefined || c[f.when] !== undefined) ?? spec.forms[0]];
+  /** @type {Record<string, any>} */
+  const properties = {};
+  for (const f of forms) for (const [k, t] of f.props) if (!(c.op === "rows" && k === "keys" && c.keyColumn === undefined)) properties[k] = t.schema(c);
+  const keys = Object.keys(properties);
+  // exactly one key offered: it is required. Alternative keys (two or more): at least one is required (anyOf, never oneOf: both present stays red claim-malformed at checkStep)
+  const out = { type: "object", properties, ...(spec.merge && keys.length > 1 ? { minProperties: 1, anyOf: keys.map((k) => ({ required: [k] })) } : { required: keys }), additionalProperties: false };
+  return out;
+}
 
 const COL = { type: "string", maxLength: MAX_SIGNED };
 /** Field docs for `rubricVocabulary` (one entry per field name; `required` is per op, listed in `ops`). */
@@ -204,6 +280,20 @@ export const FIELD_DOCS = {
   columns: { type: "string-list", required: false, description: `0-${MAX_KEYS} column headers allowed to change (an empty list = nothing may change)` },
   exceptKeys: { type: "string-list", required: false, description: `0-${MAX_KEYS} key values (of keyColumn) whose rows may differ` },
 };
+// RULED #82: which fields of a check name a COLUMN of a table, and where inside the field the header string sits (verified against
+// validateSigned / runCells / runDiff): "self" = the field value (`b` also admits { const }), "self.column" = `<field>.column`,
+// "each.column" = `<field>[].column`, "each" = every element. Every other string field (needle, keyValue, exceptKeys, bands[].name, claim,
+// table, before, after, id, text) is a VALUE or a name, not a header. One table beside FIELD_DOCS: a field cannot be marked and undocumented.
+const COLUMN_AT = { column: "self", keyColumn: "self", groupColumn: "self", result: "self", a: "self", b: "self", from: "self.column", to: "self.column", cell: "self.column", where: "each.column", dateFormats: "each.column", columns: "each" };
+for (const [k, at] of Object.entries(COLUMN_AT)) {
+  if (!Object.hasOwn(FIELD_DOCS, k)) throw new Error(`rubric-cells: columnAt names undocumented field ${k}`);
+  /** @type {any} */ (FIELD_DOCS)[k].columnAt = at;
+}
+/** The fields of a check that name a column, and where (see COLUMN_AT). */
+export const COLUMN_FIELDS = Object.freeze({ ...COLUMN_AT });
+// the where comparison list, from the constants the validator uses (not a second list); `cmpKinds` says which take value / lo+hi / nothing
+/** @type {any} */ (FIELD_DOCS).where.cmps = [...CMP_ALL];
+/** @type {any} */ (FIELD_DOCS).where.cmpKinds = { number: [...CMP_NUM], date: [...CMP_DATE], text: ["equals"], none: ["empty", "notEmpty"] };
 // One worked example per op: the signed check and (cells) the matching step `output` ({ answer: <claim> }), against EXAMPLE_TABLES. Every one runs green
 // (test/rubric-cells-gate.test.js), so the vocabulary cannot drift from the code. Key typing to copy: `rows` are integers,
 // `value` is a JS number (never "17"), `days` / `bands` are objects with digit-string row keys and number / string values.
@@ -369,7 +459,7 @@ function checkOperand(v, path, allowConst) {
   nameStr(v, path);
 }
 function checkDateFormats(v, path) {
-  if (!Array.isArray(v) || v.length < 1 || v.length > 50) throw new Invalid(path, "must be a list of 1-50 { column, format }");
+  if (!Array.isArray(v) || v.length < 1 || v.length > MAX_DATE_FORMATS) throw new Invalid(path, `must be a list of 1-${MAX_DATE_FORMATS} { column, format }`);
   v.forEach((e, i) => {
     const p = `${path}[${i}]`;
     if (!plain(e)) throw new Invalid(p, "must be { column, format }");
@@ -1357,7 +1447,7 @@ export function makeEnv(cache, getTables, readClaimField, signedSha) {
           hit = { t: snapshotTable(raw, name) };
           const want = signedSha ? signedSha(name) : undefined;
           // a table the spec signed (spec.inputs) must hash to its sha256, like a cited source: else the instrument cannot trust it
-          if (want !== undefined && canonTableSha(hit.t) !== want) throw new Stop("missing-measurement", `table ${clip(name)} does not match its signed sha256`);
+          if (want !== undefined && canonTableSha(hit.t) !== want) throw new Stop("missing-measurement", `table ${clip(name)} does not match its signed sha256`, true);
         } catch (e) {
           hit = { e };
         }
@@ -1375,7 +1465,7 @@ export function makeEnv(cache, getTables, readClaimField, signedSha) {
  * @param {"cells"|"table"|"diff"} rule
  * @param {any} check the signed check
  * @param {{ table: (name: string) => any, claim: () => {value?: any, missing?: true, unreadable?: true} }} env `table(name)` returns a snapshot or throws Stop/Big; `claim()` reads the claim field
- * @returns {{ stopped: {kind: string, detail: string}|null, gaps: object[], expected: object|null }}
+ * @returns {{ stopped: {kind: string, detail: string, sha?: boolean}|null, gaps: object[], expected: object|null }}
  */
 export function evaluate(rule, check, env) {
   const ctx = mkCtx();
@@ -1393,7 +1483,7 @@ export function evaluate(rule, check, env) {
   } catch (e) {
     if (e instanceof Bad) gap(ctx, e.kind, [clip(String(e.detail))]);
     else if (e instanceof Big) gap(ctx, "table-too-large", [e.what], { measured: e.measured, limit: e.limit });
-    else if (e instanceof Stop) stopped = { kind: e.kind, detail: e.detail };
+    else if (e instanceof Stop) stopped = { kind: e.kind, detail: e.detail, ...(e.sha ? { sha: true } : {}) };
     else stopped = { kind: "exception", detail: clip(e instanceof Error ? e.message : "unexpected error", 200) };
   }
   if (stopped) return { stopped, gaps: [], expected: null };

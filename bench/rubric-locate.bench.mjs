@@ -103,3 +103,26 @@ for (const [name, q] of Object.entries(untilCases)) {
 }
 console.log(`5 MiB text until (${Object.keys(untilCases).length * 3} cases): worst ${worstUntil.toFixed(0)} ms`);
 console.log("bench:rubric ok");
+
+// groundedValues / groundedLiterals (RULED #82, cells-prd.md §11.6): ONE linear scan, no work cap. The hostile 5 MiB shapes live here;
+// the default suite keeps a 16 KiB -> 64 KiB linearity guard (test/rubric-grounded.test.js).
+{
+  const { groundedValues } = await import("../src/primitives/rubric-grounded.js");
+  const want = [{ kind: "number", value: 5 }, { kind: "date", value: "2026-11-18" }, { kind: "time", value: "09:00" }];
+  const shapes = {
+    digits: "7".repeat(MiB5), commas: "1,".repeat(MiB5 / 2), dots: "1.".repeat(MiB5 / 2), dashes: "-".repeat(MiB5), colons: ":".repeat(MiB5), dollars: "$".repeat(MiB5),
+    dateRuns: "1-1-".repeat(MiB5 / 4), chain: "1.1.1.".repeat(Math.floor(MiB5 / 6)), amounts: "$1$".repeat(Math.floor(MiB5 / 3)), numbers: "1 ".repeat(MiB5 / 2),
+    times: "12:05 AM ".repeat(Math.floor(MiB5 / 9)), ampm: "9 a ".repeat(MiB5 / 4), signs: "+-".repeat(MiB5 / 2), parens: "(5".repeat(MiB5 / 2),
+    mixed: "09:27 AM 1.2k $5USD (5) -5 −5 a.m. ".repeat(Math.floor(MiB5 / 36)),
+  };
+  let w = 0;
+  for (const [name, q] of Object.entries(shapes)) {
+    const t1 = process.hrtime.bigint();
+    const r = groundedValues(want, q);
+    const ms = Number(process.hrtime.bigint() - t1) / 1e6;
+    w = Math.max(w, ms);
+    assert.equal(typeof r.ok, "boolean", name);
+    assert.ok(ms < 30000, `groundedValues ${name} took ${ms}ms`);
+  }
+  console.log(`5 MiB groundedValues (${Object.keys(shapes).length} shapes): worst ${w.toFixed(0)} ms`);
+}

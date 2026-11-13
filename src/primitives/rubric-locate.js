@@ -29,7 +29,7 @@ const isWs = (c) => c === 32 || (c >= 9 && c <= 13);
  * any "," is present, later groups exactly 3, at most one ".", then at least one digit). Null = malformed.
  * Returns an unsigned, normalized decimal {neg:false, int, frac}.
  */
-function parseGrammar(text, a, b, comma = false) {
+export function parseGrammar(text, a, b, comma = false) {
   if (comma) return parseGrammarComma(text, a, b);
   let i = a;
   while (i < b && isDigit(text.charCodeAt(i))) i++;
@@ -108,7 +108,7 @@ function normDec(neg, int, frac) {
   return { neg, int, frac };
 }
 
-function decToString(d) {
+export function decToString(d) {
   return (d.neg ? "-" : "") + d.int + (d.frac ? "." + d.frac : "");
 }
 
@@ -446,6 +446,8 @@ function dateLangReader(d) {
  * " AM" / " PM" (uppercase, one space, not followed by a letter) = 12-hour; a lowercase/mixed/dotted
  * spelling or an uppercase AM/PM with letters glued on = malformed; any other following word (a word that
  * merely starts "Am", like "American") leaves a 24-hour time. Value = minutes since midnight.
+ * Deliberately NOT the grounded rule: `suffixAt` in rubric-grounded.js reads any-case am/pm; this reader calls lowercase malformed (#34).
+ * Both are pinned side by side in test/rubric-grounded.test.js ("time readers"); change one and that test goes red.
  */
 function readTime(text, s) {
   const n = text.length;

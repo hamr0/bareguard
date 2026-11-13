@@ -195,7 +195,8 @@ You pass the table rows to `checkStep` (`opts.tables[name]`, shape `{ header, ro
 
 Common fields: `table`, `column`, `range` (`{ from, to }`, row numbers), `where` (1-20 conditions, all must hold), `tolerance` (float ops; default 0.005), `dateFormats`, `allowEmpty`.
 
-- Stopped, all three rules: `table-invalid` (table missing or malformed), `check-invalid` (unknown column or row, or a field that cannot apply), `exception`.
+- Stopped, all three rules: `table-invalid` (table missing or malformed), `check-invalid` (unknown column or row, or a field that cannot apply), `missing-measurement` (a table named in the spec's `inputs` does not hash to its signed sha256; the fault's `inputs` lists the name of EVERY given table that does not, at most 20, `inputsTotal` past that), `exception`.
+- Helpers (not rules): `checkTables`, `runTableChecks`, `checkSchema`, `claimSchema`, `groundedValues` and `groundedLiterals` let a caller check a drafted spec against the tables before running it; see [cells-prd.md](cells-prd.md) §11.
 - Red when the table is the problem: `unreadable-cell`, `empty-operand`, `result-empty`, `div-zero`, `no-values`, `no-band`, `value-overflow`, `key-not-unique`, `lookup-not-unique`, `lookup-unreadable`, `fewer-than-n`, `no-rows-checked`, `table-too-large`. Table gaps are listed first.
 - Gaps never carry cell text (rows, `row:Column` cells and column names only).
 

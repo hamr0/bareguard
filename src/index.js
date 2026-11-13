@@ -55,8 +55,11 @@ export {
   rubricSha,
   tableSha,
   checkStep,
+  runTableChecks,
   renderGaps,
   quoteIn,
   numbersInQuote,
   rubricVocabulary,
 } from "./primitives/rubric.js";
+export { checkTables, checkSchema, claimSchema } from "./primitives/rubric-helpers.js";
+export { groundedValues, groundedLiterals } from "./primitives/rubric-grounded.js";
