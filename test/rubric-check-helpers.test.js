@@ -237,6 +237,7 @@ test("claimSchema: ops with alternative keys require at least one (anyOf, never 
   ];
   for (const [check, singles] of cases) {
     const s = claimSchema(check);
+    assert.ok(Array.isArray(s.anyOf), `${check.op}: anyOf present`);
     assert.equal(s.anyOf.length, 2, check.op);
     assert.ok(!JSON.stringify(s).includes("oneOf"));
     assert.notEqual(validate(s, {}).length, 0, `${check.op}: empty box`);
