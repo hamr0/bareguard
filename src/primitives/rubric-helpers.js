@@ -57,11 +57,11 @@ function columnRefs(c) {
  * named in `spec.inputs` whose given rows do not hash to the signed sha256). Typed objects only; callers write their own sentences.
  * @param {object} spec the raw (not yet `createRubric`-ed) spec a drafter produced
  * @param {Object<string, {header: string[], rows: {rowNumber: number, cells: string[]}[]}>} tables
- * @returns {{ kind: "no-table"|"unreadable-table"|"not-a-column"|"sha-mismatch"|"refused", checkpoint?: string, index?: number, id?: string, table?: string, column?: string, field?: string, path?: string, message?: string }[]}
+ * @returns {{ kind: "no-table"|"unreadable-table"|"not-a-column"|"sha-mismatch"|"refused"|"truncated", limit?: number, checkpoint?: string, index?: number, id?: string, table?: string, column?: string, field?: string, path?: string, message?: string }[]}
  * @when Reach for this right after an AI drafted a rubric spec over the person's tables and BEFORE signing or running it: one call lists everything that would stop it (a check naming a table or column that is not there, a table that cannot be read, a table that does not match its signed sha256, a spec `createRubric` would refuse), so you send one repair prompt instead of discovering each at step time. Empty array = ok. It checks the draft against the data; `createRubric` and `checkStep` still run as before.
  * @category rubric
- * @signature checkTables(spec: object, tables: object) => { kind: string, checkpoint?: string, index?: number, id?: string, table?: string, column?: string, field?: string, path?: string, message?: string }[]
- * @fails Never throws: a hostile spec or table, a throwing getter, a Proxy, `__proto__` keys or a non-object argument all return problems (a spec that cannot be read is one `refused`). A fresh array of fresh objects each call; inputs are not mutated. `refused` is reported for EVERY failing check (the path as `createRubric` forms it): a cells/table/diff check by the validator's own function, any other check (a non-object entry too) by `createRubric` run on that check alone in a minimal spec, with the path and message moved to the check's real index; a refusal that belongs to the spec or a checkpoint (not to a check) is reported once, and only when no check-level refusal was found. A check that is `refused` gets no table or column problems. Problems with no check (`unreadable-table`, `sha-mismatch`, a spec-level `refused`) come first, then each check's, in checkpoint and check order. A diff's `after` table is the artifact checked later, not signed: it is reported only when given and unreadable, and checked for `keyColumn` and a `newColumnRule`'s `a`, `b`, `result`, `where` and `dateFormats` columns when given.
+ * @signature checkTables(spec: object, tables: object) => { kind: string, limit?: number, checkpoint?: string, index?: number, id?: string, table?: string, column?: string, field?: string, path?: string, message?: string }[]
+ * @fails Never throws: a hostile spec or table, a throwing getter, a Proxy, `__proto__` keys or a non-object argument all return problems (a spec that cannot be read is one `refused`). A fresh array of fresh objects each call; inputs are not mutated. `refused` is reported for EVERY failing check (the path as `createRubric` forms it): a cells/table/diff check by the validator's own function, any other check (a non-object entry too) by remove-and-retry on the REAL spec: `createRubric` throws, that check is taken out of a copy, it is asked again, and so on (so a sound check is never refused for lacking its inputs or neighbours). It stops when `createRubric` passes, when a refusal is not inside a check, or after 20 such checks; a 21st still refused adds one last problem `{ kind: "truncated", limit: 20 }` (more may exist). A refusal that belongs to the spec or a checkpoint is reported only when it is the FIRST one, on the untouched spec; one that appears only after removals is dropped. A check that is `refused` gets no table or column problems. Problems with no check (`unreadable-table`, `sha-mismatch`, a spec-level `refused`) come first, then each check's, in checkpoint and check order. A diff's `after` table is the artifact checked later, not signed: it is reported only when given and unreadable, and checked for `keyColumn` and a `newColumnRule`'s `a`, `b`, `result`, `where` and `dateFormats` columns when given.
  * @example
  * import { checkTables } from "bareguard";
  * const sheet = { header: ["Id", "Amount"], rows: [{ rowNumber: 2, cells: ["a", "5"] }] };
@@ -121,20 +121,16 @@ function buildProblems(spec, tables) {
   const front = [];
   const tableLevel = [];
   const perCheck = []; // { ci, n, rank, p }
-  const locatedWhole = whole !== null && !cellsRefused ? locate(whole, cps, entries) : null;
-  if (locatedWhole !== null) {
-    if (locatedWhole.ci === undefined) front.push(locatedWhole.p);
-    else perCheck.push(locatedWhole);
-  }
-
-  // every non-cells check on its own: createRubric stops at its first refusal, so each is validated in a minimal spec (gating checkpoint, no
-  // inputs) to report all of them in one call; the one already placed above is not reported twice
+  // remove-and-retry on the REAL spec (createRubric stops at its first refusal): see removalRefusals
+  let truncated = false;
   if (whole !== null) {
-    for (const e of entries) {
-      if (e.cells || (locatedWhole !== null && locatedWhole.ci === e.ci && locatedWhole.n === e.n)) continue;
-      const alone = isolatedRefusal(e.c, e.cpId, e.n);
-      if (alone !== null) perCheck.push({ ci: e.ci, n: e.n, rank: 0, p: { kind: "refused", checkpoint: e.cpId, index: e.n, ...(e.id !== undefined ? { id: e.id } : {}), path: alone.path, message: alone.message } });
+    const r = removalRefusals(s, whole, cps, entries);
+    if (r.front !== null) {
+      if (r.front.ci === undefined) front.push(r.front.p);
+      else perCheck.push(r.front);
     }
+    for (const x of r.checks) perCheck.push(x);
+    truncated = r.truncated;
   }
 
   const seen = new Set();
@@ -183,21 +179,99 @@ function buildProblems(spec, tables) {
   for (const name of signed.keys()) touch(name); // a signed table nobody reads is still compared
 
   perCheck.sort((a, b) => a.ci - b.ci || a.n - b.n || a.rank - b.rank); // stable: fields keep COLUMN_FIELDS order
-  return [...front, ...tableLevel, ...perCheck.map((x) => x.p)];
+  return [...front, ...tableLevel, ...perCheck.map((x) => x.p), ...(truncated ? [{ kind: "truncated", limit: MAX_REFUSED }] : [])];
 }
 
-/** What createRubric says about ONE check alone in a minimal spec, with the path moved to the check's real place; null when it passes alone. */
-function isolatedRefusal(c, cpId, n) {
-  try {
-    createRubric({ schema: 1, goal: "g", inputs: [], checkpoints: { [cpId]: { gating: true, checks: [c] } } });
-    return null;
-  } catch (e) {
-    const at = `spec.checkpoints.${cpId}.checks[0]`;
-    const path = typeof e?.path === "string" ? e.path : at;
-    const real = `spec.checkpoints.${cpId}.checks[${n}]`;
-    const move = (t) => (t.startsWith(at) ? real + t.slice(at.length) : t);
-    return { path: move(path), message: e instanceof Error ? clip(e.message.split(at).join(real), 400) : "invalid rubric" };
+const MAX_REFUSED = 20; // check refusals found by remove-and-retry; one more is a `truncated` problem
+
+/** The check a createRubric path points into: { cpId, k } with k the index in the CURRENT checks list, or null (spec- or checkpoint-level). */
+function checkAt(path, cps) {
+  for (const cpId of cps) {
+    const head = `spec.checkpoints.${cpId}.checks`;
+    if (!path.startsWith(`${head}[`)) continue;
+    const m = /^\[(\d+)\]/.exec(path.slice(head.length));
+    if (m !== null) return { cpId, k: +m[1] };
   }
+  return null;
+}
+
+/**
+ * createRubric stops at its first refusal. Report the rest by remove-and-retry on the REAL spec (its inputs, checkpoints and neighbouring
+ * checks are all there, so a sound check is never refused for lacking context): record the refusal, take that check out of a copy, ask
+ * createRubric again; stop when it passes, when the refusal is not inside a check, or at MAX_REFUSED. A non-check refusal counts only on the
+ * untouched spec (after a removal it can be an artifact, such as an empty checkpoint, and is dropped). Cells-family refusals are already known
+ * (`e.refused`): those checks are taken out first and never reported twice. A checkpoint a removal empties stays (createRubric accepts it).
+ */
+function removalRefusals(s, first, cps, entries) {
+  /** @type {{ front: any, checks: any[], truncated: boolean }} */
+  const out = { front: null, checks: [], truncated: false };
+  try {
+    const known = new Map(entries.map((e) => [`${e.cpId}\u0000${e.n}`, e]));
+    /** @type {Map<string, number[]>} the original indexes still in each checkpoint's checks, in order */
+    const alive = new Map();
+    for (const e of entries) {
+      const list = alive.get(e.cpId) ?? [];
+      alive.set(e.cpId, list);
+      list.push(e.n);
+    }
+    const at0 = checkAt(first.path, cps);
+    if (at0 === null) {
+      out.front = locate(first, cps, entries); // spec- or checkpoint-level on the untouched spec: reported once
+      return out;
+    }
+    const aliveOrig = (cpId, k) => alive.get(cpId)?.[k];
+    const take = (cpId, orig) => alive.set(cpId, (alive.get(cpId) ?? []).filter((i) => i !== orig));
+    const record = (err, loc) => {
+      const orig = aliveOrig(loc.cpId, loc.k);
+      const e = known.get(`${loc.cpId}\u0000${orig}`);
+      const now = `spec.checkpoints.${loc.cpId}.checks[${loc.k}]`;
+      const real = `spec.checkpoints.${loc.cpId}.checks[${orig}]`;
+      if (e !== undefined && e.refused === null) {
+        const path = err.path.startsWith(now) ? real + err.path.slice(now.length) : err.path;
+        out.checks.push({ ci: e.ci, n: orig, rank: 0, p: { kind: "refused", checkpoint: loc.cpId, index: orig, ...(e.id !== undefined ? { id: e.id } : {}), path, message: err.message.split(now).join(real) } });
+      }
+      return orig;
+    };
+    const copy = () => {
+      const checkpoints = Object.create(null);
+      for (const cpId of cps) {
+        const cp = s.checkpoints[cpId];
+        const keep = alive.get(cpId);
+        if (keep === undefined) checkpoints[cpId] = cp;
+        else checkpoints[cpId] = Object.assign(Object.create(null), cp, { checks: keep.map((i) => cp.checks[i]) });
+      }
+      return Object.assign(Object.create(null), s, { checkpoints });
+    };
+    // the first refusal sits in a check of the untouched spec: record it, then take it out with every cells-family refusal already known
+    /** @type {{cpId: string, k: number}|null} */
+    let loc = at0;
+    const orig0 = record(first, loc);
+    const gone = [];
+    for (const e of entries) if (e.refused !== null) gone.push([e.cpId, e.n]);
+    if (orig0 !== undefined) gone.push([loc.cpId, orig0]);
+    for (const [cpId, n] of gone) take(cpId, n);
+    while (out.checks.length < MAX_REFUSED) {
+      try {
+        createRubric(copy());
+        return out;
+      } catch (e) {
+        const err = { path: typeof e?.path === "string" ? e.path : "spec", message: e instanceof Error ? clip(e.message, 400) : "invalid rubric" };
+        loc = checkAt(err.path, cps);
+        if (loc === null || aliveOrig(loc.cpId, loc.k) === undefined) return out; // not inside a check: an artifact of the removals
+        const o = record(err, loc);
+        take(loc.cpId, o);
+      }
+    }
+    try {
+      createRubric(copy());
+    } catch (e) {
+      const l = typeof e?.path === "string" ? checkAt(e.path, cps) : null;
+      out.truncated = l !== null && aliveOrig(l.cpId, l.k) !== undefined;
+    }
+  } catch {
+    // an unreadable spec is reported as today: what was found stays
+  }
+  return out;
 }
 
 /** Place the one createRubric refusal at the check or checkpoint its path names, else at the front. */

@@ -696,3 +696,56 @@ test("checkTables: every refused check is surfaced in one call, non-cells and no
   // a spec-level refusal is still one front entry, and never throws
   assert.doesNotThrow(() => checkTables({ ...specOf([null, 5]), goal: "" }, {}));
 });
+
+// ---- checkTables: remove-and-retry on the real spec ------------------------------------------------------------------
+
+const rr = (checkpoints, inputs) => ({ schema: 1, goal: "g", inputs: inputs ?? [{ name: "page", sha256: "a".repeat(64) }], checkpoints });
+const citedOk = (id = "c1") => ({ id, rule: "cited", claims: "claims", source: "page" });
+const badRule = (id) => ({ id, rule: "nope" });
+const refusedAt = (ps) => ps.filter((p) => p.kind === "refused").map((p) => `${p.checkpoint}[${p.index}]`);
+
+test("checkTables remove-and-retry: a check that is sound in its real spec is never refused for lacking context", () => {
+  const spec = rr({ a: { gating: true, checks: [citedOk(), badRule("bad")] } });
+  assert.doesNotThrow(() => createRubric(rr({ a: { gating: true, checks: [citedOk()] } })), "the cited check is valid in its real spec");
+  const ps = checkTables(spec, {});
+  assert.deepEqual(refusedAt(ps), ["a[1]"]);
+  assert.equal(ps.find((p) => p.kind === "refused").id, "bad");
+  // across two checkpoints: the valid cited check is never reported, both bad ones are, paths and messages carry the real index
+  const two = checkTables(rr({ a: { gating: true, checks: [badRule("b1"), citedOk("c1")] }, b: { gating: true, checks: [citedOk("c2"), badRule("b2"), badRule("b3")] } }), {});
+  assert.deepEqual(refusedAt(two), ["a[0]", "b[1]", "b[2]"]);
+  for (const p of two) assert.ok(p.path.startsWith(`spec.checkpoints.${p.checkpoint}.checks[${p.index}]`) && p.message.includes(`checks[${p.index}]`), p.path);
+});
+
+test("checkTables remove-and-retry: a refusal that only exists after a removal is an artifact and is not reported", () => {
+  // the only check of a checkpoint is refused: its removal would leave the checkpoint empty, which is not a finding
+  const one = checkTables(rr({ a: { gating: true, checks: [badRule("only")] } }), {});
+  assert.deepEqual(one.map((p) => [p.kind, p.checkpoint, p.index]), [["refused", "a", 0]]);
+  // both checkpoints emptied: both checks are still reported, no checkpoint-level problem
+  const both = checkTables(rr({ a: { gating: true, checks: [badRule("x")] }, b: { gating: true, checks: [badRule("y")] } }), {});
+  assert.deepEqual(refusedAt(both), ["a[0]", "b[0]"]);
+  assert.equal(both.length, 2);
+  // a spec-level error on the UNTOUCHED spec is reported, once, alone
+  const noGoal = checkTables({ ...rr({ a: { gating: true, checks: [badRule("x"), badRule("y")] } }), goal: "" }, {});
+  assert.deepEqual(noGoal.map((p) => [p.kind, p.path]), [["refused", "spec.goal"]]);
+  // the original shape still reports every entry
+  assert.deepEqual(refusedAt(checkTables(rr({ cp: { gating: true, checks: [null, 5, "x", [], { rule: "cells" }] } }), {})), ["cp[0]", "cp[1]", "cp[2]", "cp[3]", "cp[4]"]);
+});
+
+test("checkTables remove-and-retry: at most 20 refused checks are found; one more is a `truncated` problem", () => {
+  const checks = (n) => [citedOk(), ...Array.from({ length: n }, (_, i) => badRule(`b${i}`))];
+  const at20 = checkTables(rr({ a: { gating: true, checks: checks(20) } }), {});
+  assert.equal(refusedAt(at20).length, 20);
+  assert.equal(at20.some((p) => p.kind === "truncated"), false, "exactly 20: nothing more to find");
+  const at21 = checkTables(rr({ a: { gating: true, checks: checks(21) } }), {});
+  assert.equal(refusedAt(at21).length, 20);
+  assert.deepEqual(at21[at21.length - 1], { kind: "truncated", limit: 20 });
+  assert.deepEqual(refusedAt(at21).slice(0, 3), ["a[1]", "a[2]", "a[3]"]);
+});
+
+test("checkTables remove-and-retry: never mutates the spec, never throws on a hostile one", () => {
+  const spec = rr({ a: { gating: true, checks: [citedOk(), badRule("bad")] } });
+  const before = JSON.stringify(spec);
+  checkTables(spec, {});
+  assert.equal(JSON.stringify(spec), before);
+  assert.doesNotThrow(() => checkTables(rr({ a: new Proxy({}, { get() { throw 1; } }) }), {}));
+});
