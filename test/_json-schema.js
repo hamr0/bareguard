@@ -9,7 +9,7 @@ export function validate(schema, value, path = "$") {
   for (const k of Object.keys(schema)) if (!KNOWN.has(k)) throw new Error(`validator does not know keyword ${k} at ${path}`);
   if (schema.anyOf) {
     if (!schema.anyOf.some((s) => validate(s, value, path).length === 0)) errs.push(`${path}: matches no anyOf branch`);
-    return errs;
+    if (schema.type === undefined && schema.properties === undefined) return errs; // a pure anyOf node
   }
   const t = schema.type;
   const isObj = value !== null && typeof value === "object" && !Array.isArray(value);

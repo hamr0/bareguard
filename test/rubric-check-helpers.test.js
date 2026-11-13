@@ -228,6 +228,31 @@ test("claimSchema: the exact schemas of the integer / number / boolean / map sha
   for (const op of ["rows", "topN", "duplicates"]) assert.equal(claimSchema(cellsExamples.find((e) => e.op === op).check).minProperties, 1);
 });
 
+test("claimSchema: ops with alternative keys require at least one (anyOf, never oneOf): an empty box is rejected, each single-key box accepted", () => {
+  const c = (op, extra) => ({ id: "x", rule: "cells", table: "t", claim: "answer", op, ...extra });
+  const cases = [
+    [c("rows", { where: [{ column: "Amount", cmp: "gt", value: 1 }], keyColumn: "Id" }), [{ rows: [2] }, { keys: ["a1"] }]],
+    [c("topN", { column: "Amount", n: 1 }), [{ rows: [2] }, { values: [600] }]],
+    [c("duplicates", { column: "Cat" }), [{ values: ["food"] }, { rows: [2, 4] }]],
+  ];
+  for (const [check, singles] of cases) {
+    const s = claimSchema(check);
+    assert.equal(s.anyOf.length, 2, check.op);
+    assert.ok(!JSON.stringify(s).includes("oneOf"));
+    assert.notEqual(validate(s, {}).length, 0, `${check.op}: empty box`);
+    for (const one of singles) assert.deepEqual(validate(s, one), [], `${check.op} ${JSON.stringify(one)}`);
+    assert.deepEqual(validate(s, Object.assign({}, ...singles)), [], `${check.op}: both together stay schema-valid`);
+  }
+  // every other op is single-form: a required key, so {} is rejected too
+  for (const e of cellsExamples) assert.notEqual(validate(claimSchema(e.check), {}).length, 0, `${e.op}: {} must not pass`);
+  // rows without keyColumn offers one key only: no anyOf needed, {} still rejected
+  const only = claimSchema(c("rows", { where: [{ column: "Amount", cmp: "gt", value: 1 }] }));
+  assert.equal(only.anyOf, undefined);
+  assert.notEqual(validate(only, {}).length, 0);
+  // an unknown field (a caller's own covers) makes the check unreadable to bareguard: null
+  assert.equal(claimSchema(c("sum", { column: "Amount", covers: [1] })), null);
+});
+
 test("claimSchema: lookup is typed by the check's signed valueKind; rows keys follow keyColumn and valueKind", () => {
   const lk = (valueKind, extra = {}) => claimSchema({ id: "x", rule: "cells", table: "t", claim: "answer", op: "lookup", column: "Amount", keyColumn: "Id", keyValue: "a1", valueKind, ...extra });
   assert.equal(lk("number").properties.value.type, "number");
