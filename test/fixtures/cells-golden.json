@@ -1,0 +1,3785 @@
+{
+ "cells.count.plain": {
+  "verdict": "green",
+  "checkpoint": "cp",
+  "rubricSha": "0a93a2d259b8a69b8919494a038ddc26f056133e03299f5a5cf91c54f0fd613c",
+  "outputSha": null,
+  "gaps": [],
+  "fault": null,
+  "full": {
+   "gaps": [],
+   "faults": [],
+   "evidence": [],
+   "matched": [],
+   "expected": [
+    {
+     "check": "ex-count",
+     "value": 3
+    }
+   ]
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.count.tamperedCell": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "0a93a2d259b8a69b8919494a038ddc26f056133e03299f5a5cf91c54f0fd613c",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-count",
+   "checkpoint": "cp",
+   "id": "ex-count",
+   "kind": "missing-measurement",
+   "detail": "table t does not match its signed sha256"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-count",
+     "checkpoint": "cp",
+     "id": "ex-count",
+     "kind": "missing-measurement",
+     "detail": "table t does not match its signed sha256"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.count.missingTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "0a93a2d259b8a69b8919494a038ddc26f056133e03299f5a5cf91c54f0fd613c",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-count",
+   "checkpoint": "cp",
+   "id": "ex-count",
+   "kind": "table-invalid",
+   "detail": "table t is missing or not an object"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-count",
+     "checkpoint": "cp",
+     "id": "ex-count",
+     "kind": "table-invalid",
+     "detail": "table t is missing or not an object"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.count.raggedTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "0a93a2d259b8a69b8919494a038ddc26f056133e03299f5a5cf91c54f0fd613c",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-count",
+   "checkpoint": "cp",
+   "id": "ex-count",
+   "kind": "table-invalid",
+   "detail": "table t: row 2 is ragged (needs 6 cells)"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-count",
+     "checkpoint": "cp",
+     "id": "ex-count",
+     "kind": "table-invalid",
+     "detail": "table t: row 2 is ragged (needs 6 cells)"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.countEmpty.plain": {
+  "verdict": "green",
+  "checkpoint": "cp",
+  "rubricSha": "3a1a105c80e6a42c4df20805648d4821876fac8ca37c40d48ce4da9ff795dcb0",
+  "outputSha": null,
+  "gaps": [],
+  "fault": null,
+  "full": {
+   "gaps": [],
+   "faults": [],
+   "evidence": [],
+   "matched": [],
+   "expected": [
+    {
+     "check": "ex-countEmpty",
+     "value": 1
+    }
+   ]
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.countEmpty.tamperedCell": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "3a1a105c80e6a42c4df20805648d4821876fac8ca37c40d48ce4da9ff795dcb0",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-countEmpty",
+   "checkpoint": "cp",
+   "id": "ex-countEmpty",
+   "kind": "missing-measurement",
+   "detail": "table t does not match its signed sha256"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-countEmpty",
+     "checkpoint": "cp",
+     "id": "ex-countEmpty",
+     "kind": "missing-measurement",
+     "detail": "table t does not match its signed sha256"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.countEmpty.missingTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "3a1a105c80e6a42c4df20805648d4821876fac8ca37c40d48ce4da9ff795dcb0",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-countEmpty",
+   "checkpoint": "cp",
+   "id": "ex-countEmpty",
+   "kind": "table-invalid",
+   "detail": "table t is missing or not an object"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-countEmpty",
+     "checkpoint": "cp",
+     "id": "ex-countEmpty",
+     "kind": "table-invalid",
+     "detail": "table t is missing or not an object"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.countEmpty.raggedTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "3a1a105c80e6a42c4df20805648d4821876fac8ca37c40d48ce4da9ff795dcb0",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-countEmpty",
+   "checkpoint": "cp",
+   "id": "ex-countEmpty",
+   "kind": "table-invalid",
+   "detail": "table t: row 2 is ragged (needs 6 cells)"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-countEmpty",
+     "checkpoint": "cp",
+     "id": "ex-countEmpty",
+     "kind": "table-invalid",
+     "detail": "table t: row 2 is ragged (needs 6 cells)"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.countIf.plain": {
+  "verdict": "green",
+  "checkpoint": "cp",
+  "rubricSha": "71e42951c60d60ecb62077dca84629f16306d3596e99f4c58587fe665bd94f79",
+  "outputSha": null,
+  "gaps": [],
+  "fault": null,
+  "full": {
+   "gaps": [],
+   "faults": [],
+   "evidence": [],
+   "matched": [],
+   "expected": [
+    {
+     "check": "ex-countIf",
+     "value": 2
+    }
+   ]
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.countIf.tamperedCell": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "71e42951c60d60ecb62077dca84629f16306d3596e99f4c58587fe665bd94f79",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-countIf",
+   "checkpoint": "cp",
+   "id": "ex-countIf",
+   "kind": "missing-measurement",
+   "detail": "table t does not match its signed sha256"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-countIf",
+     "checkpoint": "cp",
+     "id": "ex-countIf",
+     "kind": "missing-measurement",
+     "detail": "table t does not match its signed sha256"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.countIf.missingTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "71e42951c60d60ecb62077dca84629f16306d3596e99f4c58587fe665bd94f79",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-countIf",
+   "checkpoint": "cp",
+   "id": "ex-countIf",
+   "kind": "table-invalid",
+   "detail": "table t is missing or not an object"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-countIf",
+     "checkpoint": "cp",
+     "id": "ex-countIf",
+     "kind": "table-invalid",
+     "detail": "table t is missing or not an object"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.countIf.raggedTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "71e42951c60d60ecb62077dca84629f16306d3596e99f4c58587fe665bd94f79",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-countIf",
+   "checkpoint": "cp",
+   "id": "ex-countIf",
+   "kind": "table-invalid",
+   "detail": "table t: row 2 is ragged (needs 6 cells)"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-countIf",
+     "checkpoint": "cp",
+     "id": "ex-countIf",
+     "kind": "table-invalid",
+     "detail": "table t: row 2 is ragged (needs 6 cells)"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.sum.plain": {
+  "verdict": "green",
+  "checkpoint": "cp",
+  "rubricSha": "5dfb102033923ebbe13722030926874256b2cdd9e1008fc7a8ddce68771ba345",
+  "outputSha": null,
+  "gaps": [],
+  "fault": null,
+  "full": {
+   "gaps": [],
+   "faults": [],
+   "evidence": [],
+   "matched": [],
+   "expected": [
+    {
+     "check": "ex-sum",
+     "value": 950
+    }
+   ]
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.sum.tamperedCell": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "5dfb102033923ebbe13722030926874256b2cdd9e1008fc7a8ddce68771ba345",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-sum",
+   "checkpoint": "cp",
+   "id": "ex-sum",
+   "kind": "missing-measurement",
+   "detail": "table t does not match its signed sha256"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-sum",
+     "checkpoint": "cp",
+     "id": "ex-sum",
+     "kind": "missing-measurement",
+     "detail": "table t does not match its signed sha256"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.sum.missingTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "5dfb102033923ebbe13722030926874256b2cdd9e1008fc7a8ddce68771ba345",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-sum",
+   "checkpoint": "cp",
+   "id": "ex-sum",
+   "kind": "table-invalid",
+   "detail": "table t is missing or not an object"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-sum",
+     "checkpoint": "cp",
+     "id": "ex-sum",
+     "kind": "table-invalid",
+     "detail": "table t is missing or not an object"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.sum.raggedTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "5dfb102033923ebbe13722030926874256b2cdd9e1008fc7a8ddce68771ba345",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-sum",
+   "checkpoint": "cp",
+   "id": "ex-sum",
+   "kind": "table-invalid",
+   "detail": "table t: row 2 is ragged (needs 6 cells)"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-sum",
+     "checkpoint": "cp",
+     "id": "ex-sum",
+     "kind": "table-invalid",
+     "detail": "table t: row 2 is ragged (needs 6 cells)"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.sumIf.plain": {
+  "verdict": "green",
+  "checkpoint": "cp",
+  "rubricSha": "a2bbe358c3192dd537ae335caa5e8e7f3a6590e263ff90529c30e1d56ff7e019",
+  "outputSha": null,
+  "gaps": [],
+  "fault": null,
+  "full": {
+   "gaps": [],
+   "faults": [],
+   "evidence": [],
+   "matched": [],
+   "expected": [
+    {
+     "check": "ex-sumIf",
+     "value": 900
+    }
+   ]
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.sumIf.tamperedCell": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "a2bbe358c3192dd537ae335caa5e8e7f3a6590e263ff90529c30e1d56ff7e019",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-sumIf",
+   "checkpoint": "cp",
+   "id": "ex-sumIf",
+   "kind": "missing-measurement",
+   "detail": "table t does not match its signed sha256"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-sumIf",
+     "checkpoint": "cp",
+     "id": "ex-sumIf",
+     "kind": "missing-measurement",
+     "detail": "table t does not match its signed sha256"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.sumIf.missingTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "a2bbe358c3192dd537ae335caa5e8e7f3a6590e263ff90529c30e1d56ff7e019",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-sumIf",
+   "checkpoint": "cp",
+   "id": "ex-sumIf",
+   "kind": "table-invalid",
+   "detail": "table t is missing or not an object"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-sumIf",
+     "checkpoint": "cp",
+     "id": "ex-sumIf",
+     "kind": "table-invalid",
+     "detail": "table t is missing or not an object"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.sumIf.raggedTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "a2bbe358c3192dd537ae335caa5e8e7f3a6590e263ff90529c30e1d56ff7e019",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-sumIf",
+   "checkpoint": "cp",
+   "id": "ex-sumIf",
+   "kind": "table-invalid",
+   "detail": "table t: row 2 is ragged (needs 6 cells)"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-sumIf",
+     "checkpoint": "cp",
+     "id": "ex-sumIf",
+     "kind": "table-invalid",
+     "detail": "table t: row 2 is ragged (needs 6 cells)"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.average.plain": {
+  "verdict": "green",
+  "checkpoint": "cp",
+  "rubricSha": "50bd066a20d30b8ba51777a5f98fb8681046ee6aeced57f4f797a45554f87a9c",
+  "outputSha": null,
+  "gaps": [],
+  "fault": null,
+  "full": {
+   "gaps": [],
+   "faults": [],
+   "evidence": [],
+   "matched": [],
+   "expected": [
+    {
+     "check": "ex-average",
+     "value": 316.6666666666667
+    }
+   ]
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.average.tamperedCell": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "50bd066a20d30b8ba51777a5f98fb8681046ee6aeced57f4f797a45554f87a9c",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-average",
+   "checkpoint": "cp",
+   "id": "ex-average",
+   "kind": "missing-measurement",
+   "detail": "table t does not match its signed sha256"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-average",
+     "checkpoint": "cp",
+     "id": "ex-average",
+     "kind": "missing-measurement",
+     "detail": "table t does not match its signed sha256"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.average.missingTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "50bd066a20d30b8ba51777a5f98fb8681046ee6aeced57f4f797a45554f87a9c",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-average",
+   "checkpoint": "cp",
+   "id": "ex-average",
+   "kind": "table-invalid",
+   "detail": "table t is missing or not an object"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-average",
+     "checkpoint": "cp",
+     "id": "ex-average",
+     "kind": "table-invalid",
+     "detail": "table t is missing or not an object"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.average.raggedTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "50bd066a20d30b8ba51777a5f98fb8681046ee6aeced57f4f797a45554f87a9c",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-average",
+   "checkpoint": "cp",
+   "id": "ex-average",
+   "kind": "table-invalid",
+   "detail": "table t: row 2 is ragged (needs 6 cells)"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-average",
+     "checkpoint": "cp",
+     "id": "ex-average",
+     "kind": "table-invalid",
+     "detail": "table t: row 2 is ragged (needs 6 cells)"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.averageIf.plain": {
+  "verdict": "green",
+  "checkpoint": "cp",
+  "rubricSha": "c99722339e79931c39ef9ffa843f8cf888821bcff548db754d97bfaf9d56aa4c",
+  "outputSha": null,
+  "gaps": [],
+  "fault": null,
+  "full": {
+   "gaps": [],
+   "faults": [],
+   "evidence": [],
+   "matched": [],
+   "expected": [
+    {
+     "check": "ex-averageIf",
+     "value": 450
+    }
+   ]
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.averageIf.tamperedCell": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "c99722339e79931c39ef9ffa843f8cf888821bcff548db754d97bfaf9d56aa4c",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-averageIf",
+   "checkpoint": "cp",
+   "id": "ex-averageIf",
+   "kind": "missing-measurement",
+   "detail": "table t does not match its signed sha256"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-averageIf",
+     "checkpoint": "cp",
+     "id": "ex-averageIf",
+     "kind": "missing-measurement",
+     "detail": "table t does not match its signed sha256"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.averageIf.missingTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "c99722339e79931c39ef9ffa843f8cf888821bcff548db754d97bfaf9d56aa4c",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-averageIf",
+   "checkpoint": "cp",
+   "id": "ex-averageIf",
+   "kind": "table-invalid",
+   "detail": "table t is missing or not an object"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-averageIf",
+     "checkpoint": "cp",
+     "id": "ex-averageIf",
+     "kind": "table-invalid",
+     "detail": "table t is missing or not an object"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.averageIf.raggedTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "c99722339e79931c39ef9ffa843f8cf888821bcff548db754d97bfaf9d56aa4c",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-averageIf",
+   "checkpoint": "cp",
+   "id": "ex-averageIf",
+   "kind": "table-invalid",
+   "detail": "table t: row 2 is ragged (needs 6 cells)"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-averageIf",
+     "checkpoint": "cp",
+     "id": "ex-averageIf",
+     "kind": "table-invalid",
+     "detail": "table t: row 2 is ragged (needs 6 cells)"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.median.plain": {
+  "verdict": "green",
+  "checkpoint": "cp",
+  "rubricSha": "6537c4eb055ec8b5d09a4257d8852e39a1e86baf3f5e83945ed4a26758c512e7",
+  "outputSha": null,
+  "gaps": [],
+  "fault": null,
+  "full": {
+   "gaps": [],
+   "faults": [],
+   "evidence": [],
+   "matched": [],
+   "expected": [
+    {
+     "check": "ex-median",
+     "value": 300
+    }
+   ]
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.median.tamperedCell": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "6537c4eb055ec8b5d09a4257d8852e39a1e86baf3f5e83945ed4a26758c512e7",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-median",
+   "checkpoint": "cp",
+   "id": "ex-median",
+   "kind": "missing-measurement",
+   "detail": "table t does not match its signed sha256"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-median",
+     "checkpoint": "cp",
+     "id": "ex-median",
+     "kind": "missing-measurement",
+     "detail": "table t does not match its signed sha256"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.median.missingTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "6537c4eb055ec8b5d09a4257d8852e39a1e86baf3f5e83945ed4a26758c512e7",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-median",
+   "checkpoint": "cp",
+   "id": "ex-median",
+   "kind": "table-invalid",
+   "detail": "table t is missing or not an object"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-median",
+     "checkpoint": "cp",
+     "id": "ex-median",
+     "kind": "table-invalid",
+     "detail": "table t is missing or not an object"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.median.raggedTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "6537c4eb055ec8b5d09a4257d8852e39a1e86baf3f5e83945ed4a26758c512e7",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-median",
+   "checkpoint": "cp",
+   "id": "ex-median",
+   "kind": "table-invalid",
+   "detail": "table t: row 2 is ragged (needs 6 cells)"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-median",
+     "checkpoint": "cp",
+     "id": "ex-median",
+     "kind": "table-invalid",
+     "detail": "table t: row 2 is ragged (needs 6 cells)"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.min.plain": {
+  "verdict": "green",
+  "checkpoint": "cp",
+  "rubricSha": "a4aba681cb9ae889eb9ab06292d492daeba883d5960e52a90a99469b7a46644c",
+  "outputSha": null,
+  "gaps": [],
+  "fault": null,
+  "full": {
+   "gaps": [],
+   "faults": [],
+   "evidence": [],
+   "matched": [],
+   "expected": [
+    {
+     "check": "ex-min",
+     "value": 50
+    }
+   ]
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.min.tamperedCell": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "a4aba681cb9ae889eb9ab06292d492daeba883d5960e52a90a99469b7a46644c",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-min",
+   "checkpoint": "cp",
+   "id": "ex-min",
+   "kind": "missing-measurement",
+   "detail": "table t does not match its signed sha256"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-min",
+     "checkpoint": "cp",
+     "id": "ex-min",
+     "kind": "missing-measurement",
+     "detail": "table t does not match its signed sha256"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.min.missingTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "a4aba681cb9ae889eb9ab06292d492daeba883d5960e52a90a99469b7a46644c",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-min",
+   "checkpoint": "cp",
+   "id": "ex-min",
+   "kind": "table-invalid",
+   "detail": "table t is missing or not an object"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-min",
+     "checkpoint": "cp",
+     "id": "ex-min",
+     "kind": "table-invalid",
+     "detail": "table t is missing or not an object"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.min.raggedTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "a4aba681cb9ae889eb9ab06292d492daeba883d5960e52a90a99469b7a46644c",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-min",
+   "checkpoint": "cp",
+   "id": "ex-min",
+   "kind": "table-invalid",
+   "detail": "table t: row 2 is ragged (needs 6 cells)"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-min",
+     "checkpoint": "cp",
+     "id": "ex-min",
+     "kind": "table-invalid",
+     "detail": "table t: row 2 is ragged (needs 6 cells)"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.max.plain": {
+  "verdict": "green",
+  "checkpoint": "cp",
+  "rubricSha": "bb1a58d60649ec762a254aad11a60cd65414c0d349aa866630cb7749871a0628",
+  "outputSha": null,
+  "gaps": [],
+  "fault": null,
+  "full": {
+   "gaps": [],
+   "faults": [],
+   "evidence": [],
+   "matched": [],
+   "expected": [
+    {
+     "check": "ex-max",
+     "value": 600
+    }
+   ]
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.max.tamperedCell": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "bb1a58d60649ec762a254aad11a60cd65414c0d349aa866630cb7749871a0628",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-max",
+   "checkpoint": "cp",
+   "id": "ex-max",
+   "kind": "missing-measurement",
+   "detail": "table t does not match its signed sha256"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-max",
+     "checkpoint": "cp",
+     "id": "ex-max",
+     "kind": "missing-measurement",
+     "detail": "table t does not match its signed sha256"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.max.missingTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "bb1a58d60649ec762a254aad11a60cd65414c0d349aa866630cb7749871a0628",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-max",
+   "checkpoint": "cp",
+   "id": "ex-max",
+   "kind": "table-invalid",
+   "detail": "table t is missing or not an object"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-max",
+     "checkpoint": "cp",
+     "id": "ex-max",
+     "kind": "table-invalid",
+     "detail": "table t is missing or not an object"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.max.raggedTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "bb1a58d60649ec762a254aad11a60cd65414c0d349aa866630cb7749871a0628",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-max",
+   "checkpoint": "cp",
+   "id": "ex-max",
+   "kind": "table-invalid",
+   "detail": "table t: row 2 is ragged (needs 6 cells)"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-max",
+     "checkpoint": "cp",
+     "id": "ex-max",
+     "kind": "table-invalid",
+     "detail": "table t: row 2 is ragged (needs 6 cells)"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.found.plain": {
+  "verdict": "green",
+  "checkpoint": "cp",
+  "rubricSha": "dbd93730c387051a8c89e094ad57be83e40e23a2ca930a6b0d1e91793da68afa",
+  "outputSha": null,
+  "gaps": [],
+  "fault": null,
+  "full": {
+   "gaps": [],
+   "faults": [],
+   "evidence": [],
+   "matched": [],
+   "expected": [
+    {
+     "check": "ex-found",
+     "value": true
+    }
+   ]
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.found.tamperedCell": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "dbd93730c387051a8c89e094ad57be83e40e23a2ca930a6b0d1e91793da68afa",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-found",
+   "checkpoint": "cp",
+   "id": "ex-found",
+   "kind": "missing-measurement",
+   "detail": "table t does not match its signed sha256"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-found",
+     "checkpoint": "cp",
+     "id": "ex-found",
+     "kind": "missing-measurement",
+     "detail": "table t does not match its signed sha256"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.found.missingTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "dbd93730c387051a8c89e094ad57be83e40e23a2ca930a6b0d1e91793da68afa",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-found",
+   "checkpoint": "cp",
+   "id": "ex-found",
+   "kind": "table-invalid",
+   "detail": "table t is missing or not an object"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-found",
+     "checkpoint": "cp",
+     "id": "ex-found",
+     "kind": "table-invalid",
+     "detail": "table t is missing or not an object"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.found.raggedTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "dbd93730c387051a8c89e094ad57be83e40e23a2ca930a6b0d1e91793da68afa",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-found",
+   "checkpoint": "cp",
+   "id": "ex-found",
+   "kind": "table-invalid",
+   "detail": "table t: row 2 is ragged (needs 6 cells)"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-found",
+     "checkpoint": "cp",
+     "id": "ex-found",
+     "kind": "table-invalid",
+     "detail": "table t: row 2 is ragged (needs 6 cells)"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.lookup.plain": {
+  "verdict": "green",
+  "checkpoint": "cp",
+  "rubricSha": "8b31db201698c5d2c75b8383296a5b3b1ad56d45ca2ba089ee9e11474c6c5e08",
+  "outputSha": null,
+  "gaps": [],
+  "fault": null,
+  "full": {
+   "gaps": [],
+   "faults": [],
+   "evidence": [],
+   "matched": [],
+   "expected": [
+    {
+     "check": "ex-lookup",
+     "value": 600
+    }
+   ]
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.lookup.tamperedCell": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "8b31db201698c5d2c75b8383296a5b3b1ad56d45ca2ba089ee9e11474c6c5e08",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-lookup",
+   "checkpoint": "cp",
+   "id": "ex-lookup",
+   "kind": "missing-measurement",
+   "detail": "table t does not match its signed sha256"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-lookup",
+     "checkpoint": "cp",
+     "id": "ex-lookup",
+     "kind": "missing-measurement",
+     "detail": "table t does not match its signed sha256"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.lookup.missingTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "8b31db201698c5d2c75b8383296a5b3b1ad56d45ca2ba089ee9e11474c6c5e08",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-lookup",
+   "checkpoint": "cp",
+   "id": "ex-lookup",
+   "kind": "table-invalid",
+   "detail": "table t is missing or not an object"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-lookup",
+     "checkpoint": "cp",
+     "id": "ex-lookup",
+     "kind": "table-invalid",
+     "detail": "table t is missing or not an object"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.lookup.raggedTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "8b31db201698c5d2c75b8383296a5b3b1ad56d45ca2ba089ee9e11474c6c5e08",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-lookup",
+   "checkpoint": "cp",
+   "id": "ex-lookup",
+   "kind": "table-invalid",
+   "detail": "table t: row 2 is ragged (needs 6 cells)"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-lookup",
+     "checkpoint": "cp",
+     "id": "ex-lookup",
+     "kind": "table-invalid",
+     "detail": "table t: row 2 is ragged (needs 6 cells)"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.rows.plain": {
+  "verdict": "green",
+  "checkpoint": "cp",
+  "rubricSha": "c993a54ddd4357128f8fddbbfba6a4a1a055569a3874828148e32b6252c70ad2",
+  "outputSha": null,
+  "gaps": [],
+  "fault": null,
+  "full": {
+   "gaps": [],
+   "faults": [],
+   "evidence": [],
+   "matched": [],
+   "expected": [
+    {
+     "check": "ex-rows",
+     "rows": [
+      2,
+      3
+     ]
+    }
+   ]
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.rows.tamperedCell": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "c993a54ddd4357128f8fddbbfba6a4a1a055569a3874828148e32b6252c70ad2",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-rows",
+   "checkpoint": "cp",
+   "id": "ex-rows",
+   "kind": "missing-measurement",
+   "detail": "table t does not match its signed sha256"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-rows",
+     "checkpoint": "cp",
+     "id": "ex-rows",
+     "kind": "missing-measurement",
+     "detail": "table t does not match its signed sha256"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.rows.missingTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "c993a54ddd4357128f8fddbbfba6a4a1a055569a3874828148e32b6252c70ad2",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-rows",
+   "checkpoint": "cp",
+   "id": "ex-rows",
+   "kind": "table-invalid",
+   "detail": "table t is missing or not an object"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-rows",
+     "checkpoint": "cp",
+     "id": "ex-rows",
+     "kind": "table-invalid",
+     "detail": "table t is missing or not an object"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.rows.raggedTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "c993a54ddd4357128f8fddbbfba6a4a1a055569a3874828148e32b6252c70ad2",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-rows",
+   "checkpoint": "cp",
+   "id": "ex-rows",
+   "kind": "table-invalid",
+   "detail": "table t: row 2 is ragged (needs 6 cells)"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-rows",
+     "checkpoint": "cp",
+     "id": "ex-rows",
+     "kind": "table-invalid",
+     "detail": "table t: row 2 is ragged (needs 6 cells)"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.topN.plain": {
+  "verdict": "green",
+  "checkpoint": "cp",
+  "rubricSha": "39790551f0dd2752a20dc24790db3d5bb803937c39520d3164121a5df24a988f",
+  "outputSha": null,
+  "gaps": [],
+  "fault": null,
+  "full": {
+   "gaps": [],
+   "faults": [],
+   "evidence": [],
+   "matched": [],
+   "expected": [
+    {
+     "check": "ex-topN",
+     "rows": [],
+     "tied": null
+    }
+   ]
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.topN.tamperedCell": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "39790551f0dd2752a20dc24790db3d5bb803937c39520d3164121a5df24a988f",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-topN",
+   "checkpoint": "cp",
+   "id": "ex-topN",
+   "kind": "missing-measurement",
+   "detail": "table t does not match its signed sha256"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-topN",
+     "checkpoint": "cp",
+     "id": "ex-topN",
+     "kind": "missing-measurement",
+     "detail": "table t does not match its signed sha256"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.topN.missingTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "39790551f0dd2752a20dc24790db3d5bb803937c39520d3164121a5df24a988f",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-topN",
+   "checkpoint": "cp",
+   "id": "ex-topN",
+   "kind": "table-invalid",
+   "detail": "table t is missing or not an object"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-topN",
+     "checkpoint": "cp",
+     "id": "ex-topN",
+     "kind": "table-invalid",
+     "detail": "table t is missing or not an object"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.topN.raggedTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "39790551f0dd2752a20dc24790db3d5bb803937c39520d3164121a5df24a988f",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-topN",
+   "checkpoint": "cp",
+   "id": "ex-topN",
+   "kind": "table-invalid",
+   "detail": "table t: row 2 is ragged (needs 6 cells)"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-topN",
+     "checkpoint": "cp",
+     "id": "ex-topN",
+     "kind": "table-invalid",
+     "detail": "table t: row 2 is ragged (needs 6 cells)"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.uniqueCount.plain": {
+  "verdict": "green",
+  "checkpoint": "cp",
+  "rubricSha": "5c31cc1193d0c833d6a0a60bab0ea901be78aff310b2021756cb2f5e05b93fc5",
+  "outputSha": null,
+  "gaps": [],
+  "fault": null,
+  "full": {
+   "gaps": [],
+   "faults": [],
+   "evidence": [],
+   "matched": [],
+   "expected": [
+    {
+     "check": "ex-uniqueCount",
+     "value": 2
+    }
+   ]
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.uniqueCount.tamperedCell": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "5c31cc1193d0c833d6a0a60bab0ea901be78aff310b2021756cb2f5e05b93fc5",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-uniqueCount",
+   "checkpoint": "cp",
+   "id": "ex-uniqueCount",
+   "kind": "missing-measurement",
+   "detail": "table t does not match its signed sha256"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-uniqueCount",
+     "checkpoint": "cp",
+     "id": "ex-uniqueCount",
+     "kind": "missing-measurement",
+     "detail": "table t does not match its signed sha256"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.uniqueCount.missingTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "5c31cc1193d0c833d6a0a60bab0ea901be78aff310b2021756cb2f5e05b93fc5",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-uniqueCount",
+   "checkpoint": "cp",
+   "id": "ex-uniqueCount",
+   "kind": "table-invalid",
+   "detail": "table t is missing or not an object"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-uniqueCount",
+     "checkpoint": "cp",
+     "id": "ex-uniqueCount",
+     "kind": "table-invalid",
+     "detail": "table t is missing or not an object"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.uniqueCount.raggedTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "5c31cc1193d0c833d6a0a60bab0ea901be78aff310b2021756cb2f5e05b93fc5",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-uniqueCount",
+   "checkpoint": "cp",
+   "id": "ex-uniqueCount",
+   "kind": "table-invalid",
+   "detail": "table t: row 2 is ragged (needs 6 cells)"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-uniqueCount",
+     "checkpoint": "cp",
+     "id": "ex-uniqueCount",
+     "kind": "table-invalid",
+     "detail": "table t: row 2 is ragged (needs 6 cells)"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.duplicates.plain": {
+  "verdict": "green",
+  "checkpoint": "cp",
+  "rubricSha": "9ec51adfcb7225cf2a693a24e6903487f31ef9760042b2caa8c335fd7056cd14",
+  "outputSha": null,
+  "gaps": [],
+  "fault": null,
+  "full": {
+   "gaps": [],
+   "faults": [],
+   "evidence": [],
+   "matched": [],
+   "expected": [
+    {
+     "check": "ex-duplicates",
+     "values": [
+      "food"
+     ]
+    }
+   ]
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.duplicates.tamperedCell": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "9ec51adfcb7225cf2a693a24e6903487f31ef9760042b2caa8c335fd7056cd14",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-duplicates",
+   "checkpoint": "cp",
+   "id": "ex-duplicates",
+   "kind": "missing-measurement",
+   "detail": "table t does not match its signed sha256"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-duplicates",
+     "checkpoint": "cp",
+     "id": "ex-duplicates",
+     "kind": "missing-measurement",
+     "detail": "table t does not match its signed sha256"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.duplicates.missingTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "9ec51adfcb7225cf2a693a24e6903487f31ef9760042b2caa8c335fd7056cd14",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-duplicates",
+   "checkpoint": "cp",
+   "id": "ex-duplicates",
+   "kind": "table-invalid",
+   "detail": "table t is missing or not an object"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-duplicates",
+     "checkpoint": "cp",
+     "id": "ex-duplicates",
+     "kind": "table-invalid",
+     "detail": "table t is missing or not an object"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.duplicates.raggedTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "9ec51adfcb7225cf2a693a24e6903487f31ef9760042b2caa8c335fd7056cd14",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-duplicates",
+   "checkpoint": "cp",
+   "id": "ex-duplicates",
+   "kind": "table-invalid",
+   "detail": "table t: row 2 is ragged (needs 6 cells)"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-duplicates",
+     "checkpoint": "cp",
+     "id": "ex-duplicates",
+     "kind": "table-invalid",
+     "detail": "table t: row 2 is ragged (needs 6 cells)"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.groupTotals.plain": {
+  "verdict": "green",
+  "checkpoint": "cp",
+  "rubricSha": "12245967804f10d85ae343bd8691cf616ff1dfb8a8e3a50f31811c82ee768bb2",
+  "outputSha": null,
+  "gaps": [],
+  "fault": null,
+  "full": {
+   "gaps": [],
+   "faults": [],
+   "evidence": [],
+   "matched": [],
+   "expected": [
+    {
+     "check": "ex-groupTotals",
+     "totals": [
+      {
+       "group": "food",
+       "total": 650
+      },
+      {
+       "group": "rent",
+       "total": 300
+      }
+     ]
+    }
+   ]
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.groupTotals.tamperedCell": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "12245967804f10d85ae343bd8691cf616ff1dfb8a8e3a50f31811c82ee768bb2",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-groupTotals",
+   "checkpoint": "cp",
+   "id": "ex-groupTotals",
+   "kind": "missing-measurement",
+   "detail": "table t does not match its signed sha256"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-groupTotals",
+     "checkpoint": "cp",
+     "id": "ex-groupTotals",
+     "kind": "missing-measurement",
+     "detail": "table t does not match its signed sha256"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.groupTotals.missingTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "12245967804f10d85ae343bd8691cf616ff1dfb8a8e3a50f31811c82ee768bb2",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-groupTotals",
+   "checkpoint": "cp",
+   "id": "ex-groupTotals",
+   "kind": "table-invalid",
+   "detail": "table t is missing or not an object"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-groupTotals",
+     "checkpoint": "cp",
+     "id": "ex-groupTotals",
+     "kind": "table-invalid",
+     "detail": "table t is missing or not an object"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.groupTotals.raggedTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "12245967804f10d85ae343bd8691cf616ff1dfb8a8e3a50f31811c82ee768bb2",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-groupTotals",
+   "checkpoint": "cp",
+   "id": "ex-groupTotals",
+   "kind": "table-invalid",
+   "detail": "table t: row 2 is ragged (needs 6 cells)"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-groupTotals",
+     "checkpoint": "cp",
+     "id": "ex-groupTotals",
+     "kind": "table-invalid",
+     "detail": "table t: row 2 is ragged (needs 6 cells)"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.percentOfTotal.plain": {
+  "verdict": "green",
+  "checkpoint": "cp",
+  "rubricSha": "2578a4035cfc3e21a86fd68c48f391ce01abb8c51475ecc57790d2da0435ed4b",
+  "outputSha": null,
+  "gaps": [],
+  "fault": null,
+  "full": {
+   "gaps": [],
+   "faults": [],
+   "evidence": [],
+   "matched": [],
+   "expected": [
+    {
+     "check": "ex-percentOfTotal",
+     "value": 94.73684210526315
+    }
+   ]
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.percentOfTotal.tamperedCell": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "2578a4035cfc3e21a86fd68c48f391ce01abb8c51475ecc57790d2da0435ed4b",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-percentOfTotal",
+   "checkpoint": "cp",
+   "id": "ex-percentOfTotal",
+   "kind": "missing-measurement",
+   "detail": "table t does not match its signed sha256"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-percentOfTotal",
+     "checkpoint": "cp",
+     "id": "ex-percentOfTotal",
+     "kind": "missing-measurement",
+     "detail": "table t does not match its signed sha256"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.percentOfTotal.missingTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "2578a4035cfc3e21a86fd68c48f391ce01abb8c51475ecc57790d2da0435ed4b",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-percentOfTotal",
+   "checkpoint": "cp",
+   "id": "ex-percentOfTotal",
+   "kind": "table-invalid",
+   "detail": "table t is missing or not an object"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-percentOfTotal",
+     "checkpoint": "cp",
+     "id": "ex-percentOfTotal",
+     "kind": "table-invalid",
+     "detail": "table t is missing or not an object"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.percentOfTotal.raggedTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "2578a4035cfc3e21a86fd68c48f391ce01abb8c51475ecc57790d2da0435ed4b",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-percentOfTotal",
+   "checkpoint": "cp",
+   "id": "ex-percentOfTotal",
+   "kind": "table-invalid",
+   "detail": "table t: row 2 is ragged (needs 6 cells)"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-percentOfTotal",
+     "checkpoint": "cp",
+     "id": "ex-percentOfTotal",
+     "kind": "table-invalid",
+     "detail": "table t: row 2 is ragged (needs 6 cells)"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.band.plain": {
+  "verdict": "green",
+  "checkpoint": "cp",
+  "rubricSha": "8ef13d2721f4d495863b6112d320ecdd55d509122b9e2c985c1b11495da8e70f",
+  "outputSha": null,
+  "gaps": [],
+  "fault": null,
+  "full": {
+   "gaps": [],
+   "faults": [],
+   "evidence": [],
+   "matched": [],
+   "expected": [
+    {
+     "check": "ex-band",
+     "bands": [
+      {
+       "row": 2,
+       "band": "1-30"
+      },
+      {
+       "row": 3,
+       "band": "1-30"
+      },
+      {
+       "row": 4,
+       "band": "Current"
+      }
+     ]
+    }
+   ]
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.band.tamperedCell": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "8ef13d2721f4d495863b6112d320ecdd55d509122b9e2c985c1b11495da8e70f",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-band",
+   "checkpoint": "cp",
+   "id": "ex-band",
+   "kind": "missing-measurement",
+   "detail": "table t does not match its signed sha256"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-band",
+     "checkpoint": "cp",
+     "id": "ex-band",
+     "kind": "missing-measurement",
+     "detail": "table t does not match its signed sha256"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.band.missingTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "8ef13d2721f4d495863b6112d320ecdd55d509122b9e2c985c1b11495da8e70f",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-band",
+   "checkpoint": "cp",
+   "id": "ex-band",
+   "kind": "table-invalid",
+   "detail": "table t is missing or not an object"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-band",
+     "checkpoint": "cp",
+     "id": "ex-band",
+     "kind": "table-invalid",
+     "detail": "table t is missing or not an object"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.band.raggedTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "8ef13d2721f4d495863b6112d320ecdd55d509122b9e2c985c1b11495da8e70f",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-band",
+   "checkpoint": "cp",
+   "id": "ex-band",
+   "kind": "table-invalid",
+   "detail": "table t: row 2 is ragged (needs 6 cells)"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-band",
+     "checkpoint": "cp",
+     "id": "ex-band",
+     "kind": "table-invalid",
+     "detail": "table t: row 2 is ragged (needs 6 cells)"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.daysBetween.plain": {
+  "verdict": "green",
+  "checkpoint": "cp",
+  "rubricSha": "355f8bb141f95e7f4dcbf15676cd416e17b8b0dc58a3692805dc918a0ea72b23",
+  "outputSha": null,
+  "gaps": [],
+  "fault": null,
+  "full": {
+   "gaps": [],
+   "faults": [],
+   "evidence": [],
+   "matched": [],
+   "expected": [
+    {
+     "check": "ex-daysBetween",
+     "value": 19
+    }
+   ]
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.daysBetween.tamperedCell": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "355f8bb141f95e7f4dcbf15676cd416e17b8b0dc58a3692805dc918a0ea72b23",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-daysBetween",
+   "checkpoint": "cp",
+   "id": "ex-daysBetween",
+   "kind": "missing-measurement",
+   "detail": "table t does not match its signed sha256"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-daysBetween",
+     "checkpoint": "cp",
+     "id": "ex-daysBetween",
+     "kind": "missing-measurement",
+     "detail": "table t does not match its signed sha256"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.daysBetween.missingTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "355f8bb141f95e7f4dcbf15676cd416e17b8b0dc58a3692805dc918a0ea72b23",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-daysBetween",
+   "checkpoint": "cp",
+   "id": "ex-daysBetween",
+   "kind": "table-invalid",
+   "detail": "table t is missing or not an object"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-daysBetween",
+     "checkpoint": "cp",
+     "id": "ex-daysBetween",
+     "kind": "table-invalid",
+     "detail": "table t is missing or not an object"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.daysBetween.raggedTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "355f8bb141f95e7f4dcbf15676cd416e17b8b0dc58a3692805dc918a0ea72b23",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-daysBetween",
+   "checkpoint": "cp",
+   "id": "ex-daysBetween",
+   "kind": "table-invalid",
+   "detail": "table t: row 2 is ragged (needs 6 cells)"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-daysBetween",
+     "checkpoint": "cp",
+     "id": "ex-daysBetween",
+     "kind": "table-invalid",
+     "detail": "table t: row 2 is ragged (needs 6 cells)"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.daysSince.plain": {
+  "verdict": "green",
+  "checkpoint": "cp",
+  "rubricSha": "b6c528a85c363429bd19f235c4fdc734081b6e891d67ded96d7e0cf05a530701",
+  "outputSha": null,
+  "gaps": [],
+  "fault": null,
+  "full": {
+   "gaps": [],
+   "faults": [],
+   "evidence": [],
+   "matched": [],
+   "expected": [
+    {
+     "check": "ex-daysSince",
+     "days": [
+      {
+       "row": 2,
+       "days": 30
+      },
+      {
+       "row": 3,
+       "days": 11
+      },
+      {
+       "row": 4,
+       "days": 0
+      }
+     ]
+    }
+   ]
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.daysSince.tamperedCell": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "b6c528a85c363429bd19f235c4fdc734081b6e891d67ded96d7e0cf05a530701",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-daysSince",
+   "checkpoint": "cp",
+   "id": "ex-daysSince",
+   "kind": "missing-measurement",
+   "detail": "table t does not match its signed sha256"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-daysSince",
+     "checkpoint": "cp",
+     "id": "ex-daysSince",
+     "kind": "missing-measurement",
+     "detail": "table t does not match its signed sha256"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.daysSince.missingTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "b6c528a85c363429bd19f235c4fdc734081b6e891d67ded96d7e0cf05a530701",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-daysSince",
+   "checkpoint": "cp",
+   "id": "ex-daysSince",
+   "kind": "table-invalid",
+   "detail": "table t is missing or not an object"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-daysSince",
+     "checkpoint": "cp",
+     "id": "ex-daysSince",
+     "kind": "table-invalid",
+     "detail": "table t is missing or not an object"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.daysSince.raggedTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "b6c528a85c363429bd19f235c4fdc734081b6e891d67ded96d7e0cf05a530701",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-daysSince",
+   "checkpoint": "cp",
+   "id": "ex-daysSince",
+   "kind": "table-invalid",
+   "detail": "table t: row 2 is ragged (needs 6 cells)"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-daysSince",
+     "checkpoint": "cp",
+     "id": "ex-daysSince",
+     "kind": "table-invalid",
+     "detail": "table t: row 2 is ragged (needs 6 cells)"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.earliest.plain": {
+  "verdict": "green",
+  "checkpoint": "cp",
+  "rubricSha": "1102522a88ba2bcb7fd9b9fe8c49717ecefb4afab80eb2d8a9e543df1f28332a",
+  "outputSha": null,
+  "gaps": [],
+  "fault": null,
+  "full": {
+   "gaps": [],
+   "faults": [],
+   "evidence": [],
+   "matched": [],
+   "expected": [
+    {
+     "check": "ex-earliest",
+     "value": "2026-10-01"
+    }
+   ]
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.earliest.tamperedCell": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "1102522a88ba2bcb7fd9b9fe8c49717ecefb4afab80eb2d8a9e543df1f28332a",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-earliest",
+   "checkpoint": "cp",
+   "id": "ex-earliest",
+   "kind": "missing-measurement",
+   "detail": "table t does not match its signed sha256"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-earliest",
+     "checkpoint": "cp",
+     "id": "ex-earliest",
+     "kind": "missing-measurement",
+     "detail": "table t does not match its signed sha256"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.earliest.missingTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "1102522a88ba2bcb7fd9b9fe8c49717ecefb4afab80eb2d8a9e543df1f28332a",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-earliest",
+   "checkpoint": "cp",
+   "id": "ex-earliest",
+   "kind": "table-invalid",
+   "detail": "table t is missing or not an object"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-earliest",
+     "checkpoint": "cp",
+     "id": "ex-earliest",
+     "kind": "table-invalid",
+     "detail": "table t is missing or not an object"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.earliest.raggedTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "1102522a88ba2bcb7fd9b9fe8c49717ecefb4afab80eb2d8a9e543df1f28332a",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-earliest",
+   "checkpoint": "cp",
+   "id": "ex-earliest",
+   "kind": "table-invalid",
+   "detail": "table t: row 2 is ragged (needs 6 cells)"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-earliest",
+     "checkpoint": "cp",
+     "id": "ex-earliest",
+     "kind": "table-invalid",
+     "detail": "table t: row 2 is ragged (needs 6 cells)"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.latest.plain": {
+  "verdict": "green",
+  "checkpoint": "cp",
+  "rubricSha": "f581791c727ea356e9c5c2dd70601c2622a3f941c7bb498d1cd57a17503ea2fb",
+  "outputSha": null,
+  "gaps": [],
+  "fault": null,
+  "full": {
+   "gaps": [],
+   "faults": [],
+   "evidence": [],
+   "matched": [],
+   "expected": [
+    {
+     "check": "ex-latest",
+     "value": "2026-10-31"
+    }
+   ]
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.latest.tamperedCell": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "f581791c727ea356e9c5c2dd70601c2622a3f941c7bb498d1cd57a17503ea2fb",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-latest",
+   "checkpoint": "cp",
+   "id": "ex-latest",
+   "kind": "missing-measurement",
+   "detail": "table t does not match its signed sha256"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-latest",
+     "checkpoint": "cp",
+     "id": "ex-latest",
+     "kind": "missing-measurement",
+     "detail": "table t does not match its signed sha256"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.latest.missingTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "f581791c727ea356e9c5c2dd70601c2622a3f941c7bb498d1cd57a17503ea2fb",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-latest",
+   "checkpoint": "cp",
+   "id": "ex-latest",
+   "kind": "table-invalid",
+   "detail": "table t is missing or not an object"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-latest",
+     "checkpoint": "cp",
+     "id": "ex-latest",
+     "kind": "table-invalid",
+     "detail": "table t is missing or not an object"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "cells.latest.raggedTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "f581791c727ea356e9c5c2dd70601c2622a3f941c7bb498d1cd57a17503ea2fb",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-latest",
+   "checkpoint": "cp",
+   "id": "ex-latest",
+   "kind": "table-invalid",
+   "detail": "table t: row 2 is ragged (needs 6 cells)"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-latest",
+     "checkpoint": "cp",
+     "id": "ex-latest",
+     "kind": "table-invalid",
+     "detail": "table t: row 2 is ragged (needs 6 cells)"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "table.allNumbers.plain": {
+  "verdict": "green",
+  "checkpoint": "cp",
+  "rubricSha": "4e10d700e0a736e8571e6e141c9b35093e00f2c58e324227ad6b827f320bf418",
+  "outputSha": null,
+  "gaps": [],
+  "fault": null,
+  "full": {
+   "gaps": [],
+   "faults": [],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "table.allNumbers.tamperedCell": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "4e10d700e0a736e8571e6e141c9b35093e00f2c58e324227ad6b827f320bf418",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-allNumbers",
+   "checkpoint": "cp",
+   "id": "ex-allNumbers",
+   "kind": "missing-measurement",
+   "detail": "table t does not match its signed sha256"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-allNumbers",
+     "checkpoint": "cp",
+     "id": "ex-allNumbers",
+     "kind": "missing-measurement",
+     "detail": "table t does not match its signed sha256"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "table.allNumbers.missingTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "4e10d700e0a736e8571e6e141c9b35093e00f2c58e324227ad6b827f320bf418",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-allNumbers",
+   "checkpoint": "cp",
+   "id": "ex-allNumbers",
+   "kind": "table-invalid",
+   "detail": "table t is missing or not an object"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-allNumbers",
+     "checkpoint": "cp",
+     "id": "ex-allNumbers",
+     "kind": "table-invalid",
+     "detail": "table t is missing or not an object"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "table.allNumbers.raggedTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "4e10d700e0a736e8571e6e141c9b35093e00f2c58e324227ad6b827f320bf418",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-allNumbers",
+   "checkpoint": "cp",
+   "id": "ex-allNumbers",
+   "kind": "table-invalid",
+   "detail": "table t: row 2 is ragged (needs 6 cells)"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-allNumbers",
+     "checkpoint": "cp",
+     "id": "ex-allNumbers",
+     "kind": "table-invalid",
+     "detail": "table t: row 2 is ragged (needs 6 cells)"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "table.allDates.plain": {
+  "verdict": "green",
+  "checkpoint": "cp",
+  "rubricSha": "b4a34e3aae75c05e8aeae724150dff4d29e6b81bbf7825677f0612600e15a2d4",
+  "outputSha": null,
+  "gaps": [],
+  "fault": null,
+  "full": {
+   "gaps": [],
+   "faults": [],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "table.allDates.tamperedCell": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "b4a34e3aae75c05e8aeae724150dff4d29e6b81bbf7825677f0612600e15a2d4",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-allDates",
+   "checkpoint": "cp",
+   "id": "ex-allDates",
+   "kind": "missing-measurement",
+   "detail": "table t does not match its signed sha256"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-allDates",
+     "checkpoint": "cp",
+     "id": "ex-allDates",
+     "kind": "missing-measurement",
+     "detail": "table t does not match its signed sha256"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "table.allDates.missingTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "b4a34e3aae75c05e8aeae724150dff4d29e6b81bbf7825677f0612600e15a2d4",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-allDates",
+   "checkpoint": "cp",
+   "id": "ex-allDates",
+   "kind": "table-invalid",
+   "detail": "table t is missing or not an object"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-allDates",
+     "checkpoint": "cp",
+     "id": "ex-allDates",
+     "kind": "table-invalid",
+     "detail": "table t is missing or not an object"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "table.allDates.raggedTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "b4a34e3aae75c05e8aeae724150dff4d29e6b81bbf7825677f0612600e15a2d4",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-allDates",
+   "checkpoint": "cp",
+   "id": "ex-allDates",
+   "kind": "table-invalid",
+   "detail": "table t: row 2 is ragged (needs 6 cells)"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-allDates",
+     "checkpoint": "cp",
+     "id": "ex-allDates",
+     "kind": "table-invalid",
+     "detail": "table t: row 2 is ragged (needs 6 cells)"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "table.noEmpty.plain": {
+  "verdict": "green",
+  "checkpoint": "cp",
+  "rubricSha": "2f5fc32d575e9185c5189de0a7d96b45b8e04cc37a8c151f7e61742b5a254ea8",
+  "outputSha": null,
+  "gaps": [],
+  "fault": null,
+  "full": {
+   "gaps": [],
+   "faults": [],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "table.noEmpty.tamperedCell": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "2f5fc32d575e9185c5189de0a7d96b45b8e04cc37a8c151f7e61742b5a254ea8",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-noEmpty",
+   "checkpoint": "cp",
+   "id": "ex-noEmpty",
+   "kind": "missing-measurement",
+   "detail": "table t does not match its signed sha256"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-noEmpty",
+     "checkpoint": "cp",
+     "id": "ex-noEmpty",
+     "kind": "missing-measurement",
+     "detail": "table t does not match its signed sha256"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "table.noEmpty.missingTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "2f5fc32d575e9185c5189de0a7d96b45b8e04cc37a8c151f7e61742b5a254ea8",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-noEmpty",
+   "checkpoint": "cp",
+   "id": "ex-noEmpty",
+   "kind": "table-invalid",
+   "detail": "table t is missing or not an object"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-noEmpty",
+     "checkpoint": "cp",
+     "id": "ex-noEmpty",
+     "kind": "table-invalid",
+     "detail": "table t is missing or not an object"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "table.noEmpty.raggedTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "2f5fc32d575e9185c5189de0a7d96b45b8e04cc37a8c151f7e61742b5a254ea8",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-noEmpty",
+   "checkpoint": "cp",
+   "id": "ex-noEmpty",
+   "kind": "table-invalid",
+   "detail": "table t: row 2 is ragged (needs 6 cells)"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-noEmpty",
+     "checkpoint": "cp",
+     "id": "ex-noEmpty",
+     "kind": "table-invalid",
+     "detail": "table t: row 2 is ragged (needs 6 cells)"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "table.noDuplicates.plain": {
+  "verdict": "green",
+  "checkpoint": "cp",
+  "rubricSha": "1bbe3f3a9e7cc812b274aa989a8b9ae7af4903b364c5738a58faf9d82a091613",
+  "outputSha": null,
+  "gaps": [],
+  "fault": null,
+  "full": {
+   "gaps": [],
+   "faults": [],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "table.noDuplicates.tamperedCell": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "1bbe3f3a9e7cc812b274aa989a8b9ae7af4903b364c5738a58faf9d82a091613",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-noDuplicates",
+   "checkpoint": "cp",
+   "id": "ex-noDuplicates",
+   "kind": "missing-measurement",
+   "detail": "table t does not match its signed sha256"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-noDuplicates",
+     "checkpoint": "cp",
+     "id": "ex-noDuplicates",
+     "kind": "missing-measurement",
+     "detail": "table t does not match its signed sha256"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "table.noDuplicates.missingTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "1bbe3f3a9e7cc812b274aa989a8b9ae7af4903b364c5738a58faf9d82a091613",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-noDuplicates",
+   "checkpoint": "cp",
+   "id": "ex-noDuplicates",
+   "kind": "table-invalid",
+   "detail": "table t is missing or not an object"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-noDuplicates",
+     "checkpoint": "cp",
+     "id": "ex-noDuplicates",
+     "kind": "table-invalid",
+     "detail": "table t is missing or not an object"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "table.noDuplicates.raggedTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "1bbe3f3a9e7cc812b274aa989a8b9ae7af4903b364c5738a58faf9d82a091613",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-noDuplicates",
+   "checkpoint": "cp",
+   "id": "ex-noDuplicates",
+   "kind": "table-invalid",
+   "detail": "table t: row 2 is ragged (needs 6 cells)"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-noDuplicates",
+     "checkpoint": "cp",
+     "id": "ex-noDuplicates",
+     "kind": "table-invalid",
+     "detail": "table t: row 2 is ragged (needs 6 cells)"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "table.rowCount.plain": {
+  "verdict": "green",
+  "checkpoint": "cp",
+  "rubricSha": "44fc0ebffa875f1ff78af9c007682f41e3f5044016ac5033c43592ab09f4122b",
+  "outputSha": null,
+  "gaps": [],
+  "fault": null,
+  "full": {
+   "gaps": [],
+   "faults": [],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "table.rowCount.tamperedCell": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "44fc0ebffa875f1ff78af9c007682f41e3f5044016ac5033c43592ab09f4122b",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-rowCount",
+   "checkpoint": "cp",
+   "id": "ex-rowCount",
+   "kind": "missing-measurement",
+   "detail": "table t does not match its signed sha256"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-rowCount",
+     "checkpoint": "cp",
+     "id": "ex-rowCount",
+     "kind": "missing-measurement",
+     "detail": "table t does not match its signed sha256"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "table.rowCount.missingTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "44fc0ebffa875f1ff78af9c007682f41e3f5044016ac5033c43592ab09f4122b",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-rowCount",
+   "checkpoint": "cp",
+   "id": "ex-rowCount",
+   "kind": "table-invalid",
+   "detail": "table t is missing or not an object"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-rowCount",
+     "checkpoint": "cp",
+     "id": "ex-rowCount",
+     "kind": "table-invalid",
+     "detail": "table t is missing or not an object"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "table.rowCount.raggedTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "44fc0ebffa875f1ff78af9c007682f41e3f5044016ac5033c43592ab09f4122b",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-rowCount",
+   "checkpoint": "cp",
+   "id": "ex-rowCount",
+   "kind": "table-invalid",
+   "detail": "table t: row 2 is ragged (needs 6 cells)"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-rowCount",
+     "checkpoint": "cp",
+     "id": "ex-rowCount",
+     "kind": "table-invalid",
+     "detail": "table t: row 2 is ragged (needs 6 cells)"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "table.rowMath.plain": {
+  "verdict": "green",
+  "checkpoint": "cp",
+  "rubricSha": "8d5583ffb1e8c9aae39e53e04fdb93fcd9fbf6cdead245e6591b2263c1025b8b",
+  "outputSha": null,
+  "gaps": [],
+  "fault": null,
+  "full": {
+   "gaps": [],
+   "faults": [],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "table.rowMath.tamperedCell": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "8d5583ffb1e8c9aae39e53e04fdb93fcd9fbf6cdead245e6591b2263c1025b8b",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-rowMath",
+   "checkpoint": "cp",
+   "id": "ex-rowMath",
+   "kind": "missing-measurement",
+   "detail": "table t does not match its signed sha256"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-rowMath",
+     "checkpoint": "cp",
+     "id": "ex-rowMath",
+     "kind": "missing-measurement",
+     "detail": "table t does not match its signed sha256"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "table.rowMath.missingTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "8d5583ffb1e8c9aae39e53e04fdb93fcd9fbf6cdead245e6591b2263c1025b8b",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-rowMath",
+   "checkpoint": "cp",
+   "id": "ex-rowMath",
+   "kind": "table-invalid",
+   "detail": "table t is missing or not an object"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-rowMath",
+     "checkpoint": "cp",
+     "id": "ex-rowMath",
+     "kind": "table-invalid",
+     "detail": "table t is missing or not an object"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "table.rowMath.raggedTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "8d5583ffb1e8c9aae39e53e04fdb93fcd9fbf6cdead245e6591b2263c1025b8b",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-rowMath",
+   "checkpoint": "cp",
+   "id": "ex-rowMath",
+   "kind": "table-invalid",
+   "detail": "table t: row 2 is ragged (needs 6 cells)"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-rowMath",
+     "checkpoint": "cp",
+     "id": "ex-rowMath",
+     "kind": "table-invalid",
+     "detail": "table t: row 2 is ragged (needs 6 cells)"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "diff.onlyColumnsChanged.plain": {
+  "verdict": "green",
+  "checkpoint": "cp",
+  "rubricSha": "5f63bd91ffebfc5e26d5421c7d246eab8b931f248bec86ef835faa92e3b488d6",
+  "outputSha": null,
+  "gaps": [],
+  "fault": null,
+  "full": {
+   "gaps": [],
+   "faults": [],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "diff.onlyColumnsChanged.tamperedCell": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "5f63bd91ffebfc5e26d5421c7d246eab8b931f248bec86ef835faa92e3b488d6",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-onlyColumnsChanged",
+   "checkpoint": "cp",
+   "id": "ex-onlyColumnsChanged",
+   "kind": "missing-measurement",
+   "detail": "table t does not match its signed sha256"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-onlyColumnsChanged",
+     "checkpoint": "cp",
+     "id": "ex-onlyColumnsChanged",
+     "kind": "missing-measurement",
+     "detail": "table t does not match its signed sha256"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "diff.onlyColumnsChanged.missingTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "5f63bd91ffebfc5e26d5421c7d246eab8b931f248bec86ef835faa92e3b488d6",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-onlyColumnsChanged",
+   "checkpoint": "cp",
+   "id": "ex-onlyColumnsChanged",
+   "kind": "table-invalid",
+   "detail": "table t is missing or not an object"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-onlyColumnsChanged",
+     "checkpoint": "cp",
+     "id": "ex-onlyColumnsChanged",
+     "kind": "table-invalid",
+     "detail": "table t is missing or not an object"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "diff.onlyColumnsChanged.raggedTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "5f63bd91ffebfc5e26d5421c7d246eab8b931f248bec86ef835faa92e3b488d6",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-onlyColumnsChanged",
+   "checkpoint": "cp",
+   "id": "ex-onlyColumnsChanged",
+   "kind": "table-invalid",
+   "detail": "table t: row 2 is ragged (needs 6 cells)"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-onlyColumnsChanged",
+     "checkpoint": "cp",
+     "id": "ex-onlyColumnsChanged",
+     "kind": "table-invalid",
+     "detail": "table t: row 2 is ragged (needs 6 cells)"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "diff.untouchedIdentical.plain": {
+  "verdict": "green",
+  "checkpoint": "cp",
+  "rubricSha": "27c5bf941ee53ed9ba65409197d686beb3dc80113c4202e3d425608d495db5a8",
+  "outputSha": null,
+  "gaps": [],
+  "fault": null,
+  "full": {
+   "gaps": [],
+   "faults": [],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "diff.untouchedIdentical.tamperedCell": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "27c5bf941ee53ed9ba65409197d686beb3dc80113c4202e3d425608d495db5a8",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-untouchedIdentical",
+   "checkpoint": "cp",
+   "id": "ex-untouchedIdentical",
+   "kind": "missing-measurement",
+   "detail": "table t does not match its signed sha256"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-untouchedIdentical",
+     "checkpoint": "cp",
+     "id": "ex-untouchedIdentical",
+     "kind": "missing-measurement",
+     "detail": "table t does not match its signed sha256"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "diff.untouchedIdentical.missingTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "27c5bf941ee53ed9ba65409197d686beb3dc80113c4202e3d425608d495db5a8",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-untouchedIdentical",
+   "checkpoint": "cp",
+   "id": "ex-untouchedIdentical",
+   "kind": "table-invalid",
+   "detail": "table t is missing or not an object"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-untouchedIdentical",
+     "checkpoint": "cp",
+     "id": "ex-untouchedIdentical",
+     "kind": "table-invalid",
+     "detail": "table t is missing or not an object"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "diff.untouchedIdentical.raggedTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "27c5bf941ee53ed9ba65409197d686beb3dc80113c4202e3d425608d495db5a8",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-untouchedIdentical",
+   "checkpoint": "cp",
+   "id": "ex-untouchedIdentical",
+   "kind": "table-invalid",
+   "detail": "table t: row 2 is ragged (needs 6 cells)"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-untouchedIdentical",
+     "checkpoint": "cp",
+     "id": "ex-untouchedIdentical",
+     "kind": "table-invalid",
+     "detail": "table t: row 2 is ragged (needs 6 cells)"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "diff.rowsAdded.plain": {
+  "verdict": "green",
+  "checkpoint": "cp",
+  "rubricSha": "963a0413864c96e9d31c0728a7399ffb167edd749eb85dbfc1c4ba60003d2004",
+  "outputSha": null,
+  "gaps": [],
+  "fault": null,
+  "full": {
+   "gaps": [],
+   "faults": [],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "diff.rowsAdded.tamperedCell": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "963a0413864c96e9d31c0728a7399ffb167edd749eb85dbfc1c4ba60003d2004",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-rowsAdded",
+   "checkpoint": "cp",
+   "id": "ex-rowsAdded",
+   "kind": "missing-measurement",
+   "detail": "table t does not match its signed sha256"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-rowsAdded",
+     "checkpoint": "cp",
+     "id": "ex-rowsAdded",
+     "kind": "missing-measurement",
+     "detail": "table t does not match its signed sha256"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "diff.rowsAdded.missingTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "963a0413864c96e9d31c0728a7399ffb167edd749eb85dbfc1c4ba60003d2004",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-rowsAdded",
+   "checkpoint": "cp",
+   "id": "ex-rowsAdded",
+   "kind": "table-invalid",
+   "detail": "table t is missing or not an object"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-rowsAdded",
+     "checkpoint": "cp",
+     "id": "ex-rowsAdded",
+     "kind": "table-invalid",
+     "detail": "table t is missing or not an object"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "diff.rowsAdded.raggedTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "963a0413864c96e9d31c0728a7399ffb167edd749eb85dbfc1c4ba60003d2004",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-rowsAdded",
+   "checkpoint": "cp",
+   "id": "ex-rowsAdded",
+   "kind": "table-invalid",
+   "detail": "table t: row 2 is ragged (needs 6 cells)"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-rowsAdded",
+     "checkpoint": "cp",
+     "id": "ex-rowsAdded",
+     "kind": "table-invalid",
+     "detail": "table t: row 2 is ragged (needs 6 cells)"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "diff.rowsDeleted.plain": {
+  "verdict": "green",
+  "checkpoint": "cp",
+  "rubricSha": "d63ce6780efdcb708a95b622a812cf3177f51d557aa5e16d9343bca95c70cbdc",
+  "outputSha": null,
+  "gaps": [],
+  "fault": null,
+  "full": {
+   "gaps": [],
+   "faults": [],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "diff.rowsDeleted.tamperedCell": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "d63ce6780efdcb708a95b622a812cf3177f51d557aa5e16d9343bca95c70cbdc",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-rowsDeleted",
+   "checkpoint": "cp",
+   "id": "ex-rowsDeleted",
+   "kind": "missing-measurement",
+   "detail": "table t does not match its signed sha256"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-rowsDeleted",
+     "checkpoint": "cp",
+     "id": "ex-rowsDeleted",
+     "kind": "missing-measurement",
+     "detail": "table t does not match its signed sha256"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "diff.rowsDeleted.missingTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "d63ce6780efdcb708a95b622a812cf3177f51d557aa5e16d9343bca95c70cbdc",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-rowsDeleted",
+   "checkpoint": "cp",
+   "id": "ex-rowsDeleted",
+   "kind": "table-invalid",
+   "detail": "table t is missing or not an object"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-rowsDeleted",
+     "checkpoint": "cp",
+     "id": "ex-rowsDeleted",
+     "kind": "table-invalid",
+     "detail": "table t is missing or not an object"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "diff.rowsDeleted.raggedTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "d63ce6780efdcb708a95b622a812cf3177f51d557aa5e16d9343bca95c70cbdc",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-rowsDeleted",
+   "checkpoint": "cp",
+   "id": "ex-rowsDeleted",
+   "kind": "table-invalid",
+   "detail": "table t: row 2 is ragged (needs 6 cells)"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-rowsDeleted",
+     "checkpoint": "cp",
+     "id": "ex-rowsDeleted",
+     "kind": "table-invalid",
+     "detail": "table t: row 2 is ragged (needs 6 cells)"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "diff.newColumnRule.plain": {
+  "verdict": "green",
+  "checkpoint": "cp",
+  "rubricSha": "647f0cdbc037438d7dbdb0927b15370cc8148c6f522a130d6801b1db793d7d92",
+  "outputSha": null,
+  "gaps": [],
+  "fault": null,
+  "full": {
+   "gaps": [],
+   "faults": [],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "diff.newColumnRule.tamperedCell": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "647f0cdbc037438d7dbdb0927b15370cc8148c6f522a130d6801b1db793d7d92",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-newColumnRule",
+   "checkpoint": "cp",
+   "id": "ex-newColumnRule",
+   "kind": "missing-measurement",
+   "detail": "table t does not match its signed sha256"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-newColumnRule",
+     "checkpoint": "cp",
+     "id": "ex-newColumnRule",
+     "kind": "missing-measurement",
+     "detail": "table t does not match its signed sha256"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "diff.newColumnRule.missingTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "647f0cdbc037438d7dbdb0927b15370cc8148c6f522a130d6801b1db793d7d92",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-newColumnRule",
+   "checkpoint": "cp",
+   "id": "ex-newColumnRule",
+   "kind": "table-invalid",
+   "detail": "table t is missing or not an object"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-newColumnRule",
+     "checkpoint": "cp",
+     "id": "ex-newColumnRule",
+     "kind": "table-invalid",
+     "detail": "table t is missing or not an object"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ },
+ "diff.newColumnRule.raggedTable": {
+  "verdict": "stopped",
+  "checkpoint": "cp",
+  "rubricSha": "647f0cdbc037438d7dbdb0927b15370cc8148c6f522a130d6801b1db793d7d92",
+  "outputSha": null,
+  "gaps": [],
+  "fault": {
+   "key": "cp:ex-newColumnRule",
+   "checkpoint": "cp",
+   "id": "ex-newColumnRule",
+   "kind": "table-invalid",
+   "detail": "table t: row 2 is ragged (needs 6 cells)"
+  },
+  "full": {
+   "gaps": [],
+   "faults": [
+    {
+     "key": "cp:ex-newColumnRule",
+     "checkpoint": "cp",
+     "id": "ex-newColumnRule",
+     "kind": "table-invalid",
+     "detail": "table t: row 2 is ragged (needs 6 cells)"
+    }
+   ],
+   "evidence": [],
+   "matched": []
+  },
+  "baselines": {},
+  "callerItems": {}
+ }
+}

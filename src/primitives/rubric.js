@@ -80,6 +80,8 @@ import { parseBound, compareBounds, decideQuote, parseClaimValue, displayCanon, 
  * @property {string} id
  * @property {"exception"|"liveness"|"missing-measurement"|"unknown-pattern"|"baseline-conflict"|"table-invalid"|"check-invalid"} kind `table-invalid`/`check-invalid`: a `cells`/`table`/`diff` check could not measure (missing or malformed table; unknown column or row, a signed field that cannot apply)
  * @property {string} detail bounded
+ * @property {string[]} [inputs] RULED #82, only on a table sha mismatch (`missing-measurement`): the signed names (`spec.inputs`, in spec order) of EVERY table given in `opts.tables` that does not hash to its signed sha256, at most 20; a given table that cannot be read is a `table-invalid` fault, not listed
+ * @property {number} [inputsTotal] present only when `inputs` was cut at 20: how many tables mismatch in all
  *
  * @typedef {Object} Check
  * One signed check: `{ id, rule, ...fields }` — the fields are listed per rule in `rubricVocabulary`.
@@ -1425,12 +1427,46 @@ function cellsFields(rule) {
   }
   return fields;
 }
+// RULED #82 (`fault.inputs`): every table GIVEN in opts.tables that names a spec.inputs entry and does not hash to its signed sha256, in
+// spec.inputs order. Computed lazily (only when a sha-mismatch fault is being made, so a green run pays no extra hash) and ONCE per call
+// (memoized on ctx); a given table that cannot be read (tableShaOf null) is a table-invalid problem, not a mismatch, and is not listed.
+const FAULT_INPUTS_MAX = 20;
+function mismatchedInputs(ctx) {
+  if (ctx.shaMismatch === undefined) {
+    const names = [];
+    try {
+      const tables = getOpt(ctx, "tables");
+      if (isPlainObject(tables)) {
+        for (const i of ctx.rubric.inputs ?? []) {
+          let raw;
+          try {
+            raw = Object.hasOwn(tables, i.name) ? tables[i.name] : undefined;
+          } catch {
+            continue;
+          }
+          if (raw === undefined) continue;
+          const h = tableShaOf(raw);
+          if (h !== null && h !== i.sha256) names.push(i.name);
+        }
+      }
+    } catch {
+      // an unreadable opts.tables lists nothing
+    }
+    ctx.shaMismatch = names;
+  }
+  const all = ctx.shaMismatch;
+  return { inputs: all.slice(0, FAULT_INPUTS_MAX), ...(all.length > FAULT_INPUTS_MAX ? { inputsTotal: all.length } : {}) };
+}
 function runCellsFamily(ctx, c) {
   const cache = (ctx.tableCache ??= new Map());
   const signedSha = (name) => (ctx.rubric.inputs ?? []).find((i) => i.name === name)?.sha256;
   const env = makeEnv(cache, () => getOpt(ctx, "tables"), () => readField(ctx, c.claim), signedSha);
   const r = evaluate(/** @type {"cells"|"table"|"diff"} */ (c.rule), c, env);
-  if (r.stopped) return stop(r.stopped.kind, r.stopped.detail);
+  if (r.stopped) {
+    const f = stop(r.stopped.kind, r.stopped.detail);
+    if (r.stopped.sha) Object.assign(f.fault, mismatchedInputs(ctx));
+    return f;
+  }
   const out = r.gaps.length === 0 ? { gaps: [] } : { gaps: r.gaps };
   if (r.expected) out.expected = r.expected;
   return out;
@@ -2167,6 +2203,10 @@ function errorDetail(e) {
   }
 }
 
+function mintFault(checkpoint, c, f) {
+  return { key: `${checkpoint}:${c.id}`, checkpoint, id: c.id, kind: f.kind, detail: f.detail, ...(f.inputs !== undefined ? { inputs: f.inputs, ...(f.inputsTotal !== undefined ? { inputsTotal: f.inputsTotal } : {}) } : {}) };
+}
+
 function mintGap(checkpoint, c, partial) {
   const g = { key: `${checkpoint}:${c.id}`, checkpoint, check: c.rule, id: c.id };
   const field = c.field ?? c.claims ?? c.claim;
@@ -2308,7 +2348,7 @@ export async function checkStep(rubric, checkpoint, output, opts) {
       if (res.matched) matched.push(res.matched);
       if (res.gap) reds.push(mintGap(checkpoint, c, res.gap));
       else if (res.gaps) for (const g of res.gaps) reds.push(mintGap(checkpoint, c, g)); // sectionWords: one gap per section
-      else if (res.fault) faults.push({ key: `${checkpoint}:${c.id}`, checkpoint, id: c.id, kind: res.fault.kind, detail: res.fault.detail });
+      else if (res.fault) faults.push(mintFault(checkpoint, c, res.fault));
     }
   }
 
@@ -2324,4 +2364,66 @@ export async function checkStep(rubric, checkpoint, output, opts) {
     baselines: { ...ctx.baselines }, // plain object out; own "__proto__" etc. survive the spread
     callerItems: { ...ctx.callerItems },
   });
+}
+
+/**
+ * Run ONLY the `table`-rule checks of one checkpoint over typed tables, with no step output (RULED #82, docs/product/cells-prd.md §11.3).
+ * The same evaluation path as `checkStep` (the same signed-table sha lock, ONE snapshot per table name per call), so a verdict here equals
+ * the verdict `checkStep` gives the same check on the same tables. No `happened`, no foundational check, no audit line, no gate state.
+ * @param {Rubric} rubric
+ * @param {string} checkpoint
+ * @param {Object<string, {header: string[], rows: {rowNumber: number, cells: string[]}[]}>} tables
+ * @returns {{ id: string, verdict: "green"|"red"|"stopped", gaps: Gap[], fault?: Fault }[]}
+ * @when Reach for this when the person's data can already be checked before any step output exists: it runs just the `table` checks of a checkpoint (every cell numeric, no duplicate ids, row math) over the typed rows and tells you which would be green, red or stopped, so a bad table is caught before the worker is asked anything. A checkpoint with no `table` check returns []. A `cells` or `diff` check needs a claim or an after-table and is not run here.
+ * @category rubric
+ * @signature runTableChecks(rubric: Rubric, checkpoint: string, tables: object) => { id: string, verdict: "green"|"red"|"stopped", gaps: Gap[], fault?: Fault }[]
+ * @fails Throws a TypeError only for CALLER misuse: a rubric not made by `createRubric`, an unknown checkpoint, or a `tables` that is not an object. Everything about the DATA never throws: a missing, ragged, hostile or oversize table is a per-check `stopped` (`table-invalid`, `missing-measurement`) or red (`table-too-large`) result. The array is frozen and fresh per call.
+ * @example
+ * import { createRubric, runTableChecks, tableSha } from "bareguard";
+ * const sheet = { header: ["Id"], rows: [{ rowNumber: 2, cells: ["a"] }, { rowNumber: 3, cells: ["a"] }] };
+ * const rubric = createRubric({ schema: 1, goal: "g", inputs: [{ name: "t", sha256: tableSha(sheet) }],
+ *   checkpoints: { s: { gating: true, checks: [{ id: "ids", rule: "table", table: "t", op: "noDuplicates", column: "Id" }] } } });
+ * runTableChecks(rubric, "s", { t: sheet })[0].verdict; // "red": rows 2 and 3 share a value
+ */
+export function runTableChecks(rubric, checkpoint, tables) {
+  if (rubric === null || typeof rubric !== "object" || !BRANDED.has(rubric)) {
+    throw new TypeError("runTableChecks: rubric must come from createRubric()");
+  }
+  const spec = /** @type {any} */ (rubric);
+  if (typeof checkpoint !== "string" || !Object.hasOwn(spec.checkpoints, checkpoint)) {
+    throw new TypeError(`runTableChecks: unknown checkpoint ${typeof checkpoint === "string" ? JSON.stringify(clip(checkpoint)) : typeName(checkpoint)}`);
+  }
+  if (tables === null || typeof tables !== "object" || Array.isArray(tables)) throw new TypeError("runTableChecks: tables must be an object");
+  const ctx = { rubric: spec, fields: Object.create(null), opts: { tables: { v: tables } }, baselines: Object.create(null), callerItems: Object.create(null) };
+  const out = [];
+  for (const c of spec.checkpoints[checkpoint].checks) {
+    if (c.rule !== "table") continue;
+    let res;
+    try {
+      res = RULES.table.run(ctx, c);
+    } catch (e) {
+      res = stop("exception", errorDetail(e));
+    }
+    if (res.fault) out.push({ id: c.id, verdict: "stopped", gaps: [], fault: mintFault(checkpoint, c, res.fault) });
+    else {
+      const gaps = (res.gaps ?? []).map((g) => mintGap(checkpoint, c, g));
+      out.push({ id: c.id, verdict: gaps.length ? "red" : "green", gaps });
+    }
+  }
+  return deepFreeze(out);
+}
+
+// Internal helpers for rubric-helpers.js (checkTables): the draft-time view of createRubric. Not public (index.js does not re-export them).
+/** A raw spec copied onto null-prototype data exactly as createRubric does; throws the same `fail` error (with `.path`). */
+export function snapshotSpec(spec) {
+  return snapshot(spec, "spec", 0);
+}
+/** The refusal createRubric would throw for ONE check (`{ path, message }`, path as createRubric forms it), or null. `c` is a snapshot. */
+export function checkRefusal(c, where, inputNames) {
+  try {
+    validateCheck(c, where, inputNames);
+    return null;
+  } catch (e) {
+    return { path: /** @type {any} */ (e).path ?? where, message: e instanceof Error ? e.message : "could not be read" };
+  }
 }

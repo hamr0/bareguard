@@ -29,7 +29,7 @@ const isWs = (c) => c === 32 || (c >= 9 && c <= 13);
  * any "," is present, later groups exactly 3, at most one ".", then at least one digit). Null = malformed.
  * Returns an unsigned, normalized decimal {neg:false, int, frac}.
  */
-function parseGrammar(text, a, b, comma = false) {
+export function parseGrammar(text, a, b, comma = false) {
   if (comma) return parseGrammarComma(text, a, b);
   let i = a;
   while (i < b && isDigit(text.charCodeAt(i))) i++;
@@ -108,7 +108,7 @@ function normDec(neg, int, frac) {
   return { neg, int, frac };
 }
 
-function decToString(d) {
+export function decToString(d) {
   return (d.neg ? "-" : "") + d.int + (d.frac ? "." + d.frac : "");
 }
 
