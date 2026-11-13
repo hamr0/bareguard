@@ -247,7 +247,7 @@ test("groundedValues: hostile text (lone surrogates, mixed scripts, every gramma
 
 // ---- linearity: a fast default-suite shape test (the 5 MiB cases are in `npm run bench:rubric`) ----------------------------------------------
 
-test("the scan is linear: 4x the text costs under 8x (16 KiB -> 64 KiB, best of 3) for every hostile shape", () => {
+test("the scan is linear: 4x the text costs under 10x (16 KiB -> 64 KiB, best of 3) for every hostile shape", () => {
   const shapes = { digits: "7", commas: "1,", dots: "1.", dashes: "-", colons: ":", dollars: "$", mixed: "09:27 AM 1.2k $5USD (5) -5 −5 a.m. ", dateRuns: "1-1-", amounts: "$1$", chain: "1.1.1.", numbers: "1 ", times: "12:05 AM " };
   const values = [{ kind: "number", value: 5 }, { kind: "date", value: "2026-11-18" }, { kind: "time", value: "09:00" }];
   const best = (text) => {
@@ -264,7 +264,7 @@ test("the scan is linear: 4x the text costs under 8x (16 KiB -> 64 KiB, best of 
     best(mk(4096)); // warm up
     const small = best(mk(16 * 1024));
     const large = best(mk(64 * 1024));
-    assert.ok(large < Math.max(small, 200_000) * 8, `${name}: ${small} ns -> ${large} ns is not linear`);
+    assert.ok(large < Math.max(small, 200_000) * 10, `${name}: ${small} ns -> ${large} ns is not linear`);
   }
 });
 

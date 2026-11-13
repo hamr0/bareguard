@@ -61,7 +61,7 @@ function columnRefs(c) {
  * @when Reach for this right after an AI drafted a rubric spec over the person's tables and BEFORE signing or running it: one call lists everything that would stop it (a check naming a table or column that is not there, a table that cannot be read, a table that does not match its signed sha256, a spec `createRubric` would refuse), so you send one repair prompt instead of discovering each at step time. Empty array = ok. It checks the draft against the data; `createRubric` and `checkStep` still run as before.
  * @category rubric
  * @signature checkTables(spec: object, tables: object) => { kind: string, limit?: number, checkpoint?: string, index?: number, id?: string, table?: string, column?: string, field?: string, path?: string, message?: string }[]
- * @fails Never throws: a hostile spec or table, a throwing getter, a Proxy, `__proto__` keys or a non-object argument all return problems (a spec that cannot be read is one `refused`). A fresh array of fresh objects each call; inputs are not mutated. `refused` is reported for EVERY failing check (the path as `createRubric` forms it): a cells/table/diff check by the validator's own function, any other check (a non-object entry too) by remove-and-retry on the REAL spec: `createRubric` throws, that check is taken out of a copy, it is asked again, and so on (so a sound check is never refused for lacking its inputs or neighbours). It stops when `createRubric` passes, when a refusal is not inside a check, or after 20 such checks; a 21st still refused adds one last problem `{ kind: "truncated", limit: 20 }` (more may exist). A refusal that belongs to the spec or a checkpoint is reported only when it is the FIRST one, on the untouched spec; one that appears only after removals is dropped. A check that is `refused` gets no table or column problems. Problems with no check (`unreadable-table`, `sha-mismatch`, a spec-level `refused`) come first, then each check's, in checkpoint and check order. A diff's `after` table is the artifact checked later, not signed: it is reported only when given and unreadable, and checked for `keyColumn` and a `newColumnRule`'s `a`, `b`, `result`, `where` and `dateFormats` columns when given.
+ * @fails Never throws: a hostile spec or table, a throwing getter, a Proxy, `__proto__` keys or a non-object argument all return problems (a spec that cannot be read is one `refused`). A fresh array of fresh objects each call; inputs are not mutated. `refused` is reported for EVERY failing check (the path as `createRubric` forms it): a cells/table/diff check by the validator's own function, any other check (a non-object entry too) by remove-and-retry on the REAL spec: `createRubric` throws, that check is taken out of a copy, it is asked again, and so on (so a sound check is never refused for lacking its inputs or neighbours). It stops when `createRubric` passes, when a refusal is not inside a check, or after 20 such checks; a 21st still refused adds one last problem `{ kind: "truncated", limit: 20 }` (more may exist). A refusal that belongs to the spec or a checkpoint is reported only when it is the FIRST one, on the untouched spec; one that appears only after removals is dropped. Stated limit: when ANY checkpoint id contains `.`, `[` or `]` the path text cannot say which check or checkpoint it names, so remove-and-retry does not run and the untouched spec's single `createRubric` refusal is reported UNPLACED (`{ kind: "refused", path, message }`, no checkpoint, index or id); cells/table/diff refusals found by their own validator stay placed. A check that is `refused` gets no table or column problems. Problems with no check (`unreadable-table`, `sha-mismatch`, a spec-level `refused`) come first, then each check's, in checkpoint and check order. A diff's `after` table is the artifact checked later, not signed: it is reported only when given and unreadable, and checked for `keyColumn` and a `newColumnRule`'s `a`, `b`, `result`, `where` and `dateFormats` columns when given.
  * @example
  * import { checkTables } from "bareguard";
  * const sheet = { header: ["Id", "Amount"], rows: [{ rowNumber: 2, cells: ["a", "5"] }] };
@@ -123,7 +123,13 @@ function buildProblems(spec, tables) {
   const perCheck = []; // { ci, n, rank, p }
   // remove-and-retry on the REAL spec (createRubric stops at its first refusal): see removalRefusals
   let truncated = false;
-  if (whole !== null) {
+  // An id with `.`, `[` or `]` makes a createRubric path ambiguous (`spec.checkpoints.a.checks[0]` is check a[0] or checkpoint "a.checks[0]"):
+  // text cannot say which, so such a spec gets the one createRubric refusal UNPLACED and no remove-and-retry (stated limit).
+  const oddIds = cps.some((id) => /[.[\]]/.test(id));
+  if (whole !== null && oddIds) {
+    if (!entries.some((e) => e.refused !== null && e.refused.path === whole.path)) // a cells-family check's own refusal is already reported, placed
+       front.push({ kind: "refused", path: whole.path, message: whole.message });
+  } else if (whole !== null) {
     const r = removalRefusals(s, whole, cps, entries);
     if (r.front !== null) {
       if (r.front.ci === undefined) front.push(r.front.p);
@@ -199,6 +205,8 @@ const MAX_REFUSED = 20; // check refusals found by remove-and-retry; one more is
  * @param {string} path
  * @param {string[]} cps
  * @param {(cpId: string) => number} count
+ * Only called when no checkpoint id contains `.`, `[` or `]` (`buildProblems` refuses to place anything otherwise): then `spec.checkpoints.<id>`
+ * followed by an edge character names exactly one id, a check path exactly one (id, k), and the tie rules below never fire.
  * @returns {{ci: number, cpId: string, k: number|null}|null} k is null for a checkpoint-level path; null when no checkpoint owns it
  */
 function resolvePath(path, cps, count) {

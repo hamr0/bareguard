@@ -750,43 +750,35 @@ test("checkTables remove-and-retry: never mutates the spec, never throws on a ho
   assert.doesNotThrow(() => checkTables(rr({ a: new Proxy({}, { get() { throw 1; } }) }), {}));
 });
 
-test("checkTables resolves a path by the LONGEST checkpoint id, independent of key order", () => {
+test("checkTables with a checkpoint id holding . [ or ]: exactly one UNPLACED refusal, the same in either key order", () => {
   const ok = (id) => ({ id, rule: "maxWords", field: "x", value: 5 });
   const A = () => ({ gating: true, checks: [ok("c0"), ok("c1"), ok("c2")] });
-  const both = (a, b) => [rr({ a: a(), "a.checks[1]": b() }), rr({ "a.checks[1]": b(), a: a() })];
-  // a bad check inside the colliding-id checkpoint: only it is refused, at checkpoint 'a.checks[1]' index 0
-  for (const s of both(A, () => ({ gating: true, checks: [badRule("q")] }))) {
-    const ps = checkTables(s, {});
-    assert.deepEqual(refusedAt(ps), ["a.checks[1][0]"]);
-    assert.equal(ps.length, 1);
-    assert.equal(ps[0].path, "spec.checkpoints.a.checks[1].checks[0].rule");
+  const cases = [
+    () => ({ gating: true, checks: [badRule("q")] }), // a bad check inside the colliding checkpoint
+    () => ({ gating: 5, checks: [] }), // a checkpoint-level error
+    () => 5, // not an object
+  ];
+  for (const mk of cases) {
+    const results = [rr({ a: A(), "a.checks[1]": mk() }), rr({ "a.checks[1]": mk(), a: A() })].map((s) => {
+      let err;
+      try { createRubric(JSON.parse(JSON.stringify(s))); } catch (e) { err = e; }
+      const ps = checkTables(s, {});
+      assert.equal(ps.length, 1);
+      assert.deepEqual(Object.keys(ps[0]).sort(), ["kind", "message", "path"]);
+      assert.equal(ps[0].kind, "refused");
+      assert.equal(ps[0].path, err.path);
+      return ps[0].path;
+    });
+    assert.equal(results[0], results[1]);
   }
-  // a checkpoint-level error on the colliding id lands on that checkpoint, not on a[1] / a[2]
-  for (const s of both(A, () => ({ gating: 5, checks: [] }))) {
-    const ps = checkTables(s, {});
-    assert.deepEqual(ps.map((p) => [p.kind, p.checkpoint, p.index]), [["refused", "a.checks[1]", undefined]]);
-  }
-  // a genuinely bad check of 'a' next to a colliding id: still check a[1], both orders
-  const goodQ = () => ({ gating: true, checks: [ok("q")] });
-  for (const s of [rr({ a: { gating: true, checks: [ok("c0"), badRule("c1")] }, "a.checks[1]": goodQ() }), rr({ "a.checks[1]": goodQ(), a: { gating: true, checks: [ok("c0"), badRule("c1")] } })]) {
-    assert.deepEqual(refusedAt(checkTables(s, {})), ["a[1]"]);
-  }
-  // ids 'a' / 'a.checks' / 'a.checks[1]' / 'a[0]' in every permutation: the bad check in each is found at its own checkpoint
-  const ids = ["a", "a.checks", "a.checks[1]", "a[0]"];
-  const perms = (xs) => (xs.length <= 1 ? [xs] : xs.flatMap((x, i) => perms([...xs.slice(0, i), ...xs.slice(i + 1)]).map((p) => [x, ...p])));
-  for (const order of perms(ids)) {
-    const cps = {};
-    for (const id of order) cps[id] = { gating: true, checks: [ok("c0"), ok("c1"), badRule("bad")] };
-    assert.deepEqual(refusedAt(checkTables(rr(cps), {})).sort(), ids.map((id) => `${id}[2]`).sort(), order.join("|"));
-  }
+  // ids without . [ ] keep their placement
+  assert.deepEqual(refusedAt(checkTables(rr({ a: A(), b: { gating: true, checks: [badRule("q")] } }), {})), ["b[0]"]);
 });
 
-test("checkTables: a path names a check only when that check exists (colliding id, option 2)", () => {
-  const ok = (id) => ({ id, rule: "maxWords", field: "x", value: 5 });
-  for (const s of [rr({ a: { gating: true, checks: [ok("c0")] }, "a.checks[1]": 5 }), rr({ "a.checks[1]": 5, a: { gating: true, checks: [ok("c0")] } })]) {
-    const ps = checkTables(s, {});
-    assert.deepEqual(ps.map((p) => [p.kind, p.checkpoint, p.index, p.path]), [["refused", "a.checks[1]", undefined, "spec.checkpoints.a.checks[1]"]]);
-  }
+test("checkTables: odd ids still report a cells refusal placed (found per check object, not by path)", () => {
+  const cell = { id: "x", rule: "cells", table: "nope", claim: "c", op: "sum", column: "Amount" };
+  const ps = checkTables(rr({ "a.b": { gating: true, checks: [cell] } }), {});
+  assert.ok(ps.some((p) => p.kind === "refused" && p.checkpoint === "a.b" && p.index === 0), JSON.stringify(ps));
 });
 
 test("checkTables INVARIANT: createRubric throws on the untouched spec <=> at least one `refused`", () => {
@@ -813,4 +805,34 @@ test("checkTables INVARIANT: createRubric throws on the untouched spec <=> at le
     }
   }
   assert.ok(threw > 50 && passed > 5, `sweep covers both outcomes (${threw}/${passed} of ${n})`);
+});
+
+test("checkTables with odd checkpoint ids: one unplaced refusal, never a sound check blamed (three-checkpoint sweep)", () => {
+  const ok = (id) => ({ id, rule: "maxWords", field: "x", value: 5 });
+  const ids = ["a", "a.checks", "a.checks[0]", "a.checks[1]", "a[0]", "a.checks[0].field", "b", "a.checks[2]"];
+  const values = [() => 5, () => ({ gating: 5, checks: [] }), () => ({ gating: true, checks: [badRule("q")] }), () => ({ gating: true, checks: [] }), () => ({ gating: true, checks: [ok("c0"), ok("c1")] }), () => ({ gating: true, checks: [ok("c0"), badRule("c1"), ok("c2")] })];
+  let n = 0, threw = 0;
+  for (let i = 0; i < ids.length; i++) for (let j = i + 1; j < ids.length; j++) for (let k = j + 1; k < ids.length; k++) {
+    const trio = [ids[i], ids[j], ids[k]];
+    if (!trio.some((id) => /[.[\]]/.test(id))) continue;
+    for (const order of [trio, [...trio].reverse()]) for (const vs of [[0, 0, 0], [1, 2, 3], [5, 0, 4], [2, 5, 1], [4, 4, 5], [3, 1, 2], [0, 5, 5], [4, 3, 0], [4, 4, 4], [3, 3, 4]]) {
+      const cps = {};
+      order.forEach((id, x) => { cps[id] = values[vs[x]](); });
+      const spec = rr(cps);
+      let throws = true;
+      try { createRubric(JSON.parse(JSON.stringify(spec))); throws = false; } catch { /* refused */ }
+      const ps = checkTables(spec, {});
+      const refused = ps.filter((p) => p.kind === "refused");
+      const label = JSON.stringify(cps);
+      assert.equal(refused.length >= 1, throws, label);
+      if (throws) threw++;
+      for (const p of refused) {
+        if (p.index === undefined) continue;
+        const c = spec.checkpoints[p.checkpoint]?.checks?.[p.index];
+        assert.ok(!(c && c.rule === "maxWords"), `a sound check is blamed: ${label} -> ${p.checkpoint}[${p.index}]`);
+      }
+      n++;
+    }
+  }
+  assert.ok(n > 500 && threw > 100 && n > threw, `${n}/${threw}`);
 });
