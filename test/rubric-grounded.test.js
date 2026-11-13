@@ -7,7 +7,7 @@ import { parseClaimValue } from "../src/primitives/rubric-locate.js";
 // never-throws surface is fed hostile input; the scan is linear.
 
 const NUMS = [-2026, -5, 0, 0.5, 1, 1.5, 2, 3, 4, 5, 7, 9, 10, 11, 15, 18, 20, 29.99, 30, 43, 50, 100, 150, 200, 400, 500, 999, 1000, 1299.5, 2026, 10000.5, 1000000];
-const TIMES = ["00:00", "00:30", "05:00", "09:00", "09:30", "10:30", "11:30", "12:00", "12:30", "13:00", "17:00", "21:00", "23:59"];
+const TIMES = ["00:00", "00:30", "05:00", "06:00", "14:00", "09:00", "09:30", "10:30", "11:30", "12:00", "12:30", "13:00", "17:00", "21:00", "23:59"];
 const DATES = ["2026-11-18", "2026-02-28", "2026-12-01", "2026-11-30"];
 const g1 = (kind, value, text) => groundedValues([{ kind, value }], text).ok;
 const saidNums = (text) => NUMS.filter((n) => g1("number", n, text));

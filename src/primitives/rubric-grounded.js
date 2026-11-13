@@ -125,8 +125,8 @@ function scan(text) {
         p = q;
       }
       if (lens.length >= 3) {
-        if (lens.length === 3 && lens[0] === 4 && lens[1] === 2 && lens[2] === 2 && seps[0] === 45 && seps[1] === 45 && !signed && !glued && !glue(text.codePointAt(p)) && isRealDay(+text.slice(s, s + 4), +text.slice(s + 5, s + 7), +text.slice(s + 8, s + 10))) {
-          dates.add(text.slice(s, p));
+        if (lens.length === 3 && lens[0] === 4 && lens[1] === 2 && lens[2] === 2 && seps[0] === 45 && seps[1] === 45 && !signed && !glued && !glue(text.codePointAt(p))) {
+          dates.add(text.slice(s, p)); // a shape-valid ISO string; only a REAL date can equal a literal (canonOf checks the calendar), so "2026-02-30" grounds nothing
         }
         return p;
       }
