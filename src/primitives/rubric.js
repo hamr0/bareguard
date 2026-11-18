@@ -337,6 +337,7 @@ const RESERVED_REASON_WORDS = Object.freeze([
   "missing", "unknown-field", "wrong-type", "too-short", "too-long", "under", "over", "not-one-of", "bad-number", "bad-money", "bad-date",
   "bad-time", "bad-url", "item-not-object", "unreadable", "not-a-list", "count-under", "count-over", "too-many", "duplicate",
 ]);
+const NAME_FORBIDDEN_CHARS = Object.freeze([".", ":", "[", "]"]); // a signed field name holds none of these (they separate the path in a red item)
 const MAX_ITEM_FIELDS = 50; // field names in ONE `fields` object
 const MAX_ITEM_FIELDS_TOTAL = 200; // field specs across the whole check, every nesting level
 export const MAX_LIST_ENTRIES = 10_000; // entries in ONE list (above it: red too-many, none read)
@@ -364,6 +365,9 @@ const ITEM_FIELDS = {
   maxObjectDepth: MAX_ITEM_OBJECT_DEPTH,
   common: { kind: { type: "enum", required: true, enum: Object.keys(ITEM_KIND_FIELDS) }, required: { type: "boolean", required: false, default: false } },
   kinds: ITEM_KIND_FIELDS,
+  reservedNames: RESERVED_REASON_WORDS,
+  nameForbiddenChars: NAME_FORBIDDEN_CHARS,
+  nameMaxLength: MAX_NAME_LEN,
   conditions: [
     `fields maps a field name to its spec: 1 to 50 names, each a non-blank string of at most 128 characters that holds no ".", ":", "[" or "]" (they separate the path in a red item) and is not a reserved reason word (${RESERVED_REASON_WORDS.join(", ")}); at most 200 field specs across the whole check, nested ones included`,
     "a spec is { kind, required?, ...the kind's options }; required defaults to false (an absent optional field is fine; a present one is still checked); an option the kind does not list is refused",
@@ -1864,7 +1868,7 @@ function checkItemFields(d, v, where, depth, budget) {
     const w = `${where}.${name}`;
     if (blank(name)) throw fail(where, "holds a field name that is blank");
     if (name.length > MAX_NAME_LEN) throw fail(w.slice(0, where.length + 1 + 40) + "...", `is a field name over ${MAX_NAME_LEN} characters`);
-    if (/[.:[\]]/.test(name)) throw fail(w, 'is a field name holding ".", ":", "[" or "]" (they separate the path in a red item)');
+    if (NAME_FORBIDDEN_CHARS.some((ch) => name.includes(ch))) throw fail(w, 'is a field name holding ".", ":", "[" or "]" (they separate the path in a red item)');
     if (RESERVED_REASON_WORDS.includes(name)) throw fail(w, `is a field name that is a reserved reason word (${name}); a red item would print the same for two different reds`);
     checkItemSpec(d, v[name], w, depth, budget, false);
   }

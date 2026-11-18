@@ -126,10 +126,10 @@ function checkList(rec, at, p, v, i, depth) {
   const s = p.spec;
   let len;
   try {
-    if (!isArr(v)) return add(rec, `${at}:not-a-list`);
+    if (!Array.isArray(v)) return add(rec, `${at}:not-a-list`); // NOT isArr: it maps a throw (a revoked Proxy) to false, and a throw is unreadable, not a non-list
     len = v.length;
   } catch {
-    return add(rec, `${at}:unreadable`);
+    return add(rec, `${at}:unreadable`); // Array.isArray or length threw
   }
   if (!Number.isInteger(len) || len < 0) return add(rec, `${at}:unreadable`);
   if (len > MAX_LIST_ENTRIES) return add(rec, `${at}:too-many:${len}>${MAX_LIST_ENTRIES}`);

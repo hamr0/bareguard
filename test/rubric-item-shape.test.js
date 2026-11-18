@@ -595,7 +595,8 @@ test("list: hostile lists and entries never throw", async () => {
   const f = LIST({ kind: "text", maxChars: 3 }, { unique: true });
   const revoked = Proxy.revocable([], {});
   revoked.revoke();
-  assert.deepEqual(await reds(f, [{ m: revoked.proxy }]), ["#0:m:not-a-list"]);
+  assert.deepEqual(await reds(f, [{ m: revoked.proxy }]), ["#0:m:unreadable"]); // Array.isArray throws: unreadable, not a non-list
+  assert.deepEqual(await reds(f, [{ m: "abc" }]), ["#0:m:not-a-list"]);
   const lenThrows = new Proxy(["a"], { get: (t, k) => { if (k === "length") throw new Error("x"); return Reflect.get(t, k); } });
   assert.deepEqual(await reds(f, [{ m: lenThrows }]), ["#0:m:unreadable"]);
   const lie = (n) => new Proxy(["a"], { get: (t, k) => (k === "length" ? n : Reflect.get(t, k)) });
@@ -685,4 +686,18 @@ test("list: counts as one spec toward the 200 cap, its of as one more; a list in
 test("list: the rubricSha of an itemShape spec signed before the list kind is unchanged (pinned from the commit before it)", () => {
   const spec = { schema: 1, goal: "g", checkpoints: { a: { gating: true, checks: [{ id: "s", rule: "itemShape", field: "items", minItems: 1, fields: { t: { kind: "text", required: true, minChars: 1 }, u: { kind: "url" }, o: { kind: "object", fields: { n: { kind: "number", min: 0 } } } } }] } } };
   assert.equal(rubricSha(createRubric(spec)), "e87232eeada8e9289ebd5686496ad5ac2894aa066cf1c3b56ed1db778d61ee38");
+});
+
+test("vocabulary: reservedNames / nameForbiddenChars / nameMaxLength equal what createRubric refuses", () => {
+  const d = rubricVocabulary.rules.itemShape.fields.fields;
+  assert.ok(Object.isFrozen(d.reservedNames) && Object.isFrozen(d.nameForbiddenChars));
+  assert.deepEqual(d.nameForbiddenChars, [".", ":", "[", "]"]);
+  assert.equal(d.nameMaxLength, 128);
+  assert.ok(d.reservedNames.length > 0);
+  for (const w of d.reservedNames) assert.equal(refused(mkCheck({ [w]: { kind: "url" } })).path, `${PATH}.fields.${w}`, w);
+  for (const ch of d.nameForbiddenChars) assert.equal(refused(mkCheck({ [`a${ch}b`]: { kind: "url" } })).path, `${PATH}.fields.a${ch}b`, ch);
+  const ok = (n) => mk(mkCheck({ [n]: { kind: "url" } }));
+  assert.doesNotThrow(() => ok("a".repeat(d.nameMaxLength)));
+  assert.throws(() => ok("a".repeat(d.nameMaxLength + 1)));
+  assert.doesNotThrow(() => ok("not-reserved"));
 });
