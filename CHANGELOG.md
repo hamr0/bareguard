@@ -3,7 +3,7 @@
 All notable changes to bareguard are documented here. Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [SemVer](https://semver.org/).
 
 
-## [Unreleased]
+## [0.37.0] - 2026-11-18
 
 ### Added
 
@@ -11,6 +11,7 @@ All notable changes to bareguard are documented here. Format: [Keep a Changelog]
 - **`itemShape` gains a `list` kind (ruling #83 amendment; asked by bareloop).** `{ kind: "list", required?, of: { kind, ...options }, minEntries?, maxEntries?, unique? }`: a field holding a list of scalars (`of` is `text`, `number`, `oneOf`, `money`, `date`, `time`, `url` or `boolean`; never `object` or `list`). Reds are `#<i>:<path>:not-a-list`, `:unreadable`, `:count-under:<n><<min>`, `:count-over:<n>><max>`, `:too-many:<n>>10000` (more than 10,000 entries, none read), and per entry `#<i>:<path>[<j>]:<the entry kind's reason>` or `[<j>]:duplicate` (`unique: true`, by the read value; for `money` the value is the currency symbol (or unit text) and the amount, so `$5` and `€5` are different and `$5` and `$5.00` are one). `createRubric` refuses `minEntries`/`maxEntries` above 10,000 and `itemShape`'s own `minItems`/`maxItems` above 100,000. A signed field name may no longer hold `[` or `]`, nor equal a reason word (`missing`, `unknown-field`, `too-many`, ... see `rubric-rules.md`), so a red item string is never ambiguous. Existing `rubricSha`s are unchanged.
 - **`itemShape`: an unreadable `list` is `unreadable`; the name rules are in `rubricVocabulary`.** A `list` field whose read throws (revoked Proxy, throwing getter or `length`) is red `#<i>:<path>:unreadable`, no longer `not-a-list` (that stays for a readable non-array); the same for the top-level items field (whole-field gap `unreadable`). `rubricVocabulary.rules.itemShape.fields.fields` gains frozen `reservedNames`, `nameForbiddenChars` and `nameMaxLength`, the values `createRubric` enforces. Existing `rubricSha`s are unchanged.
 - **`itemShape` gains a `boolean` kind (ruling #83 amendment 3; from a bareloop live POC).** `{ kind: "boolean", required?, equals?: true | false }`: the value must be a JS boolean, so the strings "true"/"false"/"yes"/"no", 0, 1 and null are `wrong-type` (nothing is inferred); with `equals`, a boolean that is not that value is `wrong-value`. Also allowed as a `list` entry (`unique` keys on the value). `wrong-value` is a new reserved reason word, so it is refused as a signed field name.
+- **`bareguard.context.md` (shipped in the tarball) now documents `itemShape`:** kinds, the reds, the signed field-name rules and the caps, for the AI that builds the harness.
 - **`rubricVocabulary` gains the `itemShape` entry, with a worked example.** A new field type `item-fields` describes `fields`; no existing vocabulary entry changes.
 
 ### Notes
