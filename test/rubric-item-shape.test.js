@@ -24,9 +24,9 @@ test("the vocabulary example is green, and its failing neighbours are red", asyn
   const ex = rubricVocabulary.rules.itemShape.example;
   const r = await checkStep(mk(ex.check), "a", ex.output);
   assert.equal(r.verdict, "green");
-  const bad = [{ title: "", status: "open", summary: "x".repeat(201), link: "ftp://x" }, { title: "t", status: "closed", summary: "s" }];
+  const bad = [{ title: "", status: "open", summary: "x".repeat(201), link: "ftp://x", nonstop: false }, { title: "t", status: "closed", summary: "s" }];
   assert.deepEqual((await checkStep(mk(ex.check), "a", { items: bad })).gaps[0].items, [
-    "#0:link:bad-url", "#0:status:not-one-of", "#0:summary:too-long:chars:201>200", "#0:title:too-short:chars:0<1", "#1:link:missing",
+    "#0:link:bad-url", "#0:nonstop:wrong-value", "#0:status:not-one-of", "#0:summary:too-long:chars:201>200", "#0:title:too-short:chars:0<1", "#1:link:missing", "#1:nonstop:missing",
   ]);
   assert.match(rubricVocabulary.rules.itemShape.description, /^itemShape\(\{ id, field:/);
 });
@@ -424,12 +424,12 @@ test("the sha of an itemShape spec does not depend on field order, and changes w
 test("vocabulary: itemShape is the last rule, lists every kind and each option; the description is generated", () => {
   const v = rubricVocabulary.rules.itemShape;
   assert.equal(Object.keys(rubricVocabulary.rules).at(-1), "itemShape");
-  assert.deepEqual(v.fields.fields.common.kind.enum, ["text", "number", "oneOf", "money", "date", "time", "url", "object", "list"]);
+  assert.deepEqual(v.fields.fields.common.kind.enum, ["text", "number", "oneOf", "money", "date", "time", "url", "boolean", "object", "list"]);
   assert.deepEqual(Object.keys(v.fields.fields.kinds.number), ["min", "max", "gt", "lt", "fromText"]);
   assert.equal(v.fields.fields.maxFields, 50);
   assert.equal(v.fields.fields.maxTotalFields, 200);
   assert.equal(v.fields.fields.maxObjectDepth, 2);
-  for (const k of ["itemShape", "minItems", "maxItems", "fromText", "ignoreCase", "currency", "minEntries", "maxEntries", "unique"]) assert.ok(v.description.includes(k), k);
+  for (const k of ["itemShape", "minItems", "maxItems", "fromText", "ignoreCase", "currency", "minEntries", "maxEntries", "unique", "equals"]) assert.ok(v.description.includes(k), k);
 });
 
 test("vocabulary: list kind options", () => {
@@ -731,4 +731,52 @@ test("vocabulary: reservedNames / nameForbiddenChars / nameMaxLength equal what 
   assert.doesNotThrow(() => ok("a".repeat(d.nameMaxLength)));
   assert.throws(() => ok("a".repeat(d.nameMaxLength + 1)));
   assert.doesNotThrow(() => ok("not-reserved"));
+});
+
+// ---- boolean kind (ruling #83 amendment 3) ----------------------------------------------------------------------------------------------
+
+test("boolean: true/false green with and without equals; absent optional green", async () => {
+  await green({ b: { kind: "boolean" } }, [{ b: true }, { b: false }, {}]);
+  await green({ b: { kind: "boolean", equals: true } }, [{ b: true }, {}]);
+  await green({ b: { kind: "boolean", equals: false } }, [{ b: false }]);
+  assert.deepEqual(await reds({ b: { kind: "boolean", required: true } }, [{}]), ["#0:b:missing"]);
+});
+
+test("boolean: every non-boolean is wrong-type, nothing inferred", async () => {
+  for (const v of ["true", "false", "yes", "no", "True", 1, 0, null, {}, [], "", NaN]) {
+    assert.deepEqual(await reds({ b: { kind: "boolean" } }, [{ b: v }]), ["#0:b:wrong-type"], String(v));
+    assert.deepEqual(await reds({ b: { kind: "boolean", equals: true } }, [{ b: v }]), ["#0:b:wrong-type"], `equals ${String(v)}`);
+  }
+});
+
+test("boolean: equals mismatch is wrong-value, both ways", async () => {
+  assert.deepEqual(await reds({ b: { kind: "boolean", equals: true } }, [{ b: false }]), ["#0:b:wrong-value"]);
+  assert.deepEqual(await reds({ b: { kind: "boolean", equals: false } }, [{ b: true }]), ["#0:b:wrong-value"]);
+});
+
+test("boolean: a list of booleans, per-entry reds and unique on the value", async () => {
+  const f = (of, extra = {}) => ({ l: { kind: "list", of, ...extra } });
+  await green(f({ kind: "boolean" }), [{ l: [true, false, true] }]);
+  assert.deepEqual(await reds(f({ kind: "boolean", equals: true }), [{ l: [true, false, "true", true] }]), ["#0:l[1]:wrong-value", "#0:l[2]:wrong-type"]);
+  assert.deepEqual(await reds(f({ kind: "boolean" }, { unique: true }), [{ l: [true, true, false, false] }]), ["#0:l[1]:duplicate", "#0:l[3]:duplicate"]);
+  await green(f({ kind: "boolean" }, { unique: true }), [{ l: [true, false] }]);
+});
+
+test("boolean: hostile reads are unreadable", async () => {
+  assert.deepEqual(await reds({ b: { kind: "boolean" } }, [{ get b() { throw new Error("x"); } }]), ["#0:b:unreadable"]);
+  const rv = Proxy.revocable([], {}); rv.revoke();
+  assert.deepEqual(await reds({ l: { kind: "list", of: { kind: "boolean" } } }, [{ l: rv.proxy }]), ["#0:l:unreadable"]);
+});
+
+test("boolean: createRubric refusals carry their path", async () => {
+  for (const [spec, path] of [
+    [{ kind: "boolean", equals: "true" }, `${PATH}.fields.b.equals`],
+    [{ kind: "boolean", equals: 1 }, `${PATH}.fields.b.equals`],
+    [{ kind: "boolean", min: 1 }, `${PATH}.fields.b.min`],
+    [{ kind: "boolean", maxChars: 1 }, `${PATH}.fields.b.maxChars`],
+  ]) assert.equal(refused(mkCheck({ b: spec })).path, path);
+  assert.equal(refused(mkCheck({ l: { kind: "list", of: { kind: "boolean", equals: "yes" } } })).path, `${PATH}.fields.l.of.equals`);
+  assert.equal(refused(mkCheck({ "wrong-value": { kind: "boolean" } })).path, `${PATH}.fields.wrong-value`);
+  assert.ok(rubricVocabulary.rules.itemShape.fields.fields.reservedNames.includes("wrong-value"));
+  assert.match(rubricVocabulary.rules.itemShape.description, /boolean/);
 });

@@ -176,6 +176,11 @@ function checkValue(rec, at, p, v, i, path, depth) {
     boundsOf(rec, at, n, s, (a, b) => (a < b ? -1 : a > b ? 1 : 0));
     return String(n === 0 ? 0 : n); // -0 and 0 are one value
   }
+  if (p.kind === "boolean") {
+    if (typeof v !== "boolean") return add(rec, `${at}:wrong-type`);
+    if (s.equals !== undefined && v !== s.equals) add(rec, `${at}:wrong-value`);
+    return String(v);
+  }
   if (typeof v !== "string") return add(rec, `${at}:wrong-type`);
   switch (p.kind) {
     case "text": {

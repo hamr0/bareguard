@@ -335,7 +335,7 @@ const DECIDES = {
  */
 const RESERVED_REASON_WORDS = Object.freeze([
   "missing", "unknown-field", "wrong-type", "too-short", "too-long", "under", "over", "not-one-of", "bad-number", "bad-money", "bad-date",
-  "bad-time", "bad-url", "item-not-object", "unreadable", "not-a-list", "count-under", "count-over", "too-many", "duplicate",
+  "bad-time", "bad-url", "item-not-object", "unreadable", "not-a-list", "count-under", "count-over", "too-many", "duplicate", "wrong-value",
 ]);
 const NAME_FORBIDDEN_CHARS = Object.freeze([".", ":", "[", "]"]); // a signed field name holds none of these (they separate the path in a red item)
 const MAX_ITEM_FIELDS = 50; // field names in ONE `fields` object
@@ -353,10 +353,11 @@ const ITEM_KIND_FIELDS = {
   date: { lang: DV.lang, months: DV.months, min: DECIDE_BOUND, max: DECIDE_BOUND, gt: DECIDE_BOUND, lt: DECIDE_BOUND },
   time: { min: DECIDE_BOUND, max: DECIDE_BOUND, gt: DECIDE_BOUND, lt: DECIDE_BOUND },
   url: {},
+  boolean: { equals: { type: "boolean", required: false } },
   object: { fields: { type: "item-fields", required: true, nested: true } },
   list: { of: { type: "item-of", required: true }, minEntries: { type: "integer", required: false, min: 0, max: MAX_LIST_ENTRIES }, maxEntries: { type: "integer", required: false, min: 1, max: MAX_LIST_ENTRIES }, unique: { type: "boolean", required: false, default: false } },
 };
-const ITEM_OF_KINDS = ["text", "number", "oneOf", "money", "date", "time", "url"]; // the kinds a list's `of` may take (never object or list)
+const ITEM_OF_KINDS = ["text", "number", "oneOf", "money", "date", "time", "url", "boolean"]; // the kinds a list's `of` may take (never object or list)
 const ITEM_FIELDS = {
   type: "item-fields",
   required: true,
@@ -378,7 +379,8 @@ const ITEM_FIELDS = {
     "date: a string that reads, whole, as ONE date: ISO YYYY-MM-DD unless lang or months (exclusive) is signed, like a cited date decide; min/max are ISO date strings",
     "time: a string that reads, whole, as ONE time like a cited time decide: 24-hour H:MM or HH:MM (\"14:30\"), or 12-hour h:mm with hour 1-12 and the meridiem in UPPER case, AM or PM (\"2:30 PM\"); strict, so \"2:30 pm\", \"2:30PM\" and \"14:30:00\" are bad-time; min/max are time strings in those same forms",
     "url: a string that is an absolute http: or https: URL with a non-empty host and no whitespace inside",
-    `list: an array of scalar entries, each read as the kind of of (of: { kind: ${ITEM_OF_KINDS.map((k) => JSON.stringify(k)).join(" | ")}, ...that kind's own options }, never object or list, no required); minEntries (>= 0) and maxEntries (>= 1, not below minEntries) bound the entry count (a red is count-under or count-over and the entries are not read then); more than ${MAX_LIST_ENTRIES} entries is too-many, none read; unique: true makes an entry equal to an EARLIER one (by its read value: text exact, number by value, money by currency (or unit) and amount, date/time canonical, oneOf folded when ignoreCase) a duplicate; a red entry is #<i>:<field>[<j>]:<reason>, spelled as its kind's own reason; the list counts as one field spec and its of as one more`,
+    "boolean: JSON true/false only; the words true/false/yes/no and 0/1 are wrong-type (nothing is inferred); equals: true|false means a boolean value that is not that is wrong-value",
+    `list: an array of scalar entries, each read as the kind of of (of: { kind: ${ITEM_OF_KINDS.map((k) => JSON.stringify(k)).join(" | ")}, ...that kind's own options }, never object or list, no required); minEntries (>= 0) and maxEntries (>= 1, not below minEntries) bound the entry count (a red is count-under or count-over and the entries are not read then); more than ${MAX_LIST_ENTRIES} entries is too-many, none read; unique: true makes an entry equal to an EARLIER one (by its read value: text exact, number by value, money by currency (or unit) and amount, date/time canonical, oneOf folded when ignoreCase, boolean by its value) a duplicate; a red entry is #<i>:<field>[<j>]:<reason>, spelled as its kind's own reason; the list counts as one field spec and its of as one more`,
     "object: a plain object whose own fields follow the nested fields (same grammar); an object may hold an object, but nesting more than 2 object levels below the item is refused at the offending kind",
     "number, money, date and time may sign bounds: min and max are INCLUSIVE, gt (strictly greater) and lt (strictly less) are exclusive; the red is under or over for either; min with gt, or max with lt, is refused, and so is an empty range (a lower bound at or above the upper one when either is exclusive, above it when both are inclusive)",
     "an absent field (or one whose value is undefined) is missing when required and fine when optional; null is wrong-type, never absent; required means present only: a required or optional text field accepts \"\" and whitespace-only unless minChars is signed (sign required: true with minChars: 1 for a non-empty title)",
@@ -1558,10 +1560,11 @@ RULES.itemShape = {
         status: { kind: "oneOf", required: true, values: ["in progress", "closed", "finished"] },
         summary: { kind: "text", required: true, maxChars: 200 },
         link: { kind: "url", required: true },
+        nonstop: { kind: "boolean", required: true, equals: true },
         tags: { kind: "list", of: { kind: "text", minChars: 1, maxChars: 40 }, minEntries: 1, maxEntries: 5, unique: true },
       },
     },
-    output: { items: [{ title: "Fix the tap", status: "closed", summary: "Washer replaced.", link: "https://example.com/jobs/12", tags: ["plumbing", "kitchen"] }] },
+    output: { items: [{ title: "Fix the tap", status: "closed", summary: "Washer replaced.", link: "https://example.com/jobs/12", nonstop: true, tags: ["plumbing", "kitchen"] }] },
   },
 };
 
