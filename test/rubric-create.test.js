@@ -192,7 +192,7 @@ test("rubricSha: refuses non-JSON data instead of hashing a lossy form (NaN woul
 // --- rubricVocabulary ---------------------------------------------------------
 
 const DAY1_RULES = [
-  "allowedKeys", "atMost", "blockLines", "carriesAny", "carriesNone", "cells", "cited", "commandExit", "complete", "diff", "filesChanged", "in", "jsonValid", "listItems", "max", "maxLineWords", "maxLines", "maxListItems", "maxParagraphs", "maxWords",
+  "allowedKeys", "atMost", "blockLines", "carriesAny", "carriesNone", "cells", "cited", "commandExit", "complete", "diff", "filesChanged", "in", "itemShape", "jsonValid", "listItems", "max", "maxLineWords", "maxLines", "maxListItems", "maxParagraphs", "maxWords",
   "min", "minListItems", "minWords", "mustCarry", "nonEmpty", "notIn", "notWorse", "patternAbsent", "sectionOrder", "sectionWords", "sections", "table",
 ];
 
@@ -205,6 +205,7 @@ const sampleValue = (name, d) => {
     case "string-list": return ["a"];
     case "enum": return d.enum[0];
     case "number-or-enum": return 1;
+    case "item-fields": return { a: { kind: "url" } };
     default: throw new Error(`test has no sample for type ${d.type}`);
   }
 };

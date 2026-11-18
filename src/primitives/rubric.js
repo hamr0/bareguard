@@ -19,6 +19,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { resolveWithSymlinks, findSymlinkComponent, within, norm } from "./fs.js";
 import { evaluate, makeEnv, tableShaOf, signedProblem, ruleFieldNames, CELLS_RULES, CELLS_GAP_KINDS, FIELD_DOCS, VOCAB_OPS, EXAMPLE_TABLES, DATE_FORMATS, TABLE_MAX_CELLS, TABLE_MAX_CHARS, CLAIM_MAX } from "./rubric-cells.js";
+import { evalItemShape } from "./rubric-item-shape.js";
 import { MONTH_LANGS, MONTH_NAME_MAX } from "./rubric-months.js";
 import { parseBound, compareBounds, decideQuote, parseClaimValue, displayCanon, parseClaimText, textPresent, textAfter, textSpanPresent, textSpanAfter } from "./rubric-locate.js";
 
@@ -127,14 +128,14 @@ import { parseBound, compareBounds, decideQuote, parseClaimValue, displayCanon, 
 const MAX_NAME_LEN = 128; // ids, checkpoint ids, field names (they land in keys and audit lines)
 const SOURCE_CAP_BYTES = 5 * 1024 * 1024; // PRD §4.2 / ruling 2026-10-06 #7
 const QUOTE_WORK_CAP = 128 * 1024 * 1024; // `cited`: distinct quotes x normalized source length (UTF-16 units) searched per check; over it = red too-many. Deterministic, never a clock (Law 8)
-const MAX_ITEMS = 20; // offender-list bound in a gap
+export const MAX_ITEMS = 20; // offender-list bound in a gap
 const EVIDENCE_CLAIMS = 100; // RULED #66: claims per `cited` check that get an evidence entry
 const EVIDENCE_SPANS = 50; // RULED #66: spans per evidence entry
 const QUOTE_MAX_CHARS = 4000; // `cited` with `decides`: a normalized quote over this is `quote-too-long` (bounds the extraction work; §4.6)
 const CLIP = 120; // a caller-MEASURED / output-derived string inside a gap (never a signed one)
 const MAX_SIGNED_LEN = 1000; // a signed name/phrase/value is refused past this at createRubric, so it rides a gap UNCLIPPED
 const FAULT_DETAIL_CLIP = 200;
-const MAX_LIST = 100_000; // caller/output list we will walk (each filesChanged path costs an lstat)
+export const MAX_LIST = 100_000; // caller/output list we will walk (each filesChanged path costs an lstat)
 const MAX_SNAPSHOT_DEPTH = 16;
 const RESERVED_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 const FOUNDATIONAL_IDS = new Set(["happened", "clean", "agree", "signed"]);
@@ -325,6 +326,48 @@ const DECIDES = {
   conditions: ["each decide is exactly one shape (value or presence); a claim must carry a string in values.d<j> for every value decide, any valueKind, with or without op, text included; j indexes the whole decides list"],
 };
 
+// `itemShape` (RULED #83): the field specs of one item. ONE descriptor drives validation, the vocabulary and the description.
+const MAX_ITEM_FIELDS = 50; // field names in ONE `fields` object
+const MAX_ITEM_FIELDS_TOTAL = 200; // field specs across the whole check, every nesting level
+const MAX_ITEM_OBJECT_DEPTH = 2; // object levels below the item: item -> object -> object is the most
+const ITEM_MIN = { type: "integer", required: false, min: 0 };
+const ITEM_MAX = { type: "integer", required: false, min: 1 };
+const DV = DECIDES.shapes.value.fields;
+const ITEM_KIND_FIELDS = {
+  text: { minChars: ITEM_MIN, maxChars: ITEM_MAX, minWords: ITEM_MIN, maxWords: ITEM_MAX },
+  number: { min: { type: "number", required: false }, max: { type: "number", required: false }, gt: { type: "number", required: false }, lt: { type: "number", required: false }, fromText: { type: "boolean", required: false, default: false } },
+  oneOf: { values: { type: "string-list", required: true, minItems: 1, maxItems: 50, itemType: "string", nonBlank: true, itemMaxLength: MAX_SIGNED_LEN, unique: true }, ignoreCase: IGNORE_CASE },
+  money: { currency: DV.currency, unit: DV.unit, decimal: DV.decimal, min: DECIDE_BOUND, max: DECIDE_BOUND, gt: DECIDE_BOUND, lt: DECIDE_BOUND },
+  date: { lang: DV.lang, months: DV.months, min: DECIDE_BOUND, max: DECIDE_BOUND, gt: DECIDE_BOUND, lt: DECIDE_BOUND },
+  time: { min: DECIDE_BOUND, max: DECIDE_BOUND, gt: DECIDE_BOUND, lt: DECIDE_BOUND },
+  url: {},
+  object: { fields: { type: "item-fields", required: true, nested: true } },
+};
+const ITEM_FIELDS = {
+  type: "item-fields",
+  required: true,
+  maxFields: MAX_ITEM_FIELDS,
+  maxTotalFields: MAX_ITEM_FIELDS_TOTAL,
+  maxObjectDepth: MAX_ITEM_OBJECT_DEPTH,
+  common: { kind: { type: "enum", required: true, enum: Object.keys(ITEM_KIND_FIELDS) }, required: { type: "boolean", required: false, default: false } },
+  kinds: ITEM_KIND_FIELDS,
+  conditions: [
+    "fields maps a field name to its spec: 1 to 50 names, each a non-blank string of at most 128 characters that holds no \".\" or \":\" (they separate the path in a red item); at most 200 field specs across the whole check, nested ones included",
+    "a spec is { kind, required?, ...the kind's options }; required defaults to false (an absent optional field is fine; a present one is still checked); an option the kind does not list is refused",
+    "text: a string; minChars/maxChars count Unicode code points, minWords/maxWords count whitespace-separated runs; each min must be <= its max",
+    "number: a finite JS number; with fromText: true a string is ALSO read (\"166\", \"1,234.50\"; the cells number reader; a string it rejects is bad-number), without it a string is wrong-type; null is wrong-type",
+    "oneOf: a string equal to one of values (1 to 50 distinct non-blank strings); ignoreCase folds both sides with toLowerCase and refuses values equal after folding",
+    "money: a string that reads, whole, as ONE money value like a cited money decide (currency and/or unit, at least one; decimal \",\" optional); min/max bound the amount",
+    "date: a string that reads, whole, as ONE date: ISO YYYY-MM-DD unless lang or months (exclusive) is signed, like a cited date decide; min/max are ISO date strings",
+    "time: a string that reads, whole, as ONE time (\"14:30\", \"2:30 PM\") like a cited time decide; min/max are time strings",
+    "url: a string that is an absolute http: or https: URL with a non-empty host and no whitespace inside",
+    "object: a plain object whose own fields follow the nested fields (same grammar); an object may hold an object, but nesting more than 2 object levels below the item is refused at the offending kind",
+    "number, money, date and time may sign bounds: min and max are INCLUSIVE, gt (strictly greater) and lt (strictly less) are exclusive; the red is under or over for either; min with gt, or max with lt, is refused, and so is an empty range (a lower bound at or above the upper one when either is exclusive, above it when both are inclusive)",
+    "an absent field (or one whose value is undefined) is missing when required and fine when optional; null is wrong-type, never absent; an optional text field with no minChars accepts \"\"",
+    "for money, date and time the WHOLE trimmed string must be exactly one value: surrounding words, a second value or a string over 200 characters is red",
+  ],
+};
+
 const OK = Object.freeze({});
 
 function red(kind, more = {}) {
@@ -354,7 +397,7 @@ function textField(ctx, name, base = {}) {
   return { text: r.value };
 }
 
-function typeName(v) {
+export function typeName(v) {
   if (v === null) return "type:null";
   try {
     if (Array.isArray(v)) return "type:array";
@@ -1477,6 +1520,32 @@ function runCellsFamily(ctx, c) {
 }
 for (const rule of CELLS_RULES) RULES[rule] = { fields: cellsFields(rule), ops: VOCAB_OPS[rule], signed: true, run: runCellsFamily };
 
+/** `itemShape` (RULED #83): the field is a list of items; every item has the signed shape. */
+function runItemShape(ctx, c) {
+  const r = readField(ctx, c.field);
+  if (r.unreadable) return red("unreadable");
+  if (r.missing) return red("missing");
+  return evalItemShape(c, r.value);
+}
+RULES.itemShape = {
+  fields: { field: FIELD, minItems: { type: "integer", required: false, min: 0 }, maxItems: { type: "integer", required: false, min: 1 }, fields: ITEM_FIELDS },
+  run: runItemShape,
+  example: {
+    check: {
+      id: "jobs-shape",
+      rule: "itemShape",
+      field: "items",
+      fields: {
+        title: { kind: "text", required: true, minChars: 1, maxChars: 120 },
+        status: { kind: "oneOf", required: true, values: ["in progress", "closed", "finished"] },
+        summary: { kind: "text", required: true, maxChars: 200 },
+        link: { kind: "url", required: true },
+      },
+    },
+    output: { items: [{ title: "Fix the tap", status: "closed", summary: "Washer replaced.", link: "https://example.com/jobs/12" }] },
+  },
+};
+
 for (const r of Object.values(RULES)) r.fields.text = EXPLAIN;
 
 // --- rubricVocabulary --------------------------------------------------------
@@ -1490,6 +1559,11 @@ function describeField(name, d) {
     const shapes = Object.values(d.shapes).map(describeShape).join(" or ");
     const conds = [...Object.values(d.shapes).flatMap((sh) => sh.conditions), ...d.conditions].join("; ");
     return `${name}${d.required ? "" : "?"}: non-empty list (max ${d.maxItems}) of ${shapes} [${conds}]`;
+  }
+  if (d.type === "item-fields") {
+    if (d.nested) return `${name}${d.required ? "" : "?"}: field specs, the same grammar as the top-level fields`;
+    const kinds = Object.entries(d.kinds).map(([k, fs]) => `${k}${Object.keys(fs).length ? ` { ${Object.keys(fs).map((n) => describeField(n, fs[n])).join(", ")} }` : ""}`).join("; ");
+    return `${name}${d.required ? "" : "?"}: object of 1-${d.maxFields} field name -> spec { kind: ${d.common.kind.enum.map((e) => JSON.stringify(e)).join(" | ")}, required?: boolean = false, ...the kind's options } [kinds: ${kinds}] [${d.conditions.join("; ")}]`;
   }
   if (d.type === "bound") return `${name}${d.required ? "" : "?"}: bound (number for number/money, string for date/time)`;
   if (d.type === "explanation") return `${name}?: string (the signer's explanation; never decides)`;
@@ -1706,10 +1780,69 @@ function checkCarryPhrases(d, v, where) {
   noFoldDuplicates(v, where);
 }
 
+/** `itemShape` `fields` (RULED #83). Every refusal names its path. `depth` = object levels already entered; `budget.n` counts specs across the whole check. */
+function checkItemFields(d, v, where, depth, budget) {
+  if (!isPlainObject(v)) throw fail(where, "must be an object of field name -> field spec");
+  const names = Object.keys(v);
+  if (names.length < 1) throw fail(where, "must hold at least one field");
+  if (names.length > d.maxFields) throw fail(where, `must hold at most ${d.maxFields} fields`);
+  budget.n += names.length;
+  if (budget.n > d.maxTotalFields) throw fail(where, `must hold at most ${d.maxTotalFields} field specs across the whole check (nested ones count)`);
+  for (const name of names) {
+    const w = `${where}.${name}`;
+    if (blank(name)) throw fail(where, "holds a field name that is blank");
+    if (name.length > MAX_NAME_LEN) throw fail(w.slice(0, where.length + 1 + 40) + "...", `is a field name over ${MAX_NAME_LEN} characters`);
+    if (name.includes(".") || name.includes(":")) throw fail(w, 'is a field name holding "." or ":" (they separate the path in a red item)');
+    const spec = v[name];
+    if (!isPlainObject(spec)) throw fail(w, "must be an object (a field spec)");
+    if (spec.kind === undefined) throw fail(`${w}.kind`, "is required");
+    checkValue(d.common.kind, spec.kind, `${w}.kind`);
+    const kind = spec.kind;
+    const kf = d.kinds[kind];
+    for (const k of Object.keys(spec)) {
+      if (k !== "kind" && k !== "required" && !Object.hasOwn(kf, k)) throw fail(`${w}.${k}`, `is not a recognised option for kind ${kind}`);
+    }
+    if (spec.required !== undefined) checkValue(d.common.required, spec.required, `${w}.required`);
+    for (const [k, fd] of Object.entries(kf)) {
+      const x = spec[k];
+      if (x === undefined) {
+        if (fd.required) throw fail(`${w}.${k}`, `is required for kind ${kind}`);
+        continue;
+      }
+      if (fd.type === "item-fields") {
+        if (depth >= d.maxObjectDepth) throw fail(`${w}.kind`, `object nests more than ${d.maxObjectDepth} levels below the item`);
+        checkItemFields(d, x, `${w}.${k}`, depth + 1, budget);
+      } else if (fd.type === "bound") {
+        if (!parseBound(kind, x).ok) throw fail(`${w}.${k}`, `is not a valid ${kind} bound (${kind === "money" ? "a finite number with a plain decimal rendering" : kind === "date" ? "one real ISO date string YYYY-MM-DD" : 'one time string, 24-hour or "h:mm AM|PM"'})`);
+      } else checkValue(fd, x, `${w}.${k}`);
+    }
+    for (const [lo, hi] of [["minChars", "maxChars"], ["minWords", "maxWords"]]) {
+      if (spec[lo] !== undefined && spec[hi] !== undefined && spec[lo] > spec[hi]) throw fail(`${w}.${hi}`, `must be >= ${lo}`);
+    }
+    if (kind === "number" || kind === "money" || kind === "date" || kind === "time") {
+      if (spec.min !== undefined && spec.gt !== undefined) throw fail(`${w}.gt`, "is refused together with min (sign one lower bound: min is inclusive, gt is exclusive)");
+      if (spec.max !== undefined && spec.lt !== undefined) throw fail(`${w}.lt`, "is refused together with max (sign one upper bound: max is inclusive, lt is exclusive)");
+      const lowKey = spec.min !== undefined ? "min" : spec.gt !== undefined ? "gt" : null;
+      const highKey = spec.max !== undefined ? "max" : spec.lt !== undefined ? "lt" : null;
+      if (lowKey !== null && highKey !== null) {
+        const val = (k) => (kind === "number" ? spec[k] : parseBound(kind, spec[k]).value);
+        const c = kind === "number" ? Math.sign(val(lowKey) - val(highKey)) : compareBounds(kind, val(lowKey), val(highKey));
+        const exclusive = lowKey === "gt" || highKey === "lt";
+        if (exclusive ? c >= 0 : c > 0) throw fail(`${w}.${highKey}`, exclusive ? `leaves an empty range (the lower bound ${lowKey} must be below ${highKey})` : "must be >= min");
+      }
+    }
+    if (kind === "oneOf" && spec.ignoreCase === true) noFoldDuplicates(spec.values, `${w}.values`);
+    if (kind === "money" && spec.currency === undefined && spec.unit === undefined) throw fail(`${w}.currency`, "money needs at least one of currency or unit");
+    if (kind === "date" && spec.lang !== undefined && spec.months !== undefined) throw fail(`${w}.months`, "is refused together with lang (sign a built-in language or your own month names, not both)");
+  }
+}
+
 function checkValue(d, v, where) {
   switch (d.type) {
     case "decide-list":
       return checkDecides(d, v, where);
+    case "item-fields":
+      return checkItemFields(d, v, where, 0, { n: 0 });
     case "name":
       return checkName(v, where);
     case "string":
@@ -1739,6 +1872,7 @@ function checkValue(d, v, where) {
         if (blank(s)) throw fail(`${where}[${i}]`, "must be a non-blank string");
         if (s.length > MAX_SIGNED_LEN) throw fail(`${where}[${i}]`, `must be at most ${MAX_SIGNED_LEN} characters`);
       });
+      if (d.maxItems !== undefined && v.length > d.maxItems) throw fail(where, `must hold at most ${d.maxItems} strings`);
       if (d.unique && new Set(v).size !== v.length) throw fail(where, "must not contain duplicates");
       return;
     }
@@ -1795,6 +1929,7 @@ function validateCheck(c, where, inputNames) {
     const have = def.exactlyOne.filter((k) => c[k] !== undefined);
     if (have.length !== 1) throw fail(where, `needs exactly one of ${def.exactlyOne.join(", ")}`);
   }
+  if (rule === "itemShape" && c.minItems !== undefined && c.maxItems !== undefined && c.minItems > c.maxItems) throw fail(`${where}.maxItems`, "must be >= minItems");
   if (rule === "atMost" && !c.order.includes(c.value)) throw fail(`${where}.value`, "must be one of order");
 }
 
