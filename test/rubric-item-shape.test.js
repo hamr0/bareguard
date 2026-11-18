@@ -385,6 +385,17 @@ test("field-name caps: 50 per fields object accepted, 51 refused; 200 specs acro
   assert.match(e.message, /200 field specs/);
 });
 
+test("a signed field name equal to a reason word is refused at every nesting level, e.path at the key", () => {
+  const words = ["missing", "unknown-field", "wrong-type", "too-short", "too-long", "under", "over", "not-one-of", "bad-number", "bad-money", "bad-date", "bad-time", "bad-url", "item-not-object", "unreadable", "not-a-list", "count-under", "count-over", "too-many", "duplicate"];
+  for (const w of words) {
+    assert.equal(refused(mkCheck({ [w]: { kind: "url", required: true } })).path, `${PATH}.fields.${w}`, w);
+    assert.equal(refused(mkCheck({ o: { kind: "object", fields: { i: { kind: "object", fields: { [w]: { kind: "url" } } } } } })).path, `${PATH}.fields.o.fields.i.fields.${w}`, w);
+  }
+  assert.match(refused(mkCheck({ "unknown-field": { kind: "url", required: true } })).message, /reserved reason word/);
+  // near misses stay legal
+  assert.doesNotThrow(() => mk(mkCheck({ missing_: { kind: "url" }, Missing: { kind: "url" }, "unknown-fields": { kind: "url" } })));
+});
+
 test("signed field name length: 128 accepted", () => {
   assert.doesNotThrow(() => mk(mkCheck({ ["n".repeat(128)]: { kind: "url" } })));
 });

@@ -7,19 +7,12 @@
 // is a red `unreadable` item, a lying `length` is bounded by `MAX_LIST`.
 
 import { clip, MAX_ITEMS, MAX_LIST, typeName } from "./rubric.js";
+import { isArr } from "./rubric-helpers.js";
 import { extractValue, parseBound, compareBounds } from "./rubric-locate.js";
 import { readCellNumber } from "./rubric-cells.js";
 
 /** A money / date / time string over this many UTF-16 units is not one value: it is red without being read (bounds the reader's input). */
 export const READ_CAP = 200;
-
-const isArr = (v) => {
-  try {
-    return Array.isArray(v);
-  } catch {
-    return false;
-  }
-};
 
 /** Code points in `s` (a surrogate pair counts once; a lone surrogate counts once). */
 function codePoints(s) {
@@ -78,7 +71,7 @@ function urlOk(raw) {
   if (!/^https?:\/\/[^/\\]/i.test(t) || /\s/.test(t) || t.includes("\\")) return false;
   try {
     const u = new URL(t);
-    return (u.protocol === "http:" || u.protocol === "https:") && u.hostname !== "";
+    return u.protocol === "http:" || u.protocol === "https:";
   } catch {
     return false;
   }

@@ -29,6 +29,8 @@ import { parseBound, compareBounds, decideQuote, parseClaimValue, displayCanon, 
  * and is stable across retries; ordered rules carry `direction`. Lists are bounded. The `cells`/`table`/`diff` rules
  * (docs/product/cells-prd.md) mint gaps with their own `kind`s, `items` (row numbers, `row:Column` cells, column names, or a value the agent itself claimed; as strings;
  * never table cell text), and `measured`/`limit` for a count or a claimed value; the expected answer is never in a gap (it is in `full.expected`).
+ * The `itemShape` rule mints `kind`s `missing`, `unreadable`, `not-a-list` (`measured` = the type), `too-many`, `count-under`, `count-over` (`measured`, `limit`, `direction`), or ONE `item-shape` gap whose `items` are
+ * `#<i>:<path>:<reason>` strings (0-based item index, dotted field path, the reason, e.g. `#0:title:too-short:chars:0<1`; `itemsTotal` when cut); names, counts and bounds only, never the worker's values.
  * @property {string} key
  * @property {string} checkpoint
  * @property {string} check the rule name
@@ -327,6 +329,14 @@ const DECIDES = {
 };
 
 // `itemShape` (RULED #83): the field specs of one item. ONE descriptor drives validation, the vocabulary and the description.
+/**
+ * Every reason word a red item can end in. A signed field name equal to one would make two different reds print the same item string
+ * (a field named `missing` vs an unknown key), so createRubric refuses such a name at every nesting level. The ONE list.
+ */
+const RESERVED_REASON_WORDS = Object.freeze([
+  "missing", "unknown-field", "wrong-type", "too-short", "too-long", "under", "over", "not-one-of", "bad-number", "bad-money", "bad-date",
+  "bad-time", "bad-url", "item-not-object", "unreadable", "not-a-list", "count-under", "count-over", "too-many", "duplicate",
+]);
 const MAX_ITEM_FIELDS = 50; // field names in ONE `fields` object
 const MAX_ITEM_FIELDS_TOTAL = 200; // field specs across the whole check, every nesting level
 const MAX_ITEM_OBJECT_DEPTH = 2; // object levels below the item: item -> object -> object is the most
@@ -352,7 +362,7 @@ const ITEM_FIELDS = {
   common: { kind: { type: "enum", required: true, enum: Object.keys(ITEM_KIND_FIELDS) }, required: { type: "boolean", required: false, default: false } },
   kinds: ITEM_KIND_FIELDS,
   conditions: [
-    "fields maps a field name to its spec: 1 to 50 names, each a non-blank string of at most 128 characters that holds no \".\" or \":\" (they separate the path in a red item); at most 200 field specs across the whole check, nested ones included",
+    `fields maps a field name to its spec: 1 to 50 names, each a non-blank string of at most 128 characters that holds no "." or ":" (they separate the path in a red item) and is not a reserved reason word (${RESERVED_REASON_WORDS.join(", ")}); at most 200 field specs across the whole check, nested ones included`,
     "a spec is { kind, required?, ...the kind's options }; required defaults to false (an absent optional field is fine; a present one is still checked); an option the kind does not list is refused",
     "text: a string; minChars/maxChars count Unicode code points, minWords/maxWords count whitespace-separated runs; each min must be <= its max",
     "number: a finite JS number; with fromText: true a string is ALSO read (\"166\", \"1,234.50\"; the cells number reader; a string it rejects is bad-number), without it a string is wrong-type; null is wrong-type",
@@ -363,7 +373,7 @@ const ITEM_FIELDS = {
     "url: a string that is an absolute http: or https: URL with a non-empty host and no whitespace inside",
     "object: a plain object whose own fields follow the nested fields (same grammar); an object may hold an object, but nesting more than 2 object levels below the item is refused at the offending kind",
     "number, money, date and time may sign bounds: min and max are INCLUSIVE, gt (strictly greater) and lt (strictly less) are exclusive; the red is under or over for either; min with gt, or max with lt, is refused, and so is an empty range (a lower bound at or above the upper one when either is exclusive, above it when both are inclusive)",
-    "an absent field (or one whose value is undefined) is missing when required and fine when optional; null is wrong-type, never absent; an optional text field with no minChars accepts \"\"",
+    "an absent field (or one whose value is undefined) is missing when required and fine when optional; null is wrong-type, never absent; required means present only: a required or optional text field accepts \"\" and whitespace-only unless minChars is signed (sign required: true with minChars: 1 for a non-empty title)",
     "for money, date and time the WHOLE trimmed string must be exactly one value: surrounding words, a second value or a string over 200 characters is red",
   ],
 };
@@ -1793,6 +1803,7 @@ function checkItemFields(d, v, where, depth, budget) {
     if (blank(name)) throw fail(where, "holds a field name that is blank");
     if (name.length > MAX_NAME_LEN) throw fail(w.slice(0, where.length + 1 + 40) + "...", `is a field name over ${MAX_NAME_LEN} characters`);
     if (name.includes(".") || name.includes(":")) throw fail(w, 'is a field name holding "." or ":" (they separate the path in a red item)');
+    if (RESERVED_REASON_WORDS.includes(name)) throw fail(w, `is a field name that is a reserved reason word (${name}); a red item would print the same for two different reds`);
     const spec = v[name];
     if (!isPlainObject(spec)) throw fail(w, "must be an object (a field spec)");
     if (spec.kind === undefined) throw fail(`${w}.kind`, "is required");
