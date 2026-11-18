@@ -221,8 +221,6 @@ export function evalItemShape(c, value) {
   const plan = planOf(c);
   const rec = { items: [], total: 0 };
   for (let i = 0; i < len; i++) {
-    const markItems = rec.items.length;
-    const markTotal = rec.total;
     try {
       const item = value[i];
       if (item === null || typeof item !== "object" || isArr(item)) {
@@ -231,9 +229,7 @@ export function evalItemShape(c, value) {
       }
       checkObject(rec, plan, item, i, "", 0);
     } catch {
-      rec.items.length = markItems;
-      rec.total = markTotal;
-      add(rec, `#${i}:unreadable`);
+      add(rec, `#${i}:unreadable`); // reading the item itself threw (a revoked Proxy element, a throwing index getter); nothing was added for it yet
     }
   }
   if (rec.total === 0) return {};

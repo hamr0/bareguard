@@ -3,6 +3,17 @@
 All notable changes to bareguard are documented here. Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [SemVer](https://semver.org/).
 
 
+## [Unreleased]
+
+### Added
+
+- **`itemShape`, a rubric rule that checks the SHAPE of a list of items (ruling #83; asked by bareloop).** `{ id, rule: "itemShape", field, minItems?, maxItems?, fields }`: `field` holds the item array, `fields` maps a field name to `{ kind, required?, ...options }`. Kinds: `text` (`minChars`/`maxChars` in code points, `minWords`/`maxWords`), `number` (`min`/`max`/`gt`/`lt`, `fromText: true` also reads a string), `oneOf` (`values`, `ignoreCase`), `money` / `date` / `time` (the whole trimmed string must read as exactly one value, by the same readers and signed forms as `cited` decides), `url` (absolute http/https), and `object` (nested `fields`, at most 2 object levels). `min`/`max` are inclusive, `gt`/`lt` exclusive. It never judges wording or truth (that stays with `cited`). Reds carry names, counts and bounds, never the worker's values: `missing`, `unreadable`, `not-a-list`, `too-many`, `count-under`, `count-over`, or one `item-shape` gap whose items are `#<i>:<path>:<reason>` (up to 20, `itemsTotal` when cut). Cost is linear in the output. A signed field name holding `.` or `:` is refused. Deferred: `cited` reading its quotes from the item list, and a conditional `requiredWhen`. Docs: `docs/product/rubric-rules.md`.
+- **`rubricVocabulary` gains the `itemShape` entry, with a worked example.** A new field type `item-fields` describes `fields`; no existing vocabulary entry changes.
+
+### Notes
+
+- Every existing `rubricSha` is unchanged (a test pins two specs against the shas computed before this rule).
+
 ## [0.36.0] - 2026-11-13
 
 ### Added
