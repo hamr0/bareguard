@@ -38,6 +38,9 @@ test("whole-field gaps: missing, unreadable, not-a-list, count-under, count-over
   const g = async (out) => (await checkStep(c, "a", out)).gaps[0];
   assert.equal((await g({ other: 1 })).kind, "missing");
   assert.equal((await g({ get items() { throw new Error("x"); } })).kind, "unreadable");
+  const rv = Proxy.revocable([], {}); rv.revoke();
+  assert.equal((await g({ items: rv.proxy })).kind, "unreadable", "a revoked Proxy items field");
+  assert.equal((await g({ items: new Proxy([{}], { get: (t, k) => { if (k === "length") throw new Error("x"); return Reflect.get(t, k); } }) })).kind, "unreadable", "a throwing length");
   for (const [v, m] of [["[]", "type:string"], [{}, "type:object"], [null, "type:null"], [5, "type:number"]]) {
     const gap = await g({ items: v });
     assert.equal(gap.kind, "not-a-list");

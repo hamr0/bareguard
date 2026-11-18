@@ -241,7 +241,7 @@ function checkObject(rec, sub, obj, i, path, depth) {
 export function evalItemShape(c, value) {
   let len;
   try {
-    if (!isArr(value)) return { gap: { kind: "not-a-list", measured: typeName(value) } };
+    if (!Array.isArray(value)) return { gap: { kind: "not-a-list", measured: typeName(value) } }; // NOT isArr: a throw (revoked Proxy) is unreadable
     len = value.length;
   } catch {
     return { gap: { kind: "unreadable" } };
