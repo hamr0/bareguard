@@ -74,7 +74,8 @@ function readWhole(decide, raw) {
 
 function urlOk(raw) {
   const t = raw.trim();
-  if (!/^https?:\/\//i.test(t) || /\s/.test(t)) return false;
+  // the authority must be non-empty in the RAW input (WHATWG repairs "https:///path" to host "path" and "\\" to "/"), so: scheme, "//", then a char that is not "/" or "\"
+  if (!/^https?:\/\/[^/\\]/i.test(t) || /\s/.test(t) || t.includes("\\")) return false;
   try {
     const u = new URL(t);
     return (u.protocol === "http:" || u.protocol === "https:") && u.hostname !== "";

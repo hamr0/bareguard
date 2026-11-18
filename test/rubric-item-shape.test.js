@@ -201,8 +201,8 @@ test("time: forms, inclusive 05:00..21:59 includes both ends, exclusive gt / lt"
 
 test("url: absolute http(s) with a host and no whitespace", async () => {
   const f = { u: { kind: "url", required: true } };
-  await green(f, [{ u: "http://example.com" }, { u: "https://example.com/a?b=1#c" }, { u: " https://example.com " }, { u: "HTTPS://EXAMPLE.COM" }, { u: "http://127.0.0.1:8080/x" }]);
-  for (const v of ["", "example.com", "ftp://example.com", "javascript:alert(1)", "http://", "http:example.com", "https://exa mple.com", "https://example.com/a b", "//example.com", "mailto:a@b.c"]) {
+  await green(f, [{ u: "http://example.com" }, { u: "https://example.com/a?b=1#c" }, { u: " https://example.com " }, { u: "HTTPS://EXAMPLE.COM" }, { u: "http://127.0.0.1:8080/x" }, { u: "https://x.org" }, { u: "http://a.b/c?d#e" }]);
+  for (const v of ["", "example.com", "ftp://example.com", "javascript:alert(1)", "http://", "http:example.com", "https:///path", "http:////x", "https:\\\\x.org", "https:/x.org", "https:x.org", "https://x.org\\y", "https://exa mple.com", "https://example.com/a b", "//example.com", "mailto:a@b.c"]) {
     assert.deepEqual(await reds(f, [{ u: v }]), ["#0:u:bad-url"], JSON.stringify(v));
   }
   assert.deepEqual(await reds(f, [{ u: 5 }]), ["#0:u:wrong-type"]);
