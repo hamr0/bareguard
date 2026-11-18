@@ -368,7 +368,7 @@ function fieldSchema(name, d, ctx) {
 }
 
 /** Array.isArray that is false, not a throw, for a revoked Proxy (so the caller-misuse TypeError below is the clear one). */
-function isArr(v) {
+export function isArr(v) {
   try {
     return Array.isArray(v);
   } catch {
