@@ -421,12 +421,18 @@ test("the sha of an itemShape spec does not depend on field order, and changes w
 test("vocabulary: itemShape is the last rule, lists every kind and each option; the description is generated", () => {
   const v = rubricVocabulary.rules.itemShape;
   assert.equal(Object.keys(rubricVocabulary.rules).at(-1), "itemShape");
-  assert.deepEqual(v.fields.fields.common.kind.enum, ["text", "number", "oneOf", "money", "date", "time", "url", "object"]);
+  assert.deepEqual(v.fields.fields.common.kind.enum, ["text", "number", "oneOf", "money", "date", "time", "url", "object", "list"]);
   assert.deepEqual(Object.keys(v.fields.fields.kinds.number), ["min", "max", "gt", "lt", "fromText"]);
   assert.equal(v.fields.fields.maxFields, 50);
   assert.equal(v.fields.fields.maxTotalFields, 200);
   assert.equal(v.fields.fields.maxObjectDepth, 2);
-  for (const k of ["itemShape", "minItems", "maxItems", "fromText", "ignoreCase", "currency"]) assert.ok(v.description.includes(k), k);
+  for (const k of ["itemShape", "minItems", "maxItems", "fromText", "ignoreCase", "currency", "minEntries", "maxEntries", "unique"]) assert.ok(v.description.includes(k), k);
+});
+
+test("vocabulary: list kind options", () => {
+  const k = rubricVocabulary.rules.itemShape.fields.fields.kinds.list;
+  assert.deepEqual(Object.keys(k), ["of", "minEntries", "maxEntries", "unique"]);
+  assert.equal(k.of.type, "item-of");
 });
 
 // ---- hostile output ---------------------------------------------------------------------------------------------------------------------
@@ -488,4 +494,195 @@ test("cost is linear in the output: 4x the items costs under 10x (best of 3)", a
   // one huge string and one wide item are linear too
   const wide = await best([Object.fromEntries(Array.from({ length: 40_000 }, (_, i) => [`k${i}`, 1]))]);
   assert.ok(wide < 2_000_000_000);
+});
+
+// ---- kind "list" (ruling #83 amendment, 2026-11-18) -----------------------------------------------------------------------------------------
+
+const LIST = (of, extra = {}) => ({ m: { kind: "list", of, ...extra } });
+const listReds = (of, extra, entries, item = {}) => reds(LIST(of, extra), [{ ...item, m: entries }]);
+
+test("list: green, and each list red is spelled #<i>:<path>[<j>]:<reason> (0-based)", async () => {
+  const f = { name: { kind: "text", required: true }, ...LIST({ kind: "text", maxChars: 40 }, { minEntries: 1, maxEntries: 30, unique: true }) };
+  const long = "x".repeat(52);
+  assert.deepEqual(await reds(f, [{ name: "n", m: ["a", "b"] }]), []);
+  assert.deepEqual(await reds(f, [{ name: "n", m: "abc" }]), ["#0:m:not-a-list"]);
+  assert.deepEqual(await reds(f, [{ name: "n", m: [] }]), ["#0:m:count-under:0<1"]);
+  assert.deepEqual(await reds(f, [{ name: "n", m: Array.from({ length: 31 }, (_, i) => `e${i}`) }]), ["#0:m:count-over:31>30"]);
+  assert.deepEqual(await reds(f, [{ name: "n", m: ["a", "b", long] }]), ["#0:m[2]:too-long:chars:52>40"]);
+  assert.deepEqual(await reds(f, [{ name: "n", m: ["a", "b", "a"] }]), ["#0:m[2]:duplicate"]);
+  assert.deepEqual(await reds(f, [{ name: "n", m: ["a", 5, null] }]), ["#0:m[1]:wrong-type", "#0:m[2]:wrong-type"]);
+  assert.deepEqual(await reds(f, [{ name: "n", m: null }]), ["#0:m:not-a-list"]);
+  assert.deepEqual(await reds(f, [{ name: "n" }, { name: "n", m: ["a"] }, { m: ["a"] }]), ["#2:name:missing"]);
+});
+
+test("list: required means present; an optional absent list is fine, a required absent one is #<i>:<path>:missing", async () => {
+  assert.deepEqual(await reds(LIST({ kind: "url" }), [{}]), []);
+  assert.deepEqual(await reds(LIST({ kind: "url" }, {}), [{ m: undefined }]), []);
+  assert.deepEqual(await reds({ m: { kind: "list", required: true, of: { kind: "url" } } }, [{}]), ["#0:m:missing"]);
+});
+
+test("list: minEntries / maxEntries at, under and over", async () => {
+  const e = (n) => Array.from({ length: n }, (_, i) => `v${i}`);
+  const f = LIST({ kind: "text" }, { minEntries: 2, maxEntries: 4 });
+  const r = (n) => reds(f, [{ m: e(n) }]);
+  assert.deepEqual(await r(1), ["#0:m:count-under:1<2"]);
+  assert.deepEqual(await r(2), []);
+  assert.deepEqual(await r(4), []);
+  assert.deepEqual(await r(5), ["#0:m:count-over:5>4"]);
+  assert.deepEqual(await reds(LIST({ kind: "text" }, { minEntries: 0 }), [{ m: [] }]), []);
+  // minEntries == maxEntries is a legal exact count
+  assert.deepEqual(await reds(LIST({ kind: "text" }, { minEntries: 2, maxEntries: 2 }), [{ m: e(3) }]), ["#0:m:count-over:3>2"]);
+});
+
+test("list: the hard cap is 10,000 entries; above it is too-many without reading an entry", async () => {
+  const f = LIST({ kind: "text", maxChars: 1 }, { unique: true });
+  const atCap = Array.from({ length: 10_000 }, (_, i) => String(i % 10));
+  // at the cap: entries ARE read (one duplicate-or-long red per entry, only the first 20 kept)
+  const at = await run(f, [{ m: atCap }]);
+  assert.equal(at.gaps[0].itemsTotal, 9_990); // 10 distinct digits are green, every later one is a duplicate
+  const over = new Proxy(new Array(10_001), { get: (t, k) => { if (typeof k === "string" && /^\d+$/.test(k)) throw new Error("read"); return Reflect.get(t, k); } });
+  assert.deepEqual(await reds(f, [{ m: over }]), ["#0:m:too-many:10001>10000"]);
+  // maxEntries above the cap does not lift it
+  assert.deepEqual(await reds(LIST({ kind: "text" }, { maxEntries: 50_000 }), [{ m: new Array(10_001).fill("a") }]), ["#0:m:too-many:10001>10000"]);
+});
+
+test("list: per-entry bounds follow the element kind, with the element kind's own spelling", async () => {
+  assert.deepEqual(await listReds({ kind: "text", minChars: 2, maxWords: 1 }, {}, ["a", "ab cd", "ok"]), ["#0:m[0]:too-short:chars:1<2", "#0:m[1]:too-long:words:2>1"]);
+  assert.deepEqual(await listReds({ kind: "number", min: 1, lt: 10 }, {}, [0, 5, 10, "3", NaN]), ["#0:m[0]:under", "#0:m[2]:over", "#0:m[3]:wrong-type", "#0:m[4]:bad-number"]);
+  assert.deepEqual(await listReds({ kind: "number", fromText: true }, {}, ["12", "x"]), ["#0:m[1]:bad-number"]);
+  assert.deepEqual(await listReds({ kind: "oneOf", values: ["a", "b"] }, {}, ["a", "c"]), ["#0:m[1]:not-one-of"]);
+  assert.deepEqual(await listReds({ kind: "money", currency: "$", max: 50 }, {}, ["$40", "$60", "forty"]), ["#0:m[1]:over", "#0:m[2]:bad-money"]);
+  assert.deepEqual(await listReds({ kind: "date", min: "2026-01-01" }, {}, ["2026-02-01", "2025-12-31", "soon"]), ["#0:m[1]:under", "#0:m[2]:bad-date"]);
+  assert.deepEqual(await listReds({ kind: "time", gt: "09:00" }, {}, ["09:00", "9:01", "noon"]), ["#0:m[0]:under", "#0:m[2]:bad-time"]);
+  assert.deepEqual(await listReds({ kind: "url" }, {}, ["https://a.example/", "ftp://a"]), ["#0:m[1]:bad-url"]);
+});
+
+test("list: inside a nested object the path is dotted then [j]", async () => {
+  const f = { o: { kind: "object", fields: { tags: { kind: "list", of: { kind: "text", maxChars: 1 } } } } };
+  assert.deepEqual(await reds(f, [{ o: { tags: ["a", "bb"] } }]), ["#0:o.tags[1]:too-long:chars:2>1"]);
+  assert.deepEqual(await reds(f, [{ o: { tags: 3 } }]), ["#0:o.tags:not-a-list"]);
+});
+
+test("list: unique per element kind (an entry equal to an EARLIER one on its read value; the first is never red)", async () => {
+  const u = (of, entries) => listReds(of, { unique: true }, entries);
+  assert.deepEqual(await u({ kind: "text" }, ["a", "A", "a", " a", "a"]), ["#0:m[2]:duplicate", "#0:m[4]:duplicate"]); // text is exact
+  assert.deepEqual(await u({ kind: "number" }, [1, 2, 1, 0, -0]), ["#0:m[2]:duplicate", "#0:m[4]:duplicate"]);
+  assert.deepEqual(await u({ kind: "number", fromText: true }, [1, "1", "1.0", 1.5, "1.50"]), ["#0:m[1]:duplicate", "#0:m[2]:duplicate", "#0:m[4]:duplicate"]);
+  assert.deepEqual(await u({ kind: "number" }, [1, "1"]), ["#0:m[1]:wrong-type"]); // without fromText "1" is not a number at all
+  assert.deepEqual(await u({ kind: "oneOf", values: ["a", "B"] }, ["a", "a", "B"]), ["#0:m[1]:duplicate"]);
+  assert.deepEqual(await u({ kind: "oneOf", values: ["a", "B"], ignoreCase: true }, ["a", "A", "b", "B"]), ["#0:m[1]:duplicate", "#0:m[3]:duplicate"]);
+  assert.deepEqual(await u({ kind: "money", currency: "$" }, ["$43", "$43.00", "$43.5", "$43.50", "$44"]), ["#0:m[1]:duplicate", "#0:m[3]:duplicate"]);
+  assert.deepEqual(await u({ kind: "date", lang: "en" }, ["2026-11-18", "Nov 18, 2026", "Nov 19, 2026"]), ["#0:m[1]:duplicate"]);
+  assert.deepEqual(await u({ kind: "time" }, ["14:30", "2:30 PM", "2:31 PM", "02:30 PM"]), ["#0:m[1]:duplicate", "#0:m[3]:duplicate"]);
+  assert.deepEqual(await u({ kind: "url" }, ["https://a.example/x", "https://a.example/x ", "https://a.example/y"]), ["#0:m[1]:duplicate"]);
+  // without unique the same entries are green
+  assert.deepEqual(await listReds({ kind: "text" }, {}, ["a", "a"]), []);
+  assert.deepEqual(await listReds({ kind: "text" }, { unique: false }, ["a", "a"]), []);
+  // an entry that could not be read is never a duplicate key; the second bad one is only wrong-type
+  assert.deepEqual(await u({ kind: "number" }, ["x", "x"]), ["#0:m[0]:wrong-type", "#0:m[1]:wrong-type"]);
+});
+
+test("list: unique is linear (a Set), 10,000 distinct and 10,000 equal entries are fast", async () => {
+  const f = LIST({ kind: "text" }, { unique: true });
+  const t = process.hrtime.bigint();
+  assert.deepEqual(await reds(f, [{ m: Array.from({ length: 10_000 }, (_, i) => `entry ${i}`) }]), []);
+  const r = await run(f, [{ m: new Array(10_000).fill("same") }]);
+  assert.equal(r.gaps[0].itemsTotal, 9_999);
+  assert.ok(Number(process.hrtime.bigint() - t) < 3_000_000_000);
+});
+
+test("list: hostile lists and entries never throw", async () => {
+  const f = LIST({ kind: "text", maxChars: 3 }, { unique: true });
+  const revoked = Proxy.revocable([], {});
+  revoked.revoke();
+  assert.deepEqual(await reds(f, [{ m: revoked.proxy }]), ["#0:m:not-a-list"]);
+  const lenThrows = new Proxy(["a"], { get: (t, k) => { if (k === "length") throw new Error("x"); return Reflect.get(t, k); } });
+  assert.deepEqual(await reds(f, [{ m: lenThrows }]), ["#0:m:unreadable"]);
+  const lie = (n) => new Proxy(["a"], { get: (t, k) => (k === "length" ? n : Reflect.get(t, k)) });
+  assert.deepEqual(await reds(f, [{ m: lie(-1) }]), ["#0:m:unreadable"]);
+  assert.deepEqual(await reds(f, [{ m: lie(1.5) }]), ["#0:m:unreadable"]);
+  assert.deepEqual(await reds(f, [{ m: lie(Infinity) }]), ["#0:m:unreadable"]); // not an integer
+  assert.deepEqual(await reds(f, [{ m: lie(2 ** 40) }]), ["#0:m:too-many:1099511627776>10000"]);
+  assert.deepEqual(await reds(f, [{ m: lie(3) }]), ["#0:m[1]:wrong-type", "#0:m[2]:wrong-type"]); // a lying length reads undefined entries
+  const idx = new Proxy(["a", "b", "c"], { get: (t, k) => { if (k === "1") throw new Error("x"); return Reflect.get(t, k); } });
+  assert.deepEqual(await reds(f, [{ m: idx }]), ["#0:m[1]:unreadable"]);
+  const revokedEl = Proxy.revocable({}, {});
+  revokedEl.revoke();
+  assert.deepEqual(await reds(f, [{ m: [revokedEl.proxy, "ok"] }]), ["#0:m[0]:wrong-type"]);
+  // sparse arrays, cycles, getter on the list field itself
+  assert.deepEqual(await reds(f, [{ m: ["a", , "c"] }]), ["#0:m[1]:wrong-type"]); // eslint-disable-line no-sparse-arrays
+  const cyc = []; cyc.push(cyc);
+  assert.deepEqual(await reds(f, [{ m: cyc }]), ["#0:m[0]:wrong-type"]);
+  assert.deepEqual(await reds(f, [{ get m() { throw new Error("x"); } }]), ["#0:m:unreadable"]);
+  assert.deepEqual(await reds(f, [{ m: ["a", "b"], extra: 1 }]), ["#0:unknown-field:extra"]);
+});
+
+test("list: every list red counts toward the shared 20-item cap and itemsTotal; never a worker value", async () => {
+  const f = LIST({ kind: "text", maxChars: 1 });
+  const secret = "SECRET-VALUE-XYZ";
+  const entries = Array.from({ length: 15 }, () => secret);
+  const r = await run(f, [{ m: entries }, { m: entries }, { m: 7 }]);
+  const g = r.gaps[0];
+  assert.equal(g.items.length, 20);
+  assert.equal(g.itemsTotal, 31);
+  assert.equal(g.items[15], "#1:m[0]:too-long:chars:16>1");
+  assert.ok(!JSON.stringify(r.gaps).includes(secret));
+  assert.ok(!renderGaps(r.gaps).includes(secret));
+});
+
+test("list: signed field names may not hold [ or ] (e.path at the name), at every level; . and : stay refused", () => {
+  for (const n of ["a[0]", "[", "]", "a]b", "a[b"]) {
+    assert.equal(refused(mkCheck({ [n]: { kind: "url" } })).path, `${PATH}.fields.${n}`, n);
+    assert.equal(refused(mkCheck({ o: { kind: "object", fields: { [n]: { kind: "url" } } } })).path, `${PATH}.fields.o.fields.${n}`, n);
+  }
+  assert.equal(refused(mkCheck({ "a.b": { kind: "url" } })).path, `${PATH}.fields.a.b`);
+  assert.equal(refused(mkCheck({ "a:b": { kind: "url" } })).path, `${PATH}.fields.a:b`);
+});
+
+test("list: refusals carry e.path (of, of.kind, options, bounds)", () => {
+  const p = (fields) => refused(mkCheck(fields)).path;
+  const L = (x) => ({ m: { kind: "list", ...x } });
+  assert.equal(p(L({})), `${PATH}.fields.m.of`);
+  assert.equal(p(L({ of: "text" })), `${PATH}.fields.m.of`);
+  assert.equal(p(L({ of: [] })), `${PATH}.fields.m.of`);
+  assert.equal(p(L({ of: {} })), `${PATH}.fields.m.of.kind`);
+  assert.equal(p(L({ of: { kind: "object", fields: { a: { kind: "url" } } } })), `${PATH}.fields.m.of.kind`);
+  assert.equal(p(L({ of: { kind: "list", of: { kind: "url" } } })), `${PATH}.fields.m.of.kind`);
+  assert.equal(p(L({ of: { kind: "bogus" } })), `${PATH}.fields.m.of.kind`);
+  assert.equal(p(L({ of: { kind: "url", required: true } })), `${PATH}.fields.m.of.required`);
+  assert.equal(p(L({ of: { kind: "url", minChars: 1 } })), `${PATH}.fields.m.of.minChars`);
+  assert.equal(p(L({ of: { kind: "text", minChars: 5, maxChars: 2 } })), `${PATH}.fields.m.of.maxChars`);
+  assert.equal(p(L({ of: { kind: "oneOf" } })), `${PATH}.fields.m.of.values`);
+  assert.equal(p(L({ of: { kind: "money" } })), `${PATH}.fields.m.of.currency`);
+  assert.equal(p(L({ of: { kind: "money", currency: "$", min: "x" } })), `${PATH}.fields.m.of.min`);
+  assert.equal(p(L({ of: { kind: "number", min: 1, gt: 0 } })), `${PATH}.fields.m.of.gt`);
+  assert.equal(p(L({ of: { kind: "date", lang: "en", months: ["x"] } })), `${PATH}.fields.m.of.months`);
+  assert.equal(p(L({ of: { kind: "url" }, minEntries: -1 })), `${PATH}.fields.m.minEntries`);
+  assert.equal(p(L({ of: { kind: "url" }, minEntries: 1.5 })), `${PATH}.fields.m.minEntries`);
+  assert.equal(p(L({ of: { kind: "url" }, maxEntries: 0 })), `${PATH}.fields.m.maxEntries`);
+  assert.equal(p(L({ of: { kind: "url" }, minEntries: 3, maxEntries: 2 })), `${PATH}.fields.m.maxEntries`);
+  assert.equal(p(L({ of: { kind: "url" }, unique: "yes" })), `${PATH}.fields.m.unique`);
+  assert.equal(p(L({ of: { kind: "url" }, fields: {} })), `${PATH}.fields.m.fields`);
+  assert.equal(p(L({ of: { kind: "url" }, values: ["a"] })), `${PATH}.fields.m.values`);
+  assert.equal(p(L({ of: { kind: "url" }, required: "no" })), `${PATH}.fields.m.required`);
+  assert.doesNotThrow(() => mk(mkCheck(L({ of: { kind: "url" }, minEntries: 2, maxEntries: 2, unique: true, required: true }))));
+  // an element option validated exactly as the field's: the same accept
+  assert.doesNotThrow(() => mk(mkCheck(L({ of: { kind: "money", currency: ["$", "€"], unit: "USD", decimal: ",", min: 1, lt: 9 } }))));
+});
+
+test("list: counts as one spec toward the 200 cap, its of as one more; a list inside an object is allowed, object in list is not", () => {
+  const plain = (n, p) => Object.fromEntries(Array.from({ length: n }, (_, i) => [`${p}${i}`, { kind: "url" }]));
+  const l = { kind: "list", of: { kind: "url" } };
+  // 4 holders + 3 objects of 49 plain specs = 151; the fourth object holds N plain specs + one list (1 + its `of` 1)
+  const spec = (n) => ({ ...Object.fromEntries([0, 1, 2].map((i) => [`o${i}`, { kind: "object", fields: plain(49, `g${i}_`) }])), o3: { kind: "object", fields: { ...plain(n, "h"), lst: l } } });
+  assert.doesNotThrow(() => mk(mkCheck(spec(47)))); // 4 + 147 + 47 + 2 = 200
+  const e = refused(mkCheck(spec(48))); // 201: the `of` is the spec that tips it
+  assert.equal(e.path, `${PATH}.fields.o3.fields.lst.of`);
+  assert.match(e.message, /200 field specs/);
+  assert.doesNotThrow(() => mk(mkCheck({ o: { kind: "object", fields: { tags: l } } })));
+});
+
+test("list: the rubricSha of an itemShape spec signed before the list kind is unchanged (pinned from the commit before it)", () => {
+  const spec = { schema: 1, goal: "g", checkpoints: { a: { gating: true, checks: [{ id: "s", rule: "itemShape", field: "items", minItems: 1, fields: { t: { kind: "text", required: true, minChars: 1 }, u: { kind: "url" }, o: { kind: "object", fields: { n: { kind: "number", min: 0 } } } } }] } } };
+  assert.equal(rubricSha(createRubric(spec)), "e87232eeada8e9289ebd5686496ad5ac2894aa066cf1c3b56ed1db778d61ee38");
 });

@@ -3,10 +3,10 @@
 // inside the signed bounds. Pass/fail only. A red names fields and counts, NEVER the worker's values or text.
 //
 // Cost shape: linear in the output (every item, key, string and nested object is read a constant number of times); no regex is built
-// from input and there is no work cap beyond `MAX_LIST` items. Never throws on hostile output: a throwing getter or a revoked Proxy
+// from input and there is no work cap beyond `MAX_LIST` items (and `MAX_LIST_ENTRIES` entries per `list`). Never throws on hostile output: a throwing getter or a revoked Proxy
 // is a red `unreadable` item, a lying `length` is bounded by `MAX_LIST`.
 
-import { clip, MAX_ITEMS, MAX_LIST, typeName } from "./rubric.js";
+import { clip, MAX_ITEMS, MAX_LIST, MAX_LIST_ENTRIES, typeName } from "./rubric.js";
 import { isArr } from "./rubric-helpers.js";
 import { extractValue, parseBound, compareBounds } from "./rubric-locate.js";
 import { readCellNumber } from "./rubric-cells.js";
@@ -81,22 +81,24 @@ function urlOk(raw) {
 
 const plans = new WeakMap(); // a check (frozen) -> its plan
 
+function planSpec(name, s) {
+  const p = { name, required: s.required === true, kind: s.kind, spec: s };
+  if (s.kind === "object") p.sub = { fields: s.fields, list: planFields(s.fields) };
+  else if (s.kind === "list") p.elem = planSpec("", s.of);
+  else if (s.kind === "oneOf") {
+    p.fold = s.ignoreCase === true;
+    p.set = new Set(p.fold ? s.values.map((v) => v.toLowerCase()) : s.values);
+  } else if (s.kind === "money" || s.kind === "date" || s.kind === "time") {
+    p.decide = decideOf(s.kind, s);
+    for (const k of ["min", "max", "gt", "lt"]) if (s[k] !== undefined) p[k] = parseBound(s.kind, s[k]).value;
+  }
+  return p;
+}
+
 function planFields(fields) {
   return Object.keys(fields)
     .sort()
-    .map((name) => {
-      const s = fields[name];
-      const p = { name, required: s.required === true, kind: s.kind, spec: s };
-      if (s.kind === "object") p.sub = { fields: s.fields, list: planFields(s.fields) };
-      else if (s.kind === "oneOf") {
-        p.fold = s.ignoreCase === true;
-        p.set = new Set(p.fold ? s.values.map((v) => v.toLowerCase()) : s.values);
-      } else if (s.kind === "money" || s.kind === "date" || s.kind === "time") {
-        p.decide = decideOf(s.kind, s);
-        for (const k of ["min", "max", "gt", "lt"]) if (s[k] !== undefined) p[k] = parseBound(s.kind, s[k]).value;
-      }
-      return p;
-    });
+    .map((name) => planSpec(name, fields[name]));
 }
 
 function planOf(c) {
@@ -119,9 +121,44 @@ function boundsOf(rec, at, v, p, cmp) {
   if ((p.max !== undefined && cmp(v, p.max) > 0) || (p.lt !== undefined && cmp(v, p.lt) >= 0)) add(rec, `${at}:over`);
 }
 
-/** One present value against its field spec. `at` = `#<i>:<dotted path>`. */
+/** A `list`: `at` = `#<i>:<dotted path>`; entries are `at[<j>]`. */
+function checkList(rec, at, p, v, i, depth) {
+  const s = p.spec;
+  let len;
+  try {
+    if (!isArr(v)) return add(rec, `${at}:not-a-list`);
+    len = v.length;
+  } catch {
+    return add(rec, `${at}:unreadable`);
+  }
+  if (!Number.isInteger(len) || len < 0) return add(rec, `${at}:unreadable`);
+  if (len > MAX_LIST_ENTRIES) return add(rec, `${at}:too-many:${len}>${MAX_LIST_ENTRIES}`);
+  if (s.minEntries !== undefined && len < s.minEntries) return add(rec, `${at}:count-under:${len}<${s.minEntries}`);
+  if (s.maxEntries !== undefined && len > s.maxEntries) return add(rec, `${at}:count-over:${len}>${s.maxEntries}`);
+  const seen = s.unique === true ? new Set() : null;
+  for (let j = 0; j < len; j++) {
+    let e;
+    try {
+      e = v[j];
+    } catch {
+      add(rec, `${at}[${j}]:unreadable`); // a throwing index getter or a revoked Proxy element
+      continue;
+    }
+    const key = checkValue(rec, `${at}[${j}]`, p.elem, e, i, "", depth);
+    if (seen !== null && key !== undefined) {
+      if (seen.has(key)) add(rec, `${at}[${j}]:duplicate`);
+      else seen.add(key);
+    }
+  }
+}
+
+/**
+ * One present value against its field spec. `at` = `#<i>:<dotted path>`. Returns, for a scalar kind whose value was READ, a canonical
+ * string key of that value (what `unique` compares); undefined when the value could not be read.
+ */
 function checkValue(rec, at, p, v, i, path, depth) {
   const s = p.spec;
+  if (p.kind === "list") return checkList(rec, at, p, v, i, depth);
   if (p.kind === "object") {
     if (v === null || typeof v !== "object" || isArr(v)) return add(rec, `${at}:wrong-type`);
     return checkObject(rec, p.sub, v, i, path, depth + 1);
@@ -135,7 +172,7 @@ function checkValue(rec, at, p, v, i, path, depth) {
     } else return add(rec, `${at}:wrong-type`);
     if (!Number.isFinite(n)) return add(rec, `${at}:bad-number`);
     boundsOf(rec, at, n, s, (a, b) => (a < b ? -1 : a > b ? 1 : 0));
-    return;
+    return String(n === 0 ? 0 : n); // -0 and 0 are one value
   }
   if (typeof v !== "string") return add(rec, `${at}:wrong-type`);
   switch (p.kind) {
@@ -150,19 +187,20 @@ function checkValue(rec, at, p, v, i, path, depth) {
         if (s.minWords !== undefined && n < s.minWords) add(rec, `${at}:too-short:words:${n}<${s.minWords}`);
         if (s.maxWords !== undefined && n > s.maxWords) add(rec, `${at}:too-long:words:${n}>${s.maxWords}`);
       }
-      return;
+      return v;
     }
     case "oneOf":
       if (!p.set.has(p.fold ? v.toLowerCase() : v)) add(rec, `${at}:not-one-of`);
-      return;
+      return p.fold ? v.toLowerCase() : v;
     case "url":
       if (!urlOk(v)) add(rec, `${at}:bad-url`);
-      return;
+      return v.trim();
     default: {
       // money | date | time
       const r = readWhole(p.decide, v);
       if (r === null) return add(rec, `${at}:bad-${p.kind}`);
       boundsOf(rec, at, r.value, p, (a, b) => compareBounds(p.kind, a, b));
+      return String(r.canon);
     }
   }
 }
