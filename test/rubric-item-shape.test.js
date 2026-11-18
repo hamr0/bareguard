@@ -545,8 +545,8 @@ test("list: the hard cap is 10,000 entries; above it is too-many without reading
   assert.equal(at.gaps[0].itemsTotal, 9_990); // 10 distinct digits are green, every later one is a duplicate
   const over = new Proxy(new Array(10_001), { get: (t, k) => { if (typeof k === "string" && /^\d+$/.test(k)) throw new Error("read"); return Reflect.get(t, k); } });
   assert.deepEqual(await reds(f, [{ m: over }]), ["#0:m:too-many:10001>10000"]);
-  // maxEntries above the cap does not lift it
-  assert.deepEqual(await reds(LIST({ kind: "text" }, { maxEntries: 50_000 }), [{ m: new Array(10_001).fill("a") }]), ["#0:m:too-many:10001>10000"]);
+  // maxEntries at the cap does not lift it (above the cap it is refused at createRubric, see below)
+  assert.deepEqual(await reds(LIST({ kind: "text" }, { maxEntries: 10_000 }), [{ m: new Array(10_001).fill("a") }]), ["#0:m:too-many:10001>10000"]);
 });
 
 test("list: per-entry bounds follow the element kind, with the element kind's own spelling", async () => {
@@ -583,6 +583,34 @@ test("list: unique per element kind (an entry equal to an EARLIER one on its rea
   assert.deepEqual(await listReds({ kind: "text" }, { unique: false }, ["a", "a"]), []);
   // an entry that could not be read is never a duplicate key; the second bad one is only wrong-type
   assert.deepEqual(await u({ kind: "number" }, ["x", "x"]), ["#0:m[0]:wrong-type", "#0:m[1]:wrong-type"]);
+});
+
+test("list: money unique keys on currency (or unit) AND amount", async () => {
+  const u = (of, entries) => listReds(of, { unique: true }, entries);
+  const cur = { kind: "money", currency: ["$", "€"] };
+  assert.deepEqual(await u(cur, ["$5", "€5"]), []); // same amount, different currency
+  assert.deepEqual(await u(cur, ["$5", "$5.00"]), ["#0:m[1]:duplicate"]);
+  assert.deepEqual(await u(cur, ["$5", "$ 5"]), ["#0:m[1]:bad-money"]); // the reader takes no space after a symbol: red already, never a duplicate
+  assert.deepEqual(await u(cur, ["$5", "€5", "€5.0", "$6"]), ["#0:m[2]:duplicate"]);
+  const unit = { kind: "money", unit: ["USD", "EUR"] };
+  assert.deepEqual(await u(unit, ["5 USD", "5 EUR"]), []);
+  assert.deepEqual(await u(unit, ["5 USD", "5.00 USD"]), ["#0:m[1]:duplicate"]);
+  const both = { kind: "money", currency: "$", unit: "USD" };
+  assert.deepEqual(await u(both, ["$5", "5 USD"]), []); // a currency form and a unit form are different forms
+  assert.deepEqual(await u(both, ["$5", "$5.0", "5 USD", "5.0 USD"]), ["#0:m[1]:duplicate", "#0:m[3]:duplicate"]);
+});
+
+test("createRubric refuses list minEntries/maxEntries above 10,000 and itemShape minItems/maxItems above 100,000, e.path at the option", () => {
+  const L = (x) => ({ m: { kind: "list", of: { kind: "url" }, ...x } });
+  assert.doesNotThrow(() => mk(mkCheck(L({ minEntries: 10000 }))));
+  assert.doesNotThrow(() => mk(mkCheck(L({ maxEntries: 10000 }))));
+  assert.equal(refused(mkCheck(L({ minEntries: 10001 }))).path, `${PATH}.fields.m.minEntries`);
+  assert.equal(refused(mkCheck(L({ maxEntries: 10001 }))).path, `${PATH}.fields.m.maxEntries`);
+  const url = { a: { kind: "url" } };
+  assert.doesNotThrow(() => mk(mkCheck(url, { minItems: 100000 })));
+  assert.doesNotThrow(() => mk(mkCheck(url, { maxItems: 100000 })));
+  assert.equal(refused(mkCheck(url, { minItems: 100001 })).path, `${PATH}.minItems`);
+  assert.equal(refused(mkCheck(url, { maxItems: 100001 })).path, `${PATH}.maxItems`);
 });
 
 test("list: unique is linear (a Set), 10,000 distinct and 10,000 equal entries are fast", async () => {

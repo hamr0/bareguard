@@ -46,7 +46,8 @@ function decideOf(kind, spec) {
 /**
  * Read `raw` as exactly ONE value of the decide's kind and nothing else: whitespace is collapsed and trimmed (nothing else is
  * stripped), the reader must find exactly one token, and the token (with its currency symbol / unit text) must cover the whole string.
- * Returns the reader's result `{ ok: true, value }` or null.
+ * Returns the reader's result `{ ok: true, value, canon, forms }` or null; `forms` is the currency symbol and unit text the reader
+ * itself recorded for the token (in its own order, "" when none), which money `unique` keys on beside the amount.
  */
 function readWhole(decide, raw) {
   if (raw.length > READ_CAP) return null;
@@ -62,7 +63,8 @@ function readWhole(decide, raw) {
     if (s.end > pos) pos = s.end;
   }
   if (t.slice(pos).trim() !== "") return null;
-  return r;
+  const forms = sp.filter((x) => x.role === "currency" || x.role === "unit").map((x) => `${x.role}:${t.slice(x.start, x.end)}`).join("|");
+  return { ...r, forms };
 }
 
 function urlOk(raw) {
@@ -200,7 +202,8 @@ function checkValue(rec, at, p, v, i, path, depth) {
       const r = readWhole(p.decide, v);
       if (r === null) return add(rec, `${at}:bad-${p.kind}`);
       boundsOf(rec, at, r.value, p, (a, b) => compareBounds(p.kind, a, b));
-      return String(r.canon);
+      // money is one value by currency (or unit) AND amount: "$5" and "€5" differ, "$5" and "$ 5" do not; the unit text is exact case, as cited matches it
+      return p.kind === "money" ? `${r.forms}\u0000${r.canon}` : String(r.canon);
     }
   }
 }

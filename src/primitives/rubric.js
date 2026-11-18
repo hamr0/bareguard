@@ -354,7 +354,7 @@ const ITEM_KIND_FIELDS = {
   time: { min: DECIDE_BOUND, max: DECIDE_BOUND, gt: DECIDE_BOUND, lt: DECIDE_BOUND },
   url: {},
   object: { fields: { type: "item-fields", required: true, nested: true } },
-  list: { of: { type: "item-of", required: true }, minEntries: { type: "integer", required: false, min: 0 }, maxEntries: { type: "integer", required: false, min: 1 }, unique: { type: "boolean", required: false, default: false } },
+  list: { of: { type: "item-of", required: true }, minEntries: { type: "integer", required: false, min: 0, max: MAX_LIST_ENTRIES }, maxEntries: { type: "integer", required: false, min: 1, max: MAX_LIST_ENTRIES }, unique: { type: "boolean", required: false, default: false } },
 };
 const ITEM_OF_KINDS = ["text", "number", "oneOf", "money", "date", "time", "url"]; // the kinds a list's `of` may take (never object or list)
 const ITEM_FIELDS = {
@@ -376,9 +376,9 @@ const ITEM_FIELDS = {
     "oneOf: a string equal to one of values (1 to 50 distinct non-blank strings); ignoreCase folds both sides with toLowerCase and refuses values equal after folding",
     "money: a string that reads, whole, as ONE money value like a cited money decide (currency and/or unit, at least one; decimal \",\" optional); min/max bound the amount",
     "date: a string that reads, whole, as ONE date: ISO YYYY-MM-DD unless lang or months (exclusive) is signed, like a cited date decide; min/max are ISO date strings",
-    "time: a string that reads, whole, as ONE time (\"14:30\", \"2:30 PM\") like a cited time decide; min/max are time strings",
+    "time: a string that reads, whole, as ONE time like a cited time decide: 24-hour H:MM or HH:MM (\"14:30\"), or 12-hour h:mm with hour 1-12 and the meridiem in UPPER case, AM or PM (\"2:30 PM\"); strict, so \"2:30 pm\", \"2:30PM\" and \"14:30:00\" are bad-time; min/max are time strings in those same forms",
     "url: a string that is an absolute http: or https: URL with a non-empty host and no whitespace inside",
-    `list: an array of scalar entries, each read as the kind of of (of: { kind: ${ITEM_OF_KINDS.map((k) => JSON.stringify(k)).join(" | ")}, ...that kind's own options }, never object or list, no required); minEntries (>= 0) and maxEntries (>= 1, not below minEntries) bound the entry count (a red is count-under or count-over and the entries are not read then); more than ${MAX_LIST_ENTRIES} entries is too-many, none read; unique: true makes an entry equal to an EARLIER one (by its read value: text exact, number by value, money/date/time canonical, oneOf folded when ignoreCase) a duplicate; a red entry is #<i>:<field>[<j>]:<reason>, spelled as its kind's own reason; the list counts as one field spec and its of as one more`,
+    `list: an array of scalar entries, each read as the kind of of (of: { kind: ${ITEM_OF_KINDS.map((k) => JSON.stringify(k)).join(" | ")}, ...that kind's own options }, never object or list, no required); minEntries (>= 0) and maxEntries (>= 1, not below minEntries) bound the entry count (a red is count-under or count-over and the entries are not read then); more than ${MAX_LIST_ENTRIES} entries is too-many, none read; unique: true makes an entry equal to an EARLIER one (by its read value: text exact, number by value, money by currency (or unit) and amount, date/time canonical, oneOf folded when ignoreCase) a duplicate; a red entry is #<i>:<field>[<j>]:<reason>, spelled as its kind's own reason; the list counts as one field spec and its of as one more`,
     "object: a plain object whose own fields follow the nested fields (same grammar); an object may hold an object, but nesting more than 2 object levels below the item is refused at the offending kind",
     "number, money, date and time may sign bounds: min and max are INCLUSIVE, gt (strictly greater) and lt (strictly less) are exclusive; the red is under or over for either; min with gt, or max with lt, is refused, and so is an empty range (a lower bound at or above the upper one when either is exclusive, above it when both are inclusive)",
     "an absent field (or one whose value is undefined) is missing when required and fine when optional; null is wrong-type, never absent; required means present only: a required or optional text field accepts \"\" and whitespace-only unless minChars is signed (sign required: true with minChars: 1 for a non-empty title)",
@@ -1546,7 +1546,7 @@ function runItemShape(ctx, c) {
   return evalItemShape(c, r.value);
 }
 RULES.itemShape = {
-  fields: { field: FIELD, minItems: { type: "integer", required: false, min: 0 }, maxItems: { type: "integer", required: false, min: 1 }, fields: ITEM_FIELDS },
+  fields: { field: FIELD, minItems: { type: "integer", required: false, min: 0, max: MAX_LIST }, maxItems: { type: "integer", required: false, min: 1, max: MAX_LIST }, fields: ITEM_FIELDS },
   run: runItemShape,
   example: {
     check: {
@@ -1588,7 +1588,7 @@ function describeField(name, d) {
   if (d.type === "bound") return `${name}${d.required ? "" : "?"}: bound (number for number/money, string for date/time)`;
   if (d.type === "explanation") return `${name}?: string (the signer's explanation; never decides)`;
   let t = d.carryPhrases ? `non-empty list (max ${d.maxItems}) of non-blank phrases, each max ${d.itemMaxLength} chars, starting and ending with a letter or digit, only single ASCII spaces as whitespace, unique ignoring case` : d.exactItems !== undefined ? `list of exactly ${d.exactItems} month names (January to December), each max ${d.itemMaxLength} chars, letters and an optional trailing ".", unique ignoring case` : d.type === "string-list" ? `non-empty list of non-blank strings, each max ${d.itemMaxLength} chars` : d.type === "name" ? `non-blank string, max ${d.maxLength} chars` : d.type === "string" ? `non-blank string, max ${d.maxLength} chars` : d.type;
-  if (d.type === "integer" && d.min !== undefined) t = `integer >= ${d.min}`;
+  if (d.type === "integer" && d.min !== undefined) t = `integer >= ${d.min}${d.max != null ? ` and <= ${d.max}` : ""}`;
   if (d.type === "number") t = "finite number";
   if (d.type === "enum") t = d.enum.map((e) => JSON.stringify(e)).join(" | ");
   if (d.list) t += ` or a list of 1-${d.list.max} unique ones`;
@@ -1834,7 +1834,7 @@ function checkItemSpec(d, spec, w, depth, budget, ofMode) {
       chargeSpecs(d, budget, 1, `${w}.${k}`); // the list is one spec, its `of` one more
       checkItemSpec(d, x, `${w}.${k}`, depth, budget, true);
     } else if (fd.type === "bound") {
-      if (!parseBound(kind, x).ok) throw fail(`${w}.${k}`, `is not a valid ${kind} bound (${kind === "money" ? "a finite number with a plain decimal rendering" : kind === "date" ? "one real ISO date string YYYY-MM-DD" : 'one time string, 24-hour or "h:mm AM|PM"'})`);
+      if (!parseBound(kind, x).ok) throw fail(`${w}.${k}`, `is not a valid ${kind} bound (${kind === "money" ? "a finite number with a plain decimal rendering" : kind === "date" ? "one real ISO date string YYYY-MM-DD" : 'one time string: 24-hour H:MM or HH:MM, or 12-hour h:mm with hour 1-12 and AM or PM in UPPER case (strict: "2:30 pm", "2:30PM" and "14:30:00" are not times)'})`);
     } else checkValue(fd, x, `${w}.${k}`);
   }
   for (const [lo, hi] of [["minChars", "maxChars"], ["minWords", "maxWords"], ["minEntries", "maxEntries"]]) {
@@ -1888,8 +1888,8 @@ function checkValue(d, v, where) {
       if (v.length > (d.maxLength ?? MAX_SIGNED_LEN)) throw fail(where, `must be at most ${d.maxLength ?? MAX_SIGNED_LEN} characters`);
       return;
     case "integer":
-      if (!Number.isInteger(v) || (d.min !== undefined && v < d.min)) {
-        throw fail(where, d.min !== undefined ? `must be an integer >= ${d.min}` : "must be an integer");
+      if (!Number.isInteger(v) || (d.min !== undefined && v < d.min) || (d.max != null && v > d.max)) {
+        throw fail(where, d.min !== undefined ? `must be an integer >= ${d.min}${d.max != null ? ` and <= ${d.max}` : ""}` : "must be an integer");
       }
       return;
     case "number":
