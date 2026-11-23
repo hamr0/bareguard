@@ -168,28 +168,13 @@ console.log(r.verdict, (await gate.check(advance(r))).outcome); // green allow
 
 `annotate` is transport for a fact you computed (bareguard never decides it): `await gate.annotate({ surface: true, verdict: "broke", where: "..." })`, then `gate.drainAnnotations()`. Reversibility is read from the gated action's type via `axisB.reversible`, never from the fact. The gate keeps the newest 256 facts (a flood of `surface:false` facts evicts first; each eviction run is recorded as an `annotate_dropped` audit row), and a `meta` over 1000 bytes loses its largest top-level keys, not all of them (`_truncated`, `bytes` and `_droppedKeys` say what went). Contract: [`bareguard.context.md`](bareguard.context.md#recipe-11-axis-b--surface-a-return-time-judge-fact-on-the-next-approval).
 
-## The bare ecosystem
+## bare suite
 
-Local-first, composable agent infrastructure. Same API patterns throughout —
-mix and match, each module works standalone.
+- **Hands** · [barebrowse](https://github.com/hamr0/barebrowse) · [baremobile](https://github.com/hamr0/baremobile) · [beeperbox](https://github.com/hamr0/beeperbox)
+- **Rails** · [bareagent](https://github.com/hamr0/bareagent) · **bareguard** · [barebox](https://github.com/hamr0/barebox) · [litectx](https://github.com/hamr0/litectx)
+- **Apps** · [fwdloop](https://github.com/hamr0/fwdloop) · [bareloop](https://github.com/hamr0/bareloop)
 
-**Core** — the brain, the gate, the memory.
-
-- **[bareagent](https://npmjs.com/package/bare-agent)** — the think→act→observe loop. *Goal in → coordinated actions out.* Replaces LangChain, CrewAI, AutoGen.
-- **[bareguard](https://npmjs.com/package/bareguard)** — the single gate every action passes through. *Action in → allow / deny / ask-a-human out. Work in → green / red.* Replaces hand-rolled allowlists and scattered policy code.
-- **[litectx](https://npmjs.com/package/litectx)** — tree-sitter code + memory graph with activation decay, plus lightweight context engineering (write · select · compress · isolate). *Query in → ranked context out.*
-
-**Add-on for bareguard** — labels API operations for the gate.
-
-- **[rwxmap](https://github.com/hamr0/rwxmap)** [WIP] — labels every OpenAPI operation r/w/x as a starting point, marked for review. *API spec in → per-operation letter out.* The harness runs it offline; the file it writes goes straight into bareguard's `rwx` mode. bareguard never runs or depends on it.
-
-**Optional reach** — give the agent hands.
-
-- **[barebrowse](https://npmjs.com/package/barebrowse)** — a real browser for agents. *URL in → pruned snapshot out.* Replaces Playwright, Selenium, Puppeteer.
-- **[baremobile](https://npmjs.com/package/baremobile)** — Android + iOS device control. *Screen in → pruned snapshot out.* Replaces Appium, Espresso, XCUITest.
-- **[beeperbox](https://github.com/hamr0/beeperbox)** — 50+ messaging networks via one MCP server (headless Beeper Desktop in Docker). *Chat in → unified message stream out.* Replaces Twilio, per-platform bot APIs.
-
-**Wiring it into a real agent?** Hand your AI assistant `bareguard.context.md` (from `node_modules/bareguard/`) and describe your setup — it has the `humanChannel` patterns, shared-budget-across-processes setup, eval order, audit format, and 10+ wiring recipes.
+Pairs well with [rwxmap](https://github.com/hamr0/rwxmap) (sorts any API into read / write / execute) and [barebox](https://github.com/hamr0/barebox) (a sandbox built on it). → [The whole suite](https://github.com/hamr0)
 
 ## License
 
